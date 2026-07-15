@@ -1,0 +1,497 @@
+@AGENTS.md
+
+# ORION Agro — design system
+
+O ORION Agro é uma ferramenta de trabalho de uso diário (lançamento de movimentações, estoque,
+financeiro), não um site institucional. Priorize densidade de informação e velocidade de uso sobre
+decoração. Toda tela nova deve seguir este padrão sem precisar reexplicar.
+
+## Cores
+
+Definidas como CSS custom properties em `app/globals.css` e expostas como tokens Tailwind v4 via
+`@theme inline` (uso: `bg-brand-500`, `text-error`, etc.).
+
+| Token | Hex | Uso |
+|---|---|---|
+| `brand-900` | `#0E2A2E` | Fundo da sidebar/topbar mobile |
+| `brand-700` | `#15514C` | Hover em superfícies escuras |
+| `brand-500` | `#1C8C7C` | Ação principal (botão salvar, link ativo, foco de input) |
+| `brand-500-hover` | `#167064` | Hover de `brand-500` |
+| `brand-100` | `#E4F3F0` | Tint claro (linha selecionada, destaque sutil) |
+| `success` / `success-bg` | `#2E9E5B` / `#E8F6EE` | Confirmação de salvamento |
+| `error` / `error-bg` | `#D64545` / `#FBEAEA` | Erro, validação, bloqueio |
+| `warning` / `warning-bg` | `#DB9A1F` / `#FAF1DE` | Alerta (ex.: saldo já confirmado, edição sensível) |
+| `bg` | `#F6F8F7` | Fundo da página |
+| `surface` | `#FFFFFF` | Cards, inputs, tabelas |
+| `border` | `#DDE4E1` | Bordas padrão |
+| `text-primary` | `#14231F` | Texto principal |
+| `text-secondary` | `#5E6E6A` | Texto de apoio, labels |
+| `text-muted` | `#8A9793` | Placeholders, hints |
+
+Nunca use verde puro (`success`) como cor de ação principal — `brand-500` é petróleo/verde-água e
+precisa ficar visualmente distinto de "sucesso" para não confundir os dois significados.
+
+Paleta categórica separada pros 7 tipos de uso de área (`area-reserva`, `area-pecuaria`,
+`area-agricultura`, `area-reforma`, `area-alagada`, `area-infraestrutura`, `area-outros`) — usada
+só no gráfico/legenda de distribuição de área, nunca misturada com os tokens semânticos acima.
+Mapeamento nome-do-tipo → cor fica em `lib/area-cores.ts` (`corTipoUsoArea`).
+
+## Tipografia
+
+Uma família só: **Inter**, carregada via `next/font/google` em `app/layout.tsx` (variável
+`--font-inter`, exposta como `font-sans`). Hierarquia por peso, não por família:
+- Títulos (`h1`/`h2` de página): `font-extrabold` (800) ou `font-bold` (700)
+- Texto e labels: `font-normal` (400) ou `font-medium` (500)
+- Dados tabulares (quantidade, peso, valor): `font-semibold` (600) + `tabular-nums` para alinhar
+  dígitos em colunas
+
+## Espaçamento e cantos
+
+- Cards: `rounded-card` (12px), `border border-border bg-surface`, padding `p-5` a `p-6`
+- Botões/inputs/badges: `rounded-control` (8px)
+- Formulários: campos empilhados com `space-y-4` ou `gap-4` em grid; label em `text-sm font-medium
+  text-text-secondary` acima do campo, com `mb-1.5`
+- Seções de página: título `text-2xl font-extrabold`, subtítulo opcional `text-sm text-text-secondary
+  mt-1`, bloco seguinte com `mt-6` a `mt-8`
+- Largura de conteúdo: `max-w-4xl` para formulários/listagens simples, `max-w-6xl` para relatórios
+
+## Componentes padrão
+
+- **Botão primário**: `bg-brand-500 text-white hover:bg-brand-500-hover rounded-control px-4 py-2
+  text-sm font-semibold`
+- **Botão secundário/cancelar**: `border border-border rounded-control px-4 py-2 text-sm`
+- **Card de listagem**: `rounded-card border border-border bg-surface p-5`, título em
+  `font-semibold text-text-primary`, metadados em `text-sm text-text-secondary`
+- **Estado vazio**: card com `border-dashed`, mensagem convidativa em duas linhas (título em negrito
+  + explicação do próximo passo), nunca só "Nenhum item cadastrado"
+- **Estado de carregamento**: skeleton (`animate-pulse` com blocos `bg-border`) no formato do
+  conteúdo real — nunca só o texto "Carregando..."
+- **Aviso/confirmação inline**: use `warning-bg`/`warning` para ações sensíveis que pedem
+  confirmação extra (ex.: editar saldo inicial já confirmado), `error-bg`/`error` para bloqueios,
+  nunca `window.confirm()`/`alert()` nativo para fluxos de confirmação (só para erros pontuais)
+
+## Peso e valor médio em totais
+
+Qualquer linha de "Total" que precise mostrar peso médio ou valor médio agregando várias categorias
+(cada uma com sua própria quantidade) deve usar **média ponderada pela quantidade**
+(`soma(peso_total) / soma(quantidade)`), nunca a média simples das médias por categoria — categorias
+com mais cabeças devem pesar mais no total. Implementado hoje em `app/saldo-inicial/page.tsx`; ao
+adicionar peso/valor médio a outros relatórios (ex.: relatório de movimentação), seguir o mesmo
+cálculo.
+
+## Formatação de números
+
+Todo número exibido ao usuário passa por `lib/format.ts` (`Intl.NumberFormat('pt-BR', ...)`) —
+nunca `toFixed()` cru nem interpolação direta de número em string, porque isso perde o separador de
+milhar (`toFixed(2)` em 1234.5 dá `"1234.50"`, não `"1.234,50"`) e mistura ponto/vírgula com o padrão
+brasileiro. Cada grandeza tem sua própria função e sua própria regra de casas decimais — nunca
+reaproveitar a função de uma grandeza pra outra mesmo que o número de casas coincida hoje:
+
+| Função | Grandeza | Casas decimais | Exemplo |
+|---|---|---|---|
+| `formatMoeda` | dinheiro (valores em R$) | 2 | `R$ 1.234,56` |
+| `formatQuantidade` | contagem de cabeças/itens | 0 | `1.234` |
+| `formatPeso` | peso (kg), valor por arroba, e outras grandezas contínuas genéricas | 2 | `1.234,56` |
+| `formatArea` | área (ha) | 2 | `1.234,56` |
+| `formatLotacao` | lotação (UA/ha) | 2 | `1,85` |
+| `formatGmd` | ganho médio diário (kg) | 3 | `0,850` |
+| `formatDecimal` | decimal genérico sem grandeza própria (ex.: arroba por animal) | 2 | `18,33` |
+
+Todas retornam `'—'` para `null`/`undefined`/`NaN`, nunca `"0"` ou string vazia — um valor ausente
+não é o mesmo que zero. `formatLotacao`/`formatGmd` ainda não têm uso no app hoje (lotação UA/ha e
+GMD são indicadores futuros, já mencionados como forward-looking em `orion_agro_schema.sql`), mas a
+regra de casas decimais (2 e 3, respectivamente) já está fixada aqui pra quando forem implementados,
+evitando que cada relatório novo escolha um arredondamento diferente. Ao adicionar uma tela nova, use
+a função correspondente pela grandeza (não pelo número de casas que "parece certo") — quantidade de
+cabeças é sempre `formatQuantidade` mesmo que o valor seja pequeno, dinheiro é sempre `formatMoeda`
+mesmo dentro de um card de resumo.
+
+## Campos obrigatórios
+
+Todo campo obrigatório — em formulários de cadastro e em filtros de relatório — leva o componente
+`<Required />` (`components/Required.tsx`) logo depois do texto do label: um asterisco em
+`text-error`. Vale também para campos condicionalmente obrigatórios (ex.: peso médio só é
+obrigatório no DESMAME) — nesse caso o `<Required />` some/aparece junto com a própria
+condição. Filtros de relatório que travam a exibição dos dados (ex.: fazenda selecionada) contam
+como obrigatórios mesmo sem validação de formulário nativa por trás. Ao criar um campo novo,
+sempre decidir se ele é obrigatório e marcar de acordo — não deixar como pendência.
+
+## Envio de formulário
+
+Nenhum `<form>` pode ser enviado apertando Enter num campo — só clicando (ou dando Enter/Espaço)
+no botão de salvar. Todo `<form onSubmit={...}>` novo leva `onKeyDown={bloquearEnvioPorEnter}`
+(`lib/form-utils.ts`). Existe pra evitar lançamento acidental ao digitar/tabular pelos campos.
+
+## Navegação
+
+`app/layout.tsx` renderiza `components/Sidebar.tsx`, compartilhado por todas as páginas:
+- Desktop (`md:` e acima): sidebar fixa de 240px (`brand-900`), com grupos de links ("Gestão",
+  "Movimentação") e itens placeholder no rodapé ("Financeiro", "Configurações" — ainda sem rota,
+  marcados "em breve")
+- Mobile (abaixo de `md:`): topbar fixa com botão hambúrguer que abre um menu retrátil (drawer) com
+  os mesmos links
+- Item ativo: barra de destaque à esquerda (`border-l-[3px] border-brand-500`) + fundo
+  `bg-white/8` + texto branco em negrito
+- Ao adicionar uma página nova, inclua o link correspondente em `GROUPS` (ou crie um novo grupo) em
+  `components/Sidebar.tsx` — páginas sem link na sidebar ficam inacessíveis pela navegação
+
+## Modelo de categorias de animal
+
+`categorias_animal` tem três atributos derivados automaticamente por trigger
+(`fn_calcular_atributos_categoria`) — nunca escolhidos direto no formulário:
+
+- **Grupo Categoria** (`grupos_categoria_papel` — Bezerras Mamando, Novilhas, Garrotes e Bois,
+  Matrizes em Reprodução, Matrizes Descarte, Touros, Bezerros Mamando, Outros): papel zootécnico,
+  escolhido pelo usuário. Determina o **sexo** automaticamente (trava pro sexo do papel; "Outros" é
+  o único com sexo livre, exige seleção manual).
+- **Era** (`00-08`/`08-12`/`12-24`/`24-36`/`36+`): escolhida pelo usuário, exceto papéis "Bezerros
+  Mamando"/"Bezerras Mamando" — trava em `00-08` automaticamente. Determina o **Grupo Faixa
+  Etária** (`grupo_id`/`grupos_categoria` — Bezerro/Jovem/Adulto) automaticamente.
+
+Categoria com `sistema = true` (as 11 pré-cadastradas do sistema) não pode ter nome, papel, sexo,
+era ou grupo faixa etária editados nem pode ser excluída (`fn_validar_edicao_categoria` /
+`fn_validar_delete_categoria`) — só peso de referência e o status `ativa` continuam livres.
+Categoria criada pelo usuário só pode ser excluída se não tiver nenhuma movimentação lançada.
+
+Inativar (`ativa = false`) tira a categoria dos formulários de lançamento (movimentações, saldo
+inicial), mas **nunca** dos relatórios — o histórico de período com movimentação real precisa
+continuar aparecendo. `fn_relatorio_movimentacao_rebanho` não filtra por `ativa`; quem decide o que
+some do relatório é a regra de "linha 100% zerada" no frontend (`linhaEstaZerada` em
+`app/relatorio-movimentacao/page.tsx`) — vale tanto pra categoria inativa sem atividade no período
+quanto pra categoria ativa nunca usada.
+
+## Gestão de áreas
+
+Mesma arquitetura da movimentação de rebanho, aplicada a hectares em vez de cabeças:
+`movimentacoes_area` é um ledger de eventos (`SALDO_INICIAL` ou `MUDANCA_USO`, com tipo de uso
+origem/destino) e `fn_area_por_uso(fazenda, tipo_uso, data)` calcula o saldo de área por tipo de
+uso somando os eventos até aquela data — igual `fn_saldo_categoria`. Edição/exclusão seguem a
+mesma proteção de trajetória já usada pro rebanho (`fn_checar_edicao_area`, mesmo princípio de
+`fn_checar_edicao_movimentacao`, só que com 2 baldes — origem/destino — em vez de 6).
+
+Os 7 tipos de uso (`tipos_uso_area`) são fixos, seedados pelo sistema — sem tela de cadastro/edição
+própria (diferente de categorias de animal, que o usuário pode criar).
+
+**Média ponderada por dias**: relatórios de área nunca usam média simples — usam a área de cada dia
+integrada no período (`fn_area_media_ponderada`, via `generate_series` dia a dia) dividida pelos
+dias. Se a área mudou de uso no meio do mês, os dias antes e depois do câmbio entram com pesos
+diferentes na média mensal. A média do período completo é derivada das médias mensais ponderadas
+pelos dias de cada mês (`soma(média_mês × dias_mês) / soma(dias_mês)`) — matematicamente idêntico a
+integrar direto sobre todos os dias do período, sem precisar reconsultar. Essa regra estende a de
+"Peso e valor médio em totais" acima (ponderar por quantidade) para o eixo do tempo (ponderar por
+dias) — os dois princípios devem ser lembrados juntos ao criar qualquer relatório novo que agregue
+por período.
+
+`fn_relatorio_distribuicao_area` retorna uma linha por (mês, tipo de uso) dentro do período
+filtrado. **A distribuição de área vive dentro de `app/gestao-areas/page.tsx`** (não numa página de
+relatório separada) — a mesma fazenda selecionada no topo alimenta tanto essa seção quanto a de
+"Lançar mudança de uso" logo abaixo, decisão explícita pra não repetir o seletor de fazenda em duas
+telas. O frontend pivota o resultado num gráfico de barras empilhadas (uma barra por mês, cor por
+tipo de uso via `corTipoUsoArea`) e numa **tabela com tipo de uso nas linhas e mês nas colunas**
+(invertida em relação ao gráfico, que continua com mês no eixo horizontal) — cada linha termina em
+duas colunas: "Área média" (ponderada pelos dias, não a média mensal simples) e, por último, "Área
+final" — a área alocada naquele tipo de uso no **último dia do período** (`fn_area_por_uso` chamada
+direto na `data_fim`, uma vez por tipo de uso, sem função SQL nova), não uma média. Cabeçalho da
+coluna leva `title` (tooltip nativo no hover) explicando essa diferença, já que só o nome "Área
+final" sozinho pode ser confundido com mais uma média. O rodapé soma os tipos de uso por mês (e
+também a coluna "Área final") numa linha "Total". Linha de tipo de uso 100% zerada no período visível não aparece
+(mesmo princípio de "linha 100% zerada" do relatório de rebanho). O gráfico fica centralizado e com
+largura de barra flexível (`flex-1` + `max-width`, container `mx-auto max-w-3xl`) — nunca largura
+fixa por mês. Valores de área sempre exibidos com 2 casas decimais fixas (`formatArea`, de
+`lib/format.ts` — ver "Formatação de números" abaixo), nunca arredondamento simples que pode esconder
+o `.00`.
+
+Área nunca "some" depois de declarada — só realoca entre tipos de uso — então um mês com total
+zerado (soma de todos os tipos de uso = 0) só pode significar que ainda não havia saldo inicial
+naquela data. Esses meses são filtrados fora da tabela/gráfico **e** da conta da área média (senão
+dias sem nenhum dado puxariam a média pra baixo indevidamente).
+
+**Área inicial por tipo de uso é cadastrada em `app/fazendas/page.tsx`** (seção expansível por
+fazenda, mostrada automaticamente ao cadastrar uma fazenda nova), não em Gestão de Áreas —
+`app/gestao-areas/page.tsx` só mostra a distribuição e lança/edita `MUDANCA_USO` (mudanças de uso ao
+longo do tempo). Ao cadastrar uma fazenda nova, o fluxo é: declarar área inicial (inline, na própria
+página Fazendas) → link manual "Continuar para o saldo inicial do rebanho" → `/saldo-inicial`.
+
+## Filtros de período (Mês / Ano Safra / Ano Calendário / Período personalizado)
+
+Todo relatório com filtro de período (`app/gestao-areas/page.tsx` e
+`app/relatorio-movimentacao/page.tsx` — o "Rebanho por pasto" é uma foto de um dia só, não se
+aplica) oferece 4 opções, não só mês e período personalizado. "Ano Safra" (1º de julho a 30 de
+junho — se estamos entre janeiro e junho, a safra vigente começou em julho do ano anterior) e "Ano
+Calendário" (1º de janeiro a 31 de dezembro) não trazem só o ano corrente: cada modo abre um
+`<select>` com o ano-safra/ano-calendário atual e os 5 anteriores (`opcoesSafra`/`opcoesAno` em
+`lib/periodo.ts`), com o atual marcado "(atual)" e pré-selecionado por padrão ao clicar no filtro.
+`periodoSafra(anoInicio)`/`periodoAno(ano)` (também em `lib/periodo.ts`, reaproveitadas nas duas
+telas — nunca duplicar essa conta de datas num componente) calculam o intervalo: **só o ano-safra/
+ano-calendário atual** vai até o fim do mês corrente (uma previsão — pra área, se nada mais for
+lançado até lá, o estado atual persiste); qualquer ano anterior já está encerrado, então vai até a
+data fixa (30/06 ou 31/12), sem previsão nenhuma.
+
+**Rebanho não tem essa previsão** — não é possível lançar movimentação com data futura, então
+`app/relatorio-movimentacao/page.tsx` (e a data única de `relatorio-rebanho-por-pasto`) trava o
+`data_fim` efetivo em `min(data_fim_calculada, hoje)` antes de consultar e de exibir, além de `max`
+nos próprios inputs (mês corrente / hoje) pra nem deixar escolher uma data futura. O número em si já
+seria idêntico de qualquer forma (nada muda depois de hoje), mas sem o clamp o rótulo mostraria uma
+data futura como se fosse uma foto real — só uma questão de exibição, não de cálculo.
+
+## Controle de rebanho por pasto
+
+Opt-in único pro grupo inteiro via `configuracoes.controla_pasto` (tabela singleton — uma linha só,
+garantida por índice único sobre expressão constante — não uma coluna por fazenda). Editável a
+qualquer momento em `app/fazendas/page.tsx` (topo da página, fora dos cards de fazenda) e vale pra
+todas as fazendas do grupo de uma vez — não dá pra ligar só numa fazenda específica, decisão
+explícita pra simplificar e padronizar. Hierarquia de dois níveis: **módulo** (onde roda o pastejo
+rotacionado,
+`modulos`) contém **pastos/talhões** (`pastos`, mesma tabela pros dois — "Pasto" vs "Talhão" é só
+rótulo de exibição conforme `modulos.tipo_utilizacao`). Só `PECUARIA` é utilizável hoje —
+`AGRICULTURA` fica reservada no enum `tipo_utilizacao_modulo` pra não exigir migração de schema
+quando talhão for implementado (`ck_modulo_tipo_utilizacao` trava em `PECUARIA` por enquanto).
+
+Toda fazenda ganha módulo + pasto **"Geral"** automaticamente ao ser criada
+(`fn_criar_modulo_pasto_geral`, trigger `AFTER INSERT on fazendas`) — esse par nunca é removido pela
+UI (só inativado, e só se não for o único ativo), então toda fazenda sempre tem exatamente um pasto
+pra apontar enquanto `controla_pasto` estiver desligado, e ligar depois nunca exige migração de
+dados (nem por fazenda nem em lote). Cadastro/edição de módulos e pastos (criar, renomear,
+redimensionar, ativar/inativar) fica em `app/fazendas/page.tsx` (seção expansível "Módulos e pastos"
+em cada card de fazenda, só aparece se `controla_pasto` estiver ligado no grupo) — igual ao padrão
+já usado pra área inicial. `ativo = false` só tira o módulo/pasto dos seletores de lançamento, nunca
+dos relatórios/histórico (mesmo princípio de `ativa` em categorias).
+
+**Exclusão de módulo/pasto**: mesmo princípio já usado em categorias de animal — excluir só é
+permitido se não houver histórico (pasto sem nenhuma referência em `movimentacoes_rebanho`, nem como
+origem nem como destino, e sem `pesagens`; módulo sem nenhum pasto/talhão cadastrado, exclua-os
+primeiro), checado por trigger (`fn_validar_delete_pasto`/`fn_validar_delete_modulo`), não só
+escondido na UI. O par "Geral" auto-criado (`fn_criar_modulo_pasto_geral`) tem uma coluna `sistema`
+própria (mesmo padrão do `categorias_animal.sistema`) que bloqueia a exclusão incondicionalmente —
+só inativação —, mesmo que o usuário renomeie esse par depois (por isso a proteção não pode
+depender do nome "Geral"). Confirmação de exclusão é inline (texto + "Sim, excluir"/"Cancelar" em
+`error`/`bg-error`), nunca `window.confirm()`.
+
+**Reconciliação com área**: a soma das áreas (`area_ha`) de todos os pastos de uma fazenda nunca
+pode ultrapassar a área alocada em "Pecuária" nessa fazenda **na data de hoje**
+(`fn_validar_area_pasto`, via `fn_area_por_uso(..., current_date)`) — checado só no momento de
+criar/editar um pasto, sem histórico por data no pasto e sem reconciliação retroativa se a área de
+Pecuária encolher depois (opção simples, decisão explícita do usuário).
+
+`movimentacoes_rebanho` tem `pasto_id` (sempre obrigatório — se `controla_pasto` estiver desligado
+no grupo, só existe o "Geral" pra escolher, e o formulário preenche sozinho) e `pasto_destino_id`
+(nullable, só usado em `MUDANCA_PASTO` e `TRANSFERENCIA` — ver `ck_pasto_destino`).
+`MUDANCA_CATEGORIA`/`DESMAME` nunca mudam de pasto no mesmo lançamento (precisa de um `MUDANCA_PASTO`
+à parte pra isso). No formulário de `app/movimentacoes/page.tsx`, o seletor de pasto (origem) só
+aparece quando o grupo tem `controla_pasto` ligado **e** a fazenda envolvida tem mais de um pasto
+ativo — do contrário o pasto "Geral" é preenchido sozinho, sem UI. Mesmo princípio para o pasto de
+destino em `TRANSFERENCIA`; em `MUDANCA_PASTO` o destino é sempre um seletor obrigatório (é o
+propósito do lançamento), bloqueado com aviso se `controla_pasto` estiver desligado ou a fazenda não
+tiver pelo menos 2 pastos ativos em uso.
+
+`fn_saldo_categoria(fazenda, categoria, data)` continua sendo o agregado da fazenda inteira, sem
+mudanças — pasto é uma dimensão ortogonal que não afeta essa soma (`MUDANCA_PASTO` sempre entra e
+sai dentro da mesma fazenda). `fn_saldo_categoria_pasto(fazenda, categoria, pasto, data)` é o
+equivalente no nível de pasto; vale sempre `fn_saldo_categoria = soma, sobre todos os pastos da
+fazenda, de fn_saldo_categoria_pasto`. A trajetória de edição/exclusão (`fn_checar_edicao_movimentacao`,
+`fn_delta_para_par`) passou de pares (fazenda, categoria) pra trios (fazenda, categoria, pasto) —
+checar a trajetória em todo trio afetado no nível de pasto cobre também o nível de fazenda inteira
+(soma dos pastos = saldo da fazenda), então não precisa checar as duas dimensões separadamente ali.
+A trigger de saldo insuficiente (`fn_validar_saldo_categoria`) continua checando o nível de fazenda
+(como antes) e **também** o nível de pasto (novo) — os dois convivem como defesa em profundidade.
+
+## Controle de Pasto (módulo separado)
+
+`MUDANCA_PASTO` deixou de ser lançável em `app/movimentacoes/page.tsx` e ganhou tela própria em
+`app/controle-pasto/page.tsx` — existe pra permitir, no futuro modelo de permissões por perfil (ver
+memória de projeto sobre perfis customizáveis), liberar só esse módulo pra um perfil tipo "peão de
+campo" sem precisar de nenhuma trava fina dentro da tela geral de Movimentações: acesso ao módulo
+inteiro já delimita exatamente esse tipo de lançamento. Continua sendo o mesmo tipo `MUDANCA_PASTO`
+na mesma tabela `movimentacoes_rebanho` — nenhuma mudança de schema, só de organização de tela.
+`app/movimentacoes/page.tsx` remove `MUDANCA_PASTO` de `TIPOS`/`TIPOS_COM_LOTE` (não aparece mais no
+seletor de tipo nem no filtro) e exclui esse tipo da query de listagem (`.neq('tipo',
+'MUDANCA_PASTO')`) — sem isso, um lançamento antigo apareceria ali sem os campos/JSX que cuidavam
+dele (já removidos), quebrando a edição.
+
+`app/controle-pasto/page.tsx` reimplementa, de forma simplificada (sem peso/preço/cliente/ajustes,
+que `MUDANCA_PASTO` nunca usou), o mesmo padrão de lote já estabelecido em Movimentações: linhas de
+categoria + quantidade repetíveis, `grupo_lancamento_id` compartilhado quando há 2+ categorias,
+insert atômico em lote, e a mesma checagem de trajetória (`fn_checar_edicao_movimentacao`) por linha
+antiga antes de apagar e reinserir ao editar. O bloqueio "essa fazenda só tem um pasto ativo" (mesma
+regra de antes: `controla_pasto` desligado no grupo, ou fazenda com menos de 2 pastos ativos)
+continua idêntico, já que sem 2+ pastos o módulo inteiro não faz sentido. Navegação: grupo próprio
+"Pastejo" na sidebar (`components/Sidebar.tsx`), com "Controle de Pasto" e "Rebanho por pasto"
+juntos (saíram do grupo "Movimentação") — os dois giram em torno de onde o rebanho está, então faz
+sentido ficarem lado a lado; a página de lançamento linka direto pro relatório de distribuição.
+
+## Pesagens e peso médio nos relatórios
+
+Peso é atribuído por **fazenda + categoria + pasto** — `app/pesagens/page.tsx` lança registros na
+tabela `pesagens` (data + peso médio kg + observação opcional). `pasto_id` é sempre obrigatório,
+mesmo princípio do pasto em `movimentacoes_rebanho`. Isso existe porque, com controle por pasto
+ligado, o mesmo lote de uma categoria pode estar em pastos diferentes com peso médio diferente (ex.:
+um piquete com pasto melhor engorda mais rápido) — pesar "a categoria" sem dizer de qual pasto
+perderia essa diferença.
+
+**Fluxo de lançamento (página única, sem wizard)**: primeiro Data + Fazenda; se o grupo usa
+`controla_pasto`, aparece um toggle "Por categoria" / "Por pasto" (se não usa, é sempre "por
+categoria", sem toggle — só existe o pasto "Geral" mesmo). Em qualquer um dos dois modos, o que abre
+embaixo é uma **tabela em lote** (categoria + quantidade atual + campo de peso), não um formulário de
+uma linha por vez — dá pra pesar várias categorias no mesmo lançamento. **Modo "por pasto"**: escolhe
+o pasto primeiro, e a tabela mostra só as categorias que têm saldo (`fn_relatorio_rebanho_por_pasto`)
+naquele pasto específico naquela data — evita listar categoria que nem está ali. **Modo "por
+categoria"**: mostra todas as categorias ativas (quantidade agregada de todos os pastos, como
+referência), e ao salvar, o peso digitado é gravado **em todos os pastos onde aquela categoria tem
+saldo na data** — mesmo peso, um registro por pasto (fan-out), com uma nota inline avisando esse
+comportamento. Se a categoria ainda não tem saldo em nenhum pasto, cai pro pasto "Geral" da fazenda
+(mantém possível registrar peso antes do primeiro lançamento de estoque). Essa lógica de fan-out usa
+os mesmos dados já retornados por `fn_relatorio_rebanho_por_pasto` — não precisou de função SQL nova.
+
+Qualquer relatório que precise de "peso médio atual" de uma categoria num pasto busca a pesagem mais
+recente com `data <= data_do_relatório` casando **fazenda + categoria + pasto** exatos, e cai pro
+`categorias_animal.peso_referencia_kg` se aquele pasto especificamente nunca foi pesado — nunca busca
+a pesagem de outro pasto da mesma fazenda como segunda tentativa (mesma lógica de "sem fallback
+cruzado" já usada em outros pontos do sistema: cada dimensão é resolvida com o dado mais específico
+disponível, sem interpolar de dimensões vizinhas). `pesagens` não participa do saldo/estoque (sem
+trigger de validação de trajetória) — só exclusão simples com confirmação inline, sem o
+edição-com-aviso usado em movimentações.
+
+`fn_relatorio_rebanho_por_pasto(fazenda, data)` é uma **fotografia num dia** (não um período — pasto
+é "onde os animais estão agora"), não uma agregação por intervalo como os outros relatórios. Uma
+linha por (pasto, categoria) com `quantidade > 0` (via `fn_saldo_categoria_pasto`) e o peso médio
+resolvido como acima. `app/relatorio-rebanho-por-pasto/page.tsx` agrupa isso numa lista única com o
+pasto mesclado (`rowSpan`) nas linhas que ele ocupa — formato de lista vertical, não em colunas por
+pasto, porque fazendas com muitos pastos ficariam apertadas num crosstab horizontal. A linha de
+"Total geral" usa peso médio **ponderado pela quantidade** (mesmo princípio de "Peso e valor médio em
+totais" acima), mas só sobre as linhas com peso conhecido — misturar quantidade de peso desconhecido
+como se fosse "0 kg" puxaria a média pra baixo indevidamente.
+
+## Desconto e acréscimo em movimentações comerciais
+
+Vale só pros 4 tipos com `valor_total` (`COMPRA`, `VENDA_PE`, `VENDA_ABATE`, `CONSUMO_DOACAO`) —
+checado por trigger (`fn_validar_ajuste_movimentacao_comercial`), não só escondido na UI. Dois
+níveis: um **catálogo reutilizável** (`itens_ajuste_financeiro` — nome + tipo `DESCONTO`/
+`ACRESCIMO`, ex.: "Frete" como acréscimo) e o **lançamento por movimentação**
+(`movimentacao_ajustes` — qual movimentação, qual item, valor), permitindo vários itens por venda.
+Cadastro de item novo é inline no próprio formulário (select com opção "+ Novo item..." que revela
+um campo de nome) — mesmo espírito do "+ Novo" já usado em Cliente/Fornecedor, mas sem modal
+separado, já que aqui é só um nome.
+
+**Valor líquido nunca é guardado** — sempre `valor_total - soma(descontos) + soma(acréscimos)`,
+calculado na hora (preview em `app/movimentacoes/page.tsx` durante o lançamento, e a partir do join
+`movimentacao_ajustes(item:itens_ajuste_financeiro(...))` na listagem) — mesmo princípio de nunca
+persistir um valor derivado que já vale pra saldo/estoque no resto do sistema, evita ficar
+dessincronizado se um item for editado ou removido depois. Editar uma movimentação **substitui**
+todos os seus ajustes pelos que estão no formulário no momento de salvar (apaga tudo e reinsere) —
+inclui o caso do tipo ser trocado pra fora dos comerciais durante a edição, que limpa os ajustes sem
+tentar reinserir (a trigger rejeitaria mesmo).
+
+## Lançamento de mais de uma categoria por movimentação (lote)
+
+Na prática é comum vender/comprar/transferir mais de uma categoria no mesmo lote (ex.: garrotes e
+novilhas pro mesmo comprador, no mesmo dia). `TIPOS_COM_LOTE`
+(`NASCIMENTO`, `MORTE`, `COMPRA`, `VENDA_PE`, `VENDA_ABATE`, `CONSUMO_DOACAO`, `TRANSFERENCIA`)
+mostram uma tabela repetível de linhas (categoria + quantidade + peso médio +
+preço, cada campo só aparece se o tipo precisar) em vez do formulário de categoria única, com um "+
+Adicionar categoria" pra incluir mais linhas. `MUDANCA_CATEGORIA` e `DESMAME` ficam de fora — os
+dois já têm duas categorias por lançamento (origem+destino), então uma "linha de lote" exigiria
+dois seletores de categoria cada, complexidade desproporcional ao ganho; continuam com um
+lançamento por vez.
+
+Campos compartilhados (data, fazenda(s), pasto(s), cliente/fornecedor, causa da morte, subtipo
+consumo/doação, observação, descontos/acréscimos) são preenchidos uma vez só e aplicados a todas as
+linhas. As linhas são inseridas numa **única chamada de insert em lote** (`handleSubmitLote`, uma
+chamada com várias linhas, não N inserts separados) — isso garante atomicidade (se uma linha
+estourar o saldo, a trigger rejeita e nenhuma linha é salva) e, como o Postgres processa cada linha
+de um INSERT multi-linha em sequência, a checagem de saldo de uma linha já enxerga o efeito das
+linhas anteriores do mesmo lote.
+
+**Desconto/acréscimo é um valor único do lançamento inteiro**, não por categoria — dividido
+proporcionalmente pelo valor bruto de cada linha na hora de salvar (`valorLinha / somaValorTotal`),
+gravado como `movimentacao_ajustes` própria por linha, pra o "valor líquido" somado bater com o
+valor líquido total do lançamento. O valor bruto por categoria continua sempre visível linha a
+linha (preview "Valor total (bruto) dessa categoria"), já que cada categoria tem seu próprio preço.
+
+### Agrupamento na listagem e edição do lote inteiro
+
+Um lote de 2+ linhas ganha um `grupo_lancamento_id` (uuid gerado no cliente, `crypto.randomUUID()`)
+compartilhado entre as linhas — puramente um id de correlação, sem tabela própria; cada linha
+continua uma movimentação independente pro resto do sistema (saldo, relatórios, trajetória — ver
+"Relatório por movimentação" mais abaixo). Uma linha lançada sozinha (fora do modo lote, ou um lote
+de 1 linha só) fica com `grupo_lancamento_id = null`.
+
+Na listagem, `gruposMovimentacoes` (client-side, agrupando as linhas já carregadas por
+`grupo_lancamento_id`) funde as linhas de um mesmo grupo num único card — cabeçalho com
+tipo/data/fazenda/cliente (idênticos em todas as linhas, por construção), uma linha por categoria
+com seus próprios valores, e um rodapé com quantidade/bruto/líquido somados. Um grupo de 1 linha só
+renderiza exatamente como uma movimentação avulsa (sem card diferente) — o agrupamento é
+transparente até realmente existirem 2+ categorias.
+
+Clicar em "Editar" num card agrupado (`iniciarEdicaoGrupo`) reabre o formulário de lote com todas as
+linhas, campos de cabeçalho vindos da primeira linha, e desconto/acréscimo **reconstruído** somando
+de volta o que foi dividido proporcionalmente por linha (`reconstruirAjustesGrupo` — o inverso exato
+do rateio). Salvar (`handleSubmitLote` com `editandoGrupoId` setado) roda a mesma checagem de
+trajetória já usada pra editar uma movimentação avulsa
+(`fn_checar_edicao_movimentacao`) em **cada linha antiga do grupo** antes de tocar em qualquer
+coisa — se alguma tiver movimentação posterior dependente, mostra o mesmo aviso de confirmação já
+usado em edição avulsa, agora estendido pro grupo inteiro (`avisoEdicaoFuturaGrupo`). Confirmando
+(ou se nada tem conflito), `finalizarSalvarLote` apaga todas as linhas antigas do grupo e insere as
+novas com o mesmo `grupo_lancamento_id` — o mesmo princípio de "apaga e reinsere" já usado em
+`sincronizarAjustes`, só que agora nas movimentações em si, não só nos ajustes. Isso significa que
+uma edição pode livremente adicionar/remover categorias do lote, não só ajustar valores.
+
+## Peso morto/rendimento de carcaça obrigatório em venda abate
+
+`movimentacoes_rebanho` já tinha `peso_morto_kg`/`rendimento_carcaca_pct` e uma trigger
+(`fn_calcular_valores_movimentacao`) que deriva um do outro e escolhe a base de cálculo da arroba:
+peso morto/15 quando disponível, senão peso vivo/30 (fallback). Esses campos nunca tinham UI — toda
+venda abate lançada até então caía no fallback de peso vivo/30, que embute uma suposição *silenciosa*
+de 50% de rendimento (`peso_vivo × 0.5 / 15 = peso_vivo / 30`), sem o usuário nunca ver ou escolher
+esse número. Um animal de 500kg com rendimento real de 55% (18,33@) seria cobrado como se desse
+16,67@ — uma diferença real de dinheiro, não só de exibição.
+
+Por isso `VENDA_ABATE` (só esse tipo — os outros comerciais continuam livres pra usar o fallback
+quando o rendimento real não é conhecido) agora **exige** peso morto ou rendimento de carcaça, um
+por categoria/linha (`isVendaAbate`, campo com `<Required />` tanto no formulário de lote quanto no
+de edição avulsa). Validado nos dois lados: `ck_venda_abate_peso_morto_ou_rendimento` no banco
+(bloqueia mesmo se alguém inserir direto via SQL/API) e `alert()` no frontend antes de chamar
+`fn_checar_edicao_movimentacao`/inserir. `resolverBaseArroba` (`lib` inline no componente) espelha em
+JS a mesma escolha de base/fator que a trigger faz no banco, usada tanto no preview do lote
+(`calcularLinha`) quanto no preview da edição avulsa (`totalArrobas`) — sem isso o "Valor total
+(bruto)" mostrado durante o lançamento ficaria incorreto mesmo com o banco calculando certo depois.
+
+**Preenchimento automático e peso em arrobas por animal**: peso morto e rendimento de carcaça se
+calculam um a partir do outro assim que qualquer um dos dois é digitado
+(`atualizarPesoMortoLinha`/`atualizarRendimentoLinha` no lote, `handlePesoMortoChange`/
+`handleRendimentoChange` na edição avulsa) — cada handler só escreve no campo que **não** está sendo
+digitado, nunca sobrescreve o que o usuário acabou de teclar. Existe pra deixar claro que só um dos
+dois precisa ser preenchido, evitando a dúvida de "preciso informar os dois?". Junto com isso, o
+peso em arrobas por animal (`arrobaPorAnimal` de `calcularLinha`) aparece ao vivo assim que peso
+médio + peso morto/rendimento estão preenchidos ("Peso em arrobas: 18,33 @/animal") — antes desse
+número só aparecia depois de salvo, dentro do valor calculado.
+
+Todos os campos que alimentam esse cálculo são obrigatórios em `VENDA_ABATE`: categoria, quantidade,
+peso médio, peso morto **ou** rendimento (um dos dois, com o mesmo `<Required />` condicional já
+usado noutros campos condicionalmente obrigatórios), e depois um dos quatro campos de preço (arroba/
+cabeça/kg/total). O peso médio passou a ser obrigatório em `VENDA_ABATE` pelo mesmo motivo que já era
+em `DESMAME` (`isDesmame || isVendaAbate`) — sem ele não dá pra resolver o peso base da arroba nem
+mostrar o preview.
+
+**Bruto por categoria, sem duplicar o total do lançamento**: cada linha sempre mostra seu "Valor
+total (bruto) dessa categoria" (via `calcularLinha`), mas a linha separada "Valor bruto total do
+lançamento" só aparece pra `TRANSFERENCIA` (que não tem ajuste financeiro) — pros 4 tipos comerciais
+com desconto/acréscimo (`isComPreco && !isComAjuste`), esse total já aparece embaixo, no resumo
+"Valor bruto (todas as categorias)" ao lado de descontos/acréscimos/líquido, então repetir uma
+segunda linha de "bruto total" seria redundante e um número a mais pra conferir sem necessidade.
+
+## Filtro na listagem de movimentações
+
+`app/movimentacoes/page.tsx` tem um filtro (fazenda, tipo, categoria, data início/fim) acima da
+listagem — existe pra achar/conferir um lançamento específico antes de editar, já que sem filtro a
+lista só traz os 20 lançamentos mais recentes (`carregarMovimentacoes`). Sem nenhum filtro ativo o
+`.limit(20)` continua valendo (carregamento leve, comportamento de sempre); assim que qualquer filtro
+é aplicado o limite é removido e todos os lançamentos que baterem aparecem, sem paginação — o
+objetivo aqui é achar, não navegar por páginas.
+
+O filtro de **fazenda** casa `fazenda_id` OU `fazenda_destino_id` (`.or()`), e o de **categoria** casa
+`categoria_id` OU `categoria_destino_id` — nos dois casos porque tipos como `TRANSFERENCIA` e
+`MUDANCA_CATEGORIA`/`DESMAME` guardam a fazenda/categoria "nova" num campo `_destino_id` separado;
+filtrar só pelo campo de origem esconderia lançamentos onde o valor buscado é o destino. Os selects de
+fazenda/categoria do filtro carregam **todas** as fazendas/categorias (sem o `.eq('ativo'/'ativa',
+true)` usado no formulário de lançamento), porque um lançamento antigo pode referenciar uma
+fazenda/categoria já inativada — o filtro precisa continuar achando esse histórico.

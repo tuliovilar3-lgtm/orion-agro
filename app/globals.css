@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-900: #0e2a2e;
+  --color-brand-700: #15514c;
+  --color-brand-500: #1c8c7c;
+  --color-brand-500-hover: #167064;
+  --color-brand-100: #e4f3f0;
+
+  --color-success: #2e9e5b;
+  --color-success-bg: #e8f6ee;
+  --color-error: #d64545;
+  --color-error-bg: #fbeaea;
+  --color-warning: #db9a1f;
+  --color-warning-bg: #faf1de;
+
+  --color-bg: #f6f8f7;
+  --color-surface: #ffffff;
+  --color-border: #dde4e1;
+  --color-text-primary: #14231f;
+  --color-text-secondary: #5e6e6a;
+  --color-text-muted: #8a9793;
+
+  /* paleta categórica dos tipos de uso de área — distinta dos tokens
+     semânticos acima (brand/success/error/warning), pra não confundir
+     "Área Alagada" com um estado de erro só por acaso de cor */
+  --color-area-reserva: #2f6b3a;
+  --color-area-pecuaria: #1c8c7c;
+  --color-area-agricultura: #a9762c;
+  --color-area-reforma: #c1662f;
+  --color-area-alagada: #3b7cb0;
+  --color-area-infraestrutura: #6b7785;
+  --color-area-outros: #9a9a93;
+
+  --radius-control: 8px;
+  --radius-card: 12px;
+}
+
+@theme inline {
+  --font-sans: var(--font-inter);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
