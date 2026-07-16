@@ -135,6 +135,32 @@ no botão de salvar. Todo `<form onSubmit={...}>` novo leva `onKeyDown={bloquear
 - Ao adicionar uma página nova, inclua o link correspondente em `GROUPS` (ou crie um novo grupo) em
   `components/Sidebar.tsx` — páginas sem link na sidebar ficam inacessíveis pela navegação
 
+## PWA (instalável no celular)
+
+`app/manifest.ts` (convenção de arquivo do Next.js — gera `/manifest.webmanifest` e o `<link
+rel="manifest">` sozinho, sem precisar declarar nada em `layout.tsx`) define nome, cores
+(`background_color`/`theme_color` usando os tokens `bg`/`brand-900`) e `display: 'standalone'`
+(abre sem a barra de endereço do navegador, como um app nativo). `app/icon.svg` é o ícone
+(favicon/aba do navegador — sol nascendo sobre um pasto, nas cores da marca) e `app/apple-icon.png`
+é a versão raster 180×180 exigida pelo iOS pra "Adicionar à Tela de Início" (ambos são convenções de
+arquivo do Next.js, cada um gera sua própria tag automaticamente). Os 3 ícones referenciados pelo
+manifest (`public/icon-192.png`, `public/icon-512.png`, `public/icon-512-maskable.png`) foram
+gerados uma única vez a partir de um SVG fonte via `sharp` (instalado como devDependency temporária
+e removido depois — não precisa ficar no projeto, só serviu pra rasterizar). A versão "maskable" tem
+o mesmo desenho, só que reduzido a ~62% e centralizado, porque o Android aplica sua própria máscara
+(círculo/squircle) sobre o ícone adaptativo — sem essa margem extra, partes do desenho (sol, grama)
+seriam cortadas nas bordas.
+
+`app/layout.tsx` também define `appleWebApp` (título e cor da barra de status no iOS) e um export
+`viewport` com `themeColor` — esse último gera automaticamente tanto a tag moderna
+(`mobile-web-app-capable`, reconhecida por Android/Chrome e iOS/Safari recentes) quanto as
+específicas do iOS mais antigo (`apple-mobile-web-app-*`), então cobre os dois sem duplicar código.
+Escolha deliberada: **sem service worker/cache offline** — o app depende de dados ao vivo do
+Supabase pra tudo (lançar movimentação, conferir saldo), então funcionar offline não agregaria valor
+real e só adicionaria risco de servir uma versão desatualizada da tela depois de um deploy. O
+"instalável" aqui é só ter ícone próprio na tela inicial e abrir em tela cheia — não uma cópia
+que funciona sem internet.
+
 ## Modelo de categorias de animal
 
 `categorias_animal` tem três atributos derivados automaticamente por trigger

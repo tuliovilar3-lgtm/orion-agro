@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import Sidebar from "@/components/Sidebar";
 import "./globals.css";
@@ -11,6 +11,15 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "ORION Agro",
   description: "Gestão pecuária multi-fazenda",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "ORION Agro",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0E2A2E",
 };
 
 export default function RootLayout({
