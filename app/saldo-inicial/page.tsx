@@ -473,6 +473,7 @@ function SaldoInicialContent() {
                             className="border rounded px-2 py-1 w-24"
                             value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
                             onChange={(e) => atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))}
+                            onFocus={(e) => e.target.select()}
                           />
                         )}
                       </td>

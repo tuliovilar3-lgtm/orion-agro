@@ -2203,6 +2203,7 @@ export default function MovimentacoesPage() {
                 className="border rounded px-3 py-2 w-full"
                 value={formatSafraInput(safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
                 onChange={(e) => setSafraNascimento(extrairAnoSafraDigitado(e.target.value))}
+                onFocus={(e) => e.target.select()}
               />
             </div>
           ) : (
@@ -2360,6 +2361,7 @@ export default function MovimentacoesPage() {
                           className="border rounded px-2 py-1 w-full text-sm"
                           value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
                           onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
+                          onFocus={(e) => e.target.select()}
                         />
                       </div>
                     )
