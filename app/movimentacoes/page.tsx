@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatMoeda, formatQuantidade, formatPeso, formatDecimal } from '@/lib/format'
+import { PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
+import { safraSugeridaParaData, formatSafra } from '@/lib/periodo'
 
 type TipoMovimentacao =
   | 'NASCIMENTO'
@@ -76,7 +78,14 @@ function round2(n: number) {
 
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Sexo = 'MACHO' | 'FEMEA'
-type Categoria = { id: string; nome: string; sexo: Sexo; grupo: { nome: string } | null }
+type Categoria = {
+  id: string
+  nome: string
+  sexo: Sexo
+  era: string | null
+  grupo: { nome: string } | null
+  papel: { nome: string } | null
+}
 type ClienteFornecedor = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 type ItemAjuste = { id: string; nome: string; tipo: TipoAjuste }
@@ -89,7 +98,21 @@ type LinhaCategoria = {
   rendimentoCarcaca: string
   campoPreco: CampoPreco
   valorPreco: string
+  // lote de nascimento (safra) — só usado quando a categoria da linha é
+  // bezerro (ver categoriaEhBezerro). Sugerido a partir da data do
+  // lançamento (regra julho-junho), sempre editável.
+  safraNascimento: string
 }
+
+// lote desmamado — cada linha puxa de um lote de nascimento específico
+// (safra), com sua própria quantidade e peso médio
+type LinhaDesmame = {
+  safraNascimento: string
+  quantidade: string
+  pesoMedio: string
+}
+
+type LoteDisponivel = { safra: number; saldo: number }
 
 function novaLinhaCategoria(): LinhaCategoria {
   return {
@@ -100,8 +123,31 @@ function novaLinhaCategoria(): LinhaCategoria {
     rendimentoCarcaca: '',
     campoPreco: 'valor_arroba',
     valorPreco: '',
+    safraNascimento: '',
   }
 }
+
+function novaLinhaDesmame(): LinhaDesmame {
+  return { safraNascimento: '', quantidade: '', pesoMedio: '' }
+}
+
+// categoria é Bezerro/Bezerra Mamando pelo papel (grupos_categoria_papel),
+// não pelo grupo faixa etária (que pode incluir "Outros" com era 00-08) —
+// mesmo critério de fn_categoria_e_bezerro no banco
+function categoriaEhBezerro(c: Categoria | undefined | null) {
+  return !!c?.papel?.nome && PAPEIS_BEZERRO_MAMANDO.includes(c.papel.nome)
+}
+
+// tipos de saída onde o bezerro pode estar envolvido antes do desmame —
+// precisam do seletor de lote (safra) quando a categoria da linha é
+// bezerro, pra não deixar o saldo por lote virar bagunça
+const TIPOS_SAIDA_LOTE_BEZERRO: TipoMovimentacao[] = [
+  'MORTE',
+  'VENDA_PE',
+  'VENDA_ABATE',
+  'CONSUMO_DOACAO',
+  'TRANSFERENCIA',
+]
 
 // peso morto e rendimento são tratados por animal, mesma convenção já
 // usada em peso_medio_kg (não o total do lote) — @ por animal =
@@ -160,6 +206,7 @@ type Movimentacao = {
   valor_total: number | null
   causa_morte: string | null
   subtipo_consumo_doacao: SubtipoConsumoDoacao | null
+  safra_nascimento_ano_inicio: number | null
   observacao: string | null
   fazenda_id: string | null
   fazenda_origem_id: string | null
@@ -229,6 +276,18 @@ export default function MovimentacoesPage() {
   const [acrescimos, setAcrescimos] = useState<AjusteLancado[]>([])
   const [linhas, setLinhas] = useState<LinhaCategoria[]>([novaLinhaCategoria()])
   const [saldosLinhas, setSaldosLinhas] = useState<Record<number, number | null>>({})
+  const [lotesDisponiveisLinhas, setLotesDisponiveisLinhas] = useState<Record<number, LoteDisponivel[]>>({})
+  // lote de nascimento (safra) do formulário de linha única — usado ao
+  // editar uma movimentação avulsa (Nascimento/Compra/Morte/Venda em
+  // Pé/Venda Abate/Consumo-Doação/Transferência) cuja categoria é
+  // bezerro
+  const [safraNascimento, setSafraNascimento] = useState('')
+  const [lotesDisponiveisSingular, setLotesDisponiveisSingular] = useState<LoteDisponivel[]>([])
+  // Desmame tem estrutura própria (categoria origem/destino fixas no
+  // cabeçalho, linhas variando por lote de nascimento) — não reaproveita
+  // LinhaCategoria/linhas
+  const [linhasDesmame, setLinhasDesmame] = useState<LinhaDesmame[]>([novaLinhaDesmame()])
+  const [lotesDesmameDisponiveis, setLotesDesmameDisponiveis] = useState<LoteDisponivel[]>([])
   const [novoDescontoItemId, setNovoDescontoItemId] = useState('')
   const [novoDescontoNomeCriar, setNovoDescontoNomeCriar] = useState('')
   const [novoDescontoValor, setNovoDescontoValor] = useState('')
@@ -313,17 +372,31 @@ export default function MovimentacoesPage() {
   const bloqueadoPorSaldoInicial = !editandoId && fazendasSemSaldoInicial.length > 0
 
   // nascimento e desmame só partem de bezerro (macho ou fêmea) — as
-  // demais categorias (jovens, adultos) não são opções válidas aqui
+  // demais categorias (jovens, adultos) não são opções válidas aqui.
+  // Mudança de Categoria nunca pode envolver bezerro (nem origem, nem
+  // destino — ver fn_validar_lote_nascimento_bezerro): a única evolução
+  // de bezerro é o Desmame, e bezerro só entra por Nascimento, Compra
+  // ou Saldo Inicial.
   const restringirOrigemABezerro = isNascimento || isDesmame
   const categoriasVisiveis = restringirOrigemABezerro
     ? categorias.filter((c) => c.grupo?.nome === 'BEZERRO')
-    : categorias
+    : isMudancaCategoria
+      ? categorias.filter((c) => !categoriaEhBezerro(c))
+      : categorias
 
-  // desmame evolui o bezerro para uma categoria jovem do mesmo sexo
+  // desmame evolui o bezerro para uma categoria jovem do mesmo sexo e
+  // era exatamente 08-12 (não basta ser do grupo Jovem genérico)
   const categoriaOrigemSelecionada = categorias.find((c) => c.id === categoriaId)
   const categoriasDestinoDesmame = categoriaOrigemSelecionada
-    ? categorias.filter((c) => c.grupo?.nome === 'JOVEM' && c.sexo === categoriaOrigemSelecionada.sexo)
+    ? categorias.filter((c) => c.era === '08-12' && c.sexo === categoriaOrigemSelecionada.sexo)
     : []
+
+  // lote de nascimento (safra): Nascimento sempre é bezerro; nos
+  // demais tipos depende da categoria selecionada. Mudança de Categoria
+  // fica de fora (bloqueada pro bezerro) e Desmame tem seu próprio bloco
+  const categoriaAtualEhBezerro = categoriaEhBezerro(categoriaOrigemSelecionada)
+  const mostrarCamposLoteSingular =
+    !isDesmame && !isMudancaCategoria && TIPOS_COM_LOTE.includes(tipo) && (isNascimento || categoriaAtualEhBezerro)
 
   // mudança de categoria entre sexos diferentes é permitida (ajuste de
   // estoque), mas exige confirmação explícita
@@ -489,8 +562,82 @@ export default function MovimentacoesPage() {
   useEffect(() => {
     setLinhas([novaLinhaCategoria()])
     setSaldosLinhas({})
+    setLinhasDesmame([novaLinhaDesmame()])
+    setSafraNascimento('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tipo])
+
+  // lotes de nascimento com saldo disponível numa fazenda+categoria+data
+  // — alimenta os seletores de lote (Desmame e as demais saídas de
+  // bezerro). Mostra só a quantidade, sem peso (ver fn_lotes_nascimento_disponiveis).
+  async function buscarLotesDisponiveis(fazenda: string, categoria: string, dataRef: string) {
+    const { data: lotes, error } = await supabase.rpc('fn_lotes_nascimento_disponiveis', {
+      p_fazenda_id: fazenda,
+      p_categoria_id: categoria,
+      p_data: dataRef,
+    })
+    return error ? [] : ((lotes as LoteDisponivel[]) || [])
+  }
+
+  // formulário de linha única (edição de uma movimentação avulsa de
+  // saída — Morte/Venda em Pé/Venda Abate/Consumo-Doação/Transferência
+  // — cuja categoria é bezerro): lista de lotes pra reatribuir/conferir
+  useEffect(() => {
+    if (!TIPOS_SAIDA_LOTE_BEZERRO.includes(tipo) || !categoriaAtualEhBezerro || !fazendaParaSaldo || !data) {
+      setLotesDisponiveisSingular([])
+      return
+    }
+    let cancelado = false
+    buscarLotesDisponiveis(fazendaParaSaldo, categoriaId, data).then((lotes) => {
+      if (!cancelado) setLotesDisponiveisSingular(lotes)
+    })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipo, categoriaAtualEhBezerro, fazendaParaSaldo, categoriaId, data])
+
+  // formulário de lote (linhas por categoria) — busca os lotes
+  // disponíveis por linha, só quando a categoria daquela linha é
+  // bezerro e o tipo é uma saída que precisa rastrear o lote
+  useEffect(() => {
+    if (!TIPOS_SAIDA_LOTE_BEZERRO.includes(tipo) || !fazendaParaSaldo || !data) {
+      setLotesDisponiveisLinhas({})
+      return
+    }
+    let cancelado = false
+    Promise.all(
+      linhas.map((linha, i) => {
+        const cat = categorias.find((c) => c.id === linha.categoriaId)
+        return linha.categoriaId && categoriaEhBezerro(cat)
+          ? buscarLotesDisponiveis(fazendaParaSaldo, linha.categoriaId, data).then((lotes) => [i, lotes] as const)
+          : Promise.resolve([i, []] as const)
+      })
+    ).then((pares) => {
+      if (!cancelado) setLotesDisponiveisLinhas(Object.fromEntries(pares))
+    })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipo, fazendaParaSaldo, data, categorias, JSON.stringify(linhas.map((l) => l.categoriaId))])
+
+  // Desmame: lotes disponíveis da categoria de origem (bezerro) na
+  // fazenda selecionada
+  useEffect(() => {
+    if (!isDesmame || !fazendaId || !categoriaId || !data) {
+      setLotesDesmameDisponiveis([])
+      return
+    }
+    let cancelado = false
+    buscarLotesDisponiveis(fazendaId, categoriaId, data).then((lotes) => {
+      if (!cancelado) setLotesDesmameDisponiveis(lotes)
+    })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesmame, fazendaId, categoriaId, data])
 
   useEffect(() => {
     if (!isLoteCategoria || !precisaChecarSaldo || !fazendaParaSaldo || !data) {
@@ -525,7 +672,7 @@ export default function MovimentacoesPage() {
           .order('nome'),
         supabase
           .from('categorias_animal')
-          .select('id, nome, sexo, grupo:grupos_categoria(nome)')
+          .select('id, nome, sexo, era, grupo:grupos_categoria(nome), papel:grupos_categoria_papel(nome)')
           .eq('ativa', true)
           .order('nome'),
         supabase
@@ -562,7 +709,7 @@ export default function MovimentacoesPage() {
         `
         id, data, tipo, quantidade, peso_medio_kg, peso_total_kg, peso_morto_kg, rendimento_carcaca_pct,
         valor_arroba, valor_cabeca, valor_kg, valor_total,
-        causa_morte, subtipo_consumo_doacao, observacao, grupo_lancamento_id,
+        causa_morte, subtipo_consumo_doacao, safra_nascimento_ano_inicio, observacao, grupo_lancamento_id,
         fazenda_id, fazenda_origem_id, fazenda_destino_id,
         categoria_id, categoria_destino_id, pasto_id, pasto_destino_id, cliente_fornecedor_id,
         fazenda:fazendas!fazenda_id(nome),
@@ -657,6 +804,8 @@ export default function MovimentacoesPage() {
     setConfirmarMudancaSexo(false)
     setLinhas([novaLinhaCategoria()])
     setSaldosLinhas({})
+    setSafraNascimento('')
+    setLinhasDesmame([novaLinhaDesmame()])
   }
 
   function adicionarLinha() {
@@ -665,6 +814,18 @@ export default function MovimentacoesPage() {
 
   function removerLinha(index: number) {
     setLinhas((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev))
+  }
+
+  function adicionarLinhaDesmame() {
+    setLinhasDesmame((prev) => [...prev, novaLinhaDesmame()])
+  }
+
+  function removerLinhaDesmame(index: number) {
+    setLinhasDesmame((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev))
+  }
+
+  function atualizarLinhaDesmame(index: number, patch: Partial<LinhaDesmame>) {
+    setLinhasDesmame((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)))
   }
 
   function atualizarLinha(index: number, patch: Partial<LinhaCategoria>) {
@@ -766,6 +927,7 @@ export default function MovimentacoesPage() {
     setSubtipoConsumoDoacao(m.subtipo_consumo_doacao || '')
     setObservacao(m.observacao || '')
     setConfirmarMudancaSexo(false)
+    setSafraNascimento(m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -800,6 +962,7 @@ export default function MovimentacoesPage() {
       rendimentoCarcaca: m.rendimento_carcaca_pct != null ? String(m.rendimento_carcaca_pct) : '',
       campoPreco: campoComValor ? campoComValor.key : 'valor_arroba',
       valorPreco: campoComValor ? String(m[campoComValor.key]) : '',
+      safraNascimento: m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '',
     }
   }
 
@@ -833,6 +996,33 @@ export default function MovimentacoesPage() {
     setNovoAcrescimoNomeCriar('')
     setNovoAcrescimoValor('')
     setConfirmarMudancaSexo(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // Desmame tem estrutura própria (linhasDesmame, não linhas) — reabre
+  // tanto um lançamento avulso (rows.length === 1) quanto um grupo
+  // (2+ linhas do mesmo grupo_lancamento_id), sempre via
+  // editandoGrupoId/editandoGrupoLinhasOriginais (mesmo mecanismo já
+  // usado pros demais lotes)
+  function iniciarEdicaoDesmame(rows: Movimentacao[]) {
+    const primeira = rows[0]
+    setEditandoId(null)
+    setEditandoGrupoId(primeira.grupo_lancamento_id)
+    setEditandoGrupoLinhasOriginais(rows)
+    setTipo('DESMAME')
+    setData(primeira.data)
+    setFazendaId(primeira.fazenda_id || '')
+    setCategoriaId(primeira.categoria_id || '')
+    setCategoriaDestinoId(primeira.categoria_destino_id || '')
+    setPastoId(primeira.pasto_id || '')
+    setObservacao(primeira.observacao || '')
+    setLinhasDesmame(
+      rows.map((r) => ({
+        safraNascimento: r.safra_nascimento_ano_inicio != null ? String(r.safra_nascimento_ano_inicio) : '',
+        quantidade: String(r.quantidade),
+        pesoMedio: r.peso_medio_kg != null ? String(r.peso_medio_kg) : '',
+      }))
+    )
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -895,6 +1085,13 @@ export default function MovimentacoesPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // Desmame tem estrutura e handler próprios (linhasDesmame) — checa
+    // antes de isLoteCategoria porque editandoGrupoId (reaproveitado
+    // pro Desmame) faria isLoteCategoria dar true mesmo com tipo DESMAME
+    if (isDesmame) {
+      await handleSubmitDesmame()
+      return
+    }
     if (isLoteCategoria) {
       await handleSubmitLote()
       return
@@ -950,7 +1147,7 @@ export default function MovimentacoesPage() {
       payload.pasto_destino_id = null
     }
 
-    if (isMudancaCategoria || isDesmame) {
+    if (isMudancaCategoria) {
       if (!categoriaDestinoId || categoriaDestinoId === categoriaId) {
         alert('Selecione categorias de origem e destino diferentes.')
         return
@@ -1014,6 +1211,18 @@ export default function MovimentacoesPage() {
       payload.subtipo_consumo_doacao = subtipoConsumoDoacao
     } else {
       payload.subtipo_consumo_doacao = null
+    }
+
+    // lote de nascimento (safra) — obrigatório sempre que a categoria
+    // envolvida é bezerro (Nascimento sempre é; nos demais tipos
+    // depende da categoria escolhida). Sempre tem um valor sugerido a
+    // partir de `data` (regra julho-junho) quando o campo não foi
+    // tocado — data já é obrigatória neste ponto do formulário.
+    if (mostrarCamposLoteSingular) {
+      const safraFinal = safraNascimento ? parseInt(safraNascimento, 10) : safraSugeridaParaData(data)
+      payload.safra_nascimento_ano_inicio = safraFinal
+    } else {
+      payload.safra_nascimento_ano_inicio = null
     }
 
     if (editandoId) {
@@ -1206,6 +1415,9 @@ export default function MovimentacoesPage() {
     const grupoId = linhasComCalculo.length > 1 ? editandoGrupoId ?? crypto.randomUUID() : null
 
     const payloads = linhasComCalculo.map(({ linha, pesoTotal }) => {
+      const cat = categorias.find((c) => c.id === linha.categoriaId)
+      const linhaEhBezerro = isNascimento || categoriaEhBezerro(cat)
+      const safraNascLinha = linha.safraNascimento ? parseInt(linha.safraNascimento, 10) : safraSugeridaParaData(data)
       const payload: Record<string, unknown> = {
         data,
         tipo,
@@ -1228,6 +1440,7 @@ export default function MovimentacoesPage() {
         subtipo_consumo_doacao: isConsumoDoacao ? subtipoConsumoDoacao : null,
         pasto_id: pastoId,
         pasto_destino_id: isTransferencia ? pastoDestinoId : null,
+        safra_nascimento_ano_inicio: linhaEhBezerro ? safraNascLinha : null,
         grupo_lancamento_id: grupoId,
       }
       CAMPOS_PRECO.forEach((c) => {
@@ -1302,6 +1515,127 @@ export default function MovimentacoesPage() {
     }
 
     await finalizarSalvarLote(payloads, valoresLinhas, idsAntigos)
+  }
+
+  // Desmame: categoria origem/destino/fazenda/pasto ficam fixas no
+  // cabeçalho (campos de nível de componente já usados por todos os
+  // tipos), as linhas variam só por lote de nascimento (safra+mês) +
+  // quantidade + peso médio. Reaproveita finalizarSalvarLote (genérico,
+  // já cobre insert/apaga-e-reinsere) — sem desconto/acréscimo, então
+  // linhasComCalculo entra só com valorTotal null.
+  async function handleSubmitDesmame() {
+    if (!data || !fazendaId || !categoriaId || !categoriaDestinoId) return
+    if (!pastoId) {
+      alert('Selecione o pasto.')
+      return
+    }
+
+    const linhasIncompletas = linhasDesmame.some(
+      (l) =>
+        (l.safraNascimento || l.quantidade || l.pesoMedio) &&
+        (!l.safraNascimento || !l.quantidade || !l.pesoMedio)
+    )
+    if (linhasIncompletas) {
+      alert('Preencha o lote, a quantidade e o peso médio em todas as linhas (ou remova a linha incompleta).')
+      return
+    }
+    const linhasValidas = linhasDesmame.filter((l) => l.safraNascimento && l.quantidade && l.pesoMedio)
+    if (linhasValidas.length === 0) return
+
+    // checagem de saldo do lote é best-effort aqui (preview) — quem
+    // garante mesmo é a trigger fn_validar_saldo_categoria no banco
+    for (const linha of linhasValidas) {
+      const lote = lotesDesmameDisponiveis.find((l) => String(l.safra) === linha.safraNascimento)
+      if (lote && parseInt(linha.quantidade, 10) > lote.saldo) {
+        alert('Saldo indisponível em um dos lotes de nascimento selecionados para a data desejada.')
+        return
+      }
+    }
+
+    const grupoId = linhasValidas.length > 1 ? editandoGrupoId ?? crypto.randomUUID() : null
+
+    const payloads = linhasValidas.map((linha) => ({
+      data,
+      tipo: 'DESMAME',
+      quantidade: parseInt(linha.quantidade, 10),
+      categoria_id: categoriaId,
+      categoria_destino_id: categoriaDestinoId,
+      fazenda_id: fazendaId,
+      fazenda_origem_id: null,
+      fazenda_destino_id: null,
+      pasto_id: pastoId,
+      pasto_destino_id: null,
+      peso_medio_kg: parseFloat(linha.pesoMedio),
+      peso_total_kg: round2(parseFloat(linha.pesoMedio) * parseInt(linha.quantidade, 10)),
+      peso_morto_kg: null,
+      rendimento_carcaca_pct: null,
+      valor_arroba: null,
+      valor_cabeca: null,
+      valor_kg: null,
+      valor_total: null,
+      cliente_fornecedor_id: null,
+      causa_morte: null,
+      subtipo_consumo_doacao: null,
+      observacao: observacao.trim() || null,
+      safra_nascimento_ano_inicio: parseInt(linha.safraNascimento, 10),
+      grupo_lancamento_id: grupoId,
+    }))
+
+    const linhasComCalculo = payloads.map(() => ({ valorTotal: null as number | null }))
+    const idsAntigos = editandoGrupoLinhasOriginais.map((r) => r.id)
+
+    if (idsAntigos.length === 0) {
+      await finalizarSalvarLote(payloads, linhasComCalculo, [])
+      return
+    }
+
+    // editando um grupo (ou lançamento avulso) existente: checa
+    // trajetória de cada linha antiga antes de apagá-las, mesmo
+    // princípio já usado nos demais lotes
+    setSalvando(true)
+    let futuraEncontrada = false
+    for (const r of editandoGrupoLinhasOriginais) {
+      const { data: check, error: checkError } = await supabase.rpc('fn_checar_edicao_movimentacao', {
+        p_id: r.id,
+        p_tipo: r.tipo,
+        p_fazenda_id: r.fazenda_id,
+        p_fazenda_origem_id: r.fazenda_origem_id,
+        p_fazenda_destino_id: r.fazenda_destino_id,
+        p_categoria_id: r.categoria_id,
+        p_categoria_destino_id: r.categoria_destino_id,
+        p_pasto_id: r.pasto_id,
+        p_pasto_destino_id: r.pasto_destino_id,
+        p_data: r.data,
+        p_quantidade: r.quantidade,
+      })
+      if (checkError) {
+        alert('Erro ao validar edição: ' + checkError.message)
+        setSalvando(false)
+        return
+      }
+      const resultado: ChecagemEdicao | undefined = Array.isArray(check) ? check[0] : check
+      if (resultado?.saldo_ficaria_negativo) {
+        alert(
+          `Não é possível editar: o saldo de ${resultado.categoria_saldo_negativo} no pasto ${resultado.pasto_saldo_negativo} ficaria negativo (${resultado.saldo_minimo}) em ${resultado.data_saldo_negativo}.`
+        )
+        setSalvando(false)
+        return
+      }
+      if (resultado?.tem_movimentacoes_futuras) futuraEncontrada = true
+    }
+    setSalvando(false)
+
+    if (futuraEncontrada) {
+      setAvisoEdicaoFuturaGrupo({
+        payloads,
+        linhasComCalculo,
+        idsAntigos,
+        mensagem: 'Existem movimentações posteriores dessas categorias. Confirma a edição mesmo assim?',
+      })
+      return
+    }
+
+    await finalizarSalvarLote(payloads, linhasComCalculo, idsAntigos)
   }
 
   async function handleCriarCliente(e: React.FormEvent) {
@@ -1409,6 +1743,9 @@ export default function MovimentacoesPage() {
     if (!omitirCliente && m.cliente?.nome) partes.push(m.cliente.nome)
     if (m.causa_morte) partes.push(`causa: ${m.causa_morte}`)
     if (m.subtipo_consumo_doacao) partes.push(m.subtipo_consumo_doacao)
+    if (m.safra_nascimento_ano_inicio != null) {
+      partes.push(`safra ${formatSafra(m.safra_nascimento_ano_inicio)}`)
+    }
     if (m.pasto?.nome && m.pasto.nome !== 'Geral') partes.push(`pasto: ${m.pasto.nome}`)
     return partes.join(' · ')
   }
@@ -1593,11 +1930,11 @@ export default function MovimentacoesPage() {
           </div>
         )}
 
-        {!isLoteCategoria ? (
+        {isDesmame ? (
         <>
         <div>
           <label className="block text-sm mb-1">
-            {isMudancaCategoria ? 'Categoria origem' : isDesmame ? 'Categoria (bezerro a desmamar)' : 'Categoria'}
+            Categoria (bezerro a desmamar)
             <Required />
           </label>
           <select
@@ -1615,10 +1952,131 @@ export default function MovimentacoesPage() {
           </select>
         </div>
 
-        {(isMudancaCategoria || isDesmame) && (
+        <div>
+          <label className="block text-sm mb-1">
+            Categoria destino (após desmame)
+            <Required />
+          </label>
+          <select
+            className="border rounded px-3 py-2 w-full"
+            value={categoriaDestinoId}
+            onChange={(e) => setCategoriaDestinoId(e.target.value)}
+            required
+          >
+            <option value="">Selecione...</option>
+            {categoriasDestinoDesmame.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nome}
+              </option>
+            ))}
+          </select>
+          {!categoriaOrigemSelecionada && (
+            <p className="text-xs text-gray-500 mt-1">Selecione a categoria de origem primeiro.</p>
+          )}
+        </div>
+
+        <div className="border rounded p-3 space-y-3">
+          <div className="text-sm font-medium">
+            Lotes desmamados (por safra de nascimento)
+            <Required />
+          </div>
+          {linhasDesmame.map((linha, i) => {
+            return (
+              <div key={i} className="border rounded p-2 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">Linha {i + 1}</span>
+                  {linhasDesmame.length > 1 && (
+                    <button
+                      type="button"
+                      className="text-red-600 text-xs underline"
+                      onClick={() => removerLinhaDesmame(i)}
+                    >
+                      Remover
+                    </button>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs mb-1">
+                    Lote (safra de nascimento)
+                    <Required />
+                  </label>
+                  <select
+                    className="border rounded px-2 py-1 w-full text-sm"
+                    value={linha.safraNascimento}
+                    onChange={(e) => atualizarLinhaDesmame(i, { safraNascimento: e.target.value })}
+                  >
+                    <option value="">Selecione...</option>
+                    {lotesDesmameDisponiveis.map((l) => (
+                      <option key={l.safra} value={String(l.safra)}>
+                        Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs mb-1">
+                      Quantidade
+                      <Required />
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className="border rounded px-2 py-1 w-full text-sm"
+                      value={linha.quantidade}
+                      onChange={(e) => atualizarLinhaDesmame(i, { quantidade: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1">
+                      Peso médio (kg)
+                      <Required />
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      className="border rounded px-2 py-1 w-full text-sm"
+                      value={linha.pesoMedio}
+                      onChange={(e) => atualizarLinhaDesmame(i, { pesoMedio: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+          <button type="button" className="text-sm text-blue-600 underline" onClick={adicionarLinhaDesmame}>
+            + Adicionar lote
+          </button>
+        </div>
+        </>
+        ) : !isLoteCategoria ? (
+        <>
+        <div>
+          <label className="block text-sm mb-1">
+            {isMudancaCategoria ? 'Categoria origem' : 'Categoria'}
+            <Required />
+          </label>
+          <select
+            className="border rounded px-3 py-2 w-full"
+            value={categoriaId}
+            onChange={(e) => setCategoriaId(e.target.value)}
+            required
+          >
+            <option value="">Selecione...</option>
+            {categoriasVisiveis.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nome}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {isMudancaCategoria && (
           <div>
             <label className="block text-sm mb-1">
-              {isDesmame ? 'Categoria destino (após desmame)' : 'Categoria destino'}
+              Categoria destino
               <Required />
             </label>
             <select
@@ -1628,15 +2086,12 @@ export default function MovimentacoesPage() {
               required
             >
               <option value="">Selecione...</option>
-              {(isDesmame ? categoriasDestinoDesmame : categorias).map((c) => (
+              {categorias.filter((c) => !categoriaEhBezerro(c)).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.nome}
                 </option>
               ))}
             </select>
-            {isDesmame && !categoriaOrigemSelecionada && (
-              <p className="text-xs text-gray-500 mt-1">Selecione a categoria de origem primeiro.</p>
-            )}
           </div>
         )}
 
@@ -1734,6 +2189,41 @@ export default function MovimentacoesPage() {
             )}
           </div>
         )}
+
+        {mostrarCamposLoteSingular &&
+          (isNascimento || tipo === 'COMPRA' ? (
+            <div>
+              <label className="block text-sm mb-1">
+                Safra do bezerro
+                <Required />
+              </label>
+              <input
+                type="number"
+                className="border rounded px-3 py-2 w-full"
+                value={safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
+                onChange={(e) => setSafraNascimento(e.target.value)}
+              />
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm mb-1">
+                Lote de nascimento (safra)
+                <Required />
+              </label>
+              <select
+                className="border rounded px-3 py-2 w-full"
+                value={safraNascimento}
+                onChange={(e) => setSafraNascimento(e.target.value)}
+              >
+                <option value="">Selecione...</option>
+                {lotesDisponiveisSingular.map((l) => (
+                  <option key={l.safra} value={String(l.safra)}>
+                    Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
 
         {isVendaAbate && (
           <div>
@@ -1852,6 +2342,48 @@ export default function MovimentacoesPage() {
                     />
                   </div>
                 )}
+                {(() => {
+                  const catLinha = categorias.find((c) => c.id === linha.categoriaId)
+                  const linhaEhBezerro = isNascimento || categoriaEhBezerro(catLinha)
+                  if (!linhaEhBezerro) return null
+                  if (isNascimento || tipo === 'COMPRA') {
+                    return (
+                      <div>
+                        <label className="block text-xs mb-1">
+                          Safra do bezerro
+                          <Required />
+                        </label>
+                        <input
+                          type="number"
+                          className="border rounded px-2 py-1 w-full text-sm"
+                          value={linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
+                          onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                        />
+                      </div>
+                    )
+                  }
+                  const lotesLinha = lotesDisponiveisLinhas[i] || []
+                  return (
+                    <div>
+                      <label className="block text-xs mb-1">
+                        Lote de nascimento (safra)
+                        <Required />
+                      </label>
+                      <select
+                        className="border rounded px-2 py-1 w-full text-sm"
+                        value={linha.safraNascimento}
+                        onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                      >
+                        <option value="">Selecione...</option>
+                        {lotesLinha.map((l) => (
+                          <option key={l.safra} value={String(l.safra)}>
+                            Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                })()}
                 {isVendaAbate && (
                   <div>
                     <label className="block text-xs mb-1">
@@ -2324,7 +2856,7 @@ export default function MovimentacoesPage() {
                       <button
                         type="button"
                         className="text-xs text-blue-600 underline"
-                        onClick={() => iniciarEdicao(m)}
+                        onClick={() => (m.tipo === 'DESMAME' ? iniciarEdicaoDesmame([m]) : iniciarEdicao(m))}
                       >
                         Editar
                       </button>
@@ -2358,7 +2890,11 @@ export default function MovimentacoesPage() {
                     <button
                       type="button"
                       className="text-xs text-blue-600 underline"
-                      onClick={() => iniciarEdicaoGrupo(grupo.movimentacoes)}
+                      onClick={() =>
+                        primeira.tipo === 'DESMAME'
+                          ? iniciarEdicaoDesmame(grupo.movimentacoes)
+                          : iniciarEdicaoGrupo(grupo.movimentacoes)
+                      }
                     >
                       Editar
                     </button>

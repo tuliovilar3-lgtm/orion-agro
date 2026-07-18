@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
+import { safraSugeridaParaData } from '@/lib/periodo'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatQuantidade, formatPeso } from '@/lib/format'
@@ -18,9 +19,14 @@ type Fazenda = {
 type LinhaSaldo = {
   categoriaId: string
   categoriaNome: string
+  categoriaEhBezerro: boolean
   existingId: string | null
   quantidade: string
   pesoMedio: string
+  // lote de nascimento (safra) — só se aplica quando a categoria é
+  // bezerro. Sugerida a partir da data de referência (regra
+  // julho-junho), sempre editável.
+  safraNascimento: string
 }
 
 type Sexo = 'MACHO' | 'FEMEA'
@@ -161,10 +167,15 @@ function SaldoInicialContent() {
   async function carregarLinhas(fId: string) {
     setLoading(true)
     const [{ data: categorias }, { data: existentes }, { data: fazenda }] = await Promise.all([
-      supabase.from('categorias_animal').select('id, nome, ordem_ciclo').eq('ativa', true).order('ordem_ciclo').order('nome'),
+      supabase
+        .from('categorias_animal')
+        .select('id, nome, ordem_ciclo, papel:grupos_categoria_papel(nome)')
+        .eq('ativa', true)
+        .order('ordem_ciclo')
+        .order('nome'),
       supabase
         .from('movimentacoes_rebanho')
-        .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, data')
+        .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, data, safra_nascimento_ano_inicio')
         .eq('fazenda_id', fId)
         .eq('tipo', 'SALDO_INICIAL'),
       supabase
@@ -179,12 +190,15 @@ function SaldoInicialContent() {
     const mapaExistentes = new Map((existentes || []).map((e) => [e.categoria_id, e]))
     const novasLinhas: LinhaSaldo[] = (categorias || []).map((c) => {
       const existente = mapaExistentes.get(c.id)
+      const papelNome = (c as unknown as { papel: { nome: string } | null }).papel?.nome
       return {
         categoriaId: c.id,
         categoriaNome: c.nome,
+        categoriaEhBezerro: !!papelNome && PAPEIS_BEZERRO_MAMANDO.includes(papelNome),
         existingId: existente ? existente.id : null,
         quantidade: existente ? String(existente.quantidade) : '',
         pesoMedio: existente && existente.peso_medio_kg != null ? String(existente.peso_medio_kg) : '',
+        safraNascimento: existente?.safra_nascimento_ano_inicio != null ? String(existente.safra_nascimento_ano_inicio) : '',
       }
     })
     setLinhas(novasLinhas)
@@ -207,7 +221,7 @@ function SaldoInicialContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 
-  function atualizarLinha(categoriaId: string, campo: 'quantidade' | 'pesoMedio', valor: string) {
+  function atualizarLinha(categoriaId: string, campo: 'quantidade' | 'pesoMedio' | 'safraNascimento', valor: string) {
     setLinhas((prev) => prev.map((l) => (l.categoriaId === categoriaId ? { ...l, [campo]: valor } : l)))
   }
 
@@ -250,6 +264,11 @@ function SaldoInicialContent() {
 
       if (linhaCompleta) {
         const pesoTotal = round2(pesoMedioNum * quantidadeNum)
+        const safraNascimento = linha.categoriaEhBezerro
+          ? linha.safraNascimento
+            ? parseInt(linha.safraNascimento, 10)
+            : safraSugeridaParaData(data)
+          : null
         if (linha.existingId) {
           await supabase
             .from('movimentacoes_rebanho')
@@ -259,6 +278,7 @@ function SaldoInicialContent() {
               peso_total_kg: pesoTotal,
               pasto_id: pastoId,
               data,
+              safra_nascimento_ano_inicio: safraNascimento,
             })
             .eq('id', linha.existingId)
         } else {
@@ -271,6 +291,7 @@ function SaldoInicialContent() {
             peso_medio_kg: pesoMedioNum,
             peso_total_kg: pesoTotal,
             pasto_id: pastoId,
+            safra_nascimento_ano_inicio: safraNascimento,
           })
         }
       } else if (linhaVazia && linha.existingId) {
@@ -307,6 +328,7 @@ function SaldoInicialContent() {
     return s + qtd * peso
   }, 0)
   const pesoMedioPonderado = totalCabecas > 0 ? round2(totalPesoKg / totalCabecas) : null
+  const existeCategoriaBezerro = linhas.some((l) => l.categoriaEhBezerro)
 
   return (
     <div className="p-8 max-w-3xl">
@@ -408,6 +430,7 @@ function SaldoInicialContent() {
                 <th className="border p-2 text-right">Quantidade</th>
                 <th className="border p-2 text-right">Peso médio (kg)</th>
                 <th className="border p-2 text-right">Peso total (kg)</th>
+                {existeCategoriaBezerro && <th className="border p-2 text-left">Safra do bezerro</th>}
               </tr>
             </thead>
             <tbody>
@@ -441,6 +464,18 @@ function SaldoInicialContent() {
                     <td className="border p-2 text-right text-gray-500">
                       {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
                     </td>
+                    {existeCategoriaBezerro && (
+                      <td className="border p-2">
+                        {l.categoriaEhBezerro && (
+                          <input
+                            type="number"
+                            className="border rounded px-2 py-1 w-20"
+                            value={l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
+                            onChange={(e) => atualizarLinha(l.categoriaId, 'safraNascimento', e.target.value)}
+                          />
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}
@@ -455,6 +490,7 @@ function SaldoInicialContent() {
                 <td className="border p-2 text-right">
                   {totalCabecas > 0 ? formatPeso(round2(totalPesoKg)) : '—'}
                 </td>
+                {existeCategoriaBezerro && <td className="border p-2"></td>}
               </tr>
             </tfoot>
           </table>

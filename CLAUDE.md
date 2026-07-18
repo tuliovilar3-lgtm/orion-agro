@@ -572,3 +572,87 @@ filtrar só pelo campo de origem esconderia lançamentos onde o valor buscado é
 fazenda/categoria do filtro carregam **todas** as fazendas/categorias (sem o `.eq('ativo'/'ativa',
 true)` usado no formulário de lançamento), porque um lançamento antigo pode referenciar uma
 fazenda/categoria já inativada — o filtro precisa continuar achando esse histórico.
+
+## Lote de nascimento (safra) para bezerros
+
+Fazendas de cria agrupam bezerros por **safra de nascimento** (estação de monta — ex.: "safra
+2025/2026"), e o sistema precisa respeitar esse agrupamento em qualquer movimentação que envolva
+bezerro, não só no nascimento — senão o saldo por safra vira bagunça assim que o primeiro
+lote é parcialmente vendido/morto/transferido/desmamado. `movimentacoes_rebanho.
+safra_nascimento_ano_inicio` (int, ex.: `2025` para "2025/2026") é a única coluna dessa dimensão —
+migração 030 também tinha `mes_nascimento` (mês exato), removida na migração 031 por decisão do
+usuário: exigia um segundo campo em todo lançamento (obrigatório em Compra/Saldo Inicial, seletor de
+dois níveis nas saídas) sem ganho proporcional, já que o mês não sobrevivia além do lançamento de
+entrada de qualquer forma (uma saída não carrega "de qual mês" foi puxada, só quanto). Perda real
+aceita conscientemente: não dá pra perguntar "quantos nasceram em junho" depois do lançamento
+inicial — só "quantos da safra 2025/2026" — mas a data exata de cada Nascimento/Compra/Saldo Inicial
+continua no campo `data` de cada lançamento, só não alimenta mais uma dimensão de saldo separada.
+
+**Só se aplica quando a categoria envolvida é bezerro** — `fn_categoria_e_bezerro(categoria_id)`
+checa o papel (`grupos_categoria_papel.nome in ('Bezerros Mamando', 'Bezerras Mamando')`), não o
+grupo faixa etária (que pode incluir "Outros" com era 00-08). No frontend, o equivalente é
+`categoriaEhBezerro(c)` em `app/movimentacoes/page.tsx`, usando `PAPEIS_BEZERRO_MAMANDO` de
+`lib/faixa-etaria.ts`.
+
+**Regras por tipo de lançamento** (`fn_validar_lote_nascimento_bezerro`, trigger `before insert or
+update` em `movimentacoes_rebanho`):
+- **Bezerro só entra no sistema por Nascimento, Compra ou Saldo Inicial** — nunca por Mudança de
+  Categoria (nem como origem, nem como destino; a única evolução de bezerro é o Desmame). A trigger
+  bloqueia com exceção direta se `MUDANCA_CATEGORIA` envolver bezerro em qualquer ponta. No frontend,
+  isso já é impedido pela UI (`categoriasVisiveis`/o seletor de destino filtram bezerro fora das
+  opções pra `MUDANCA_CATEGORIA` — ver `!categoriaEhBezerro(c)`), mas a trigger é a fonte de verdade
+  (defesa em profundidade, igual todo o resto do sistema).
+- **Desmame exige categoria destino com era exatamente `08-12`** (não basta ser do grupo Jovem
+  genérico) — `categoriasDestinoDesmame` no frontend já filtra por isso, a trigger reforça.
+- **Todo lançamento cuja categoria de origem é bezerro exige `safra_nascimento_ano_inicio`
+  preenchido** — Nascimento, Compra, Saldo Inicial (entrada) e Morte/Venda em Pé/Venda Abate/
+  Consumo-Doação/Desmame/Transferência (saída).
+
+**Safra é sempre sugerida, nunca travada**: `safraSugeridaParaData(dataIso)` em `lib/periodo.ts`
+generaliza a mesma regra julho-junho de `anoInicioSafraAtual()` (mês ≥ 7 → ano corrente; senão ano
+anterior) pra uma data qualquer, não só hoje. O campo de safra em todo formulário mostra esse valor
+sugerido via `value={linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}` —
+mas o usuário sempre pode digitar por cima, porque a parição real pode cair fora da janela calendário
+(ex.: bezerro da safra 26/27 nascido no fim de junho de 2026, ainda dentro da janela julho-junho da
+safra 25/26). No submit, se o campo não foi tocado, o valor sugerido é o que efetivamente é gravado
+(`safraNascimento ? parseInt(...) : safraSugeridaParaData(data)`) — nunca fica em branco silenciosamente
+mesmo que o usuário nunca clique no campo, já que a sugestão é sempre calculável a partir de `data`
+(campo já obrigatório em todo lançamento).
+
+**Saldo por lote é uma dimensão independente do pasto** — `fn_saldo_categoria_safra(fazenda,
+categoria, safra, data)` segue o mesmo princípio de `fn_saldo_categoria_pasto`, mas as duas dimensões
+não se cruzam (decisão explícita de simplicidade: rastrear seria fazenda×categoria×pasto×safra,
+complexidade desproporcional). `fn_validar_saldo_categoria` chama essa função como checagem adicional
+(além do saldo por fazenda inteira e por pasto) sempre que o lançamento carrega
+`safra_nascimento_ano_inicio` e é um tipo de saída. A trajetória de edição/exclusão tem sua própria
+versão paralela e independente da de pasto: `fn_delta_para_par_lote`/`fn_checar_saldo_lote_futuro`
+(mesmo princípio de `fn_delta_para_par`/`fn_checar_edicao_movimentacao`, mantida deliberadamente
+separada — função e assinatura próprias — pra não mexer nos call sites já existentes da versão por
+pasto). Essa versão da trajetória só é chamada pelas triggers de bloqueio (`fn_validar_edicao_movimentacao`/
+`fn_validar_delete_movimentacao`), não é exposta ao frontend pro aviso de confirmação "há
+lançamentos futuros" — violação na dimensão do lote vira exceção direta do banco em vez do aviso
+amigável que a versão por pasto tem.
+
+**Seletor de lote nas saídas**: `fn_lotes_nascimento_disponiveis(fazenda, categoria, data)` lista
+todas as safras com saldo > 0 pra aquela fazenda+categoria — mostra só a quantidade disponível, sem
+peso (não faz sentido pro lote de origem, e o usuário pediu explicitamente pra não mostrar). Alimenta
+o seletor de lote em Morte/Venda em Pé/Venda Abate/Consumo-Doação/Transferência (linha por linha no
+lançamento em lote, ou o campo único no formulário de edição avulsa) e no Desmame — em todos os
+casos, o campo só aparece quando a categoria da linha é bezerro (`categoriaEhBezerro`), reaproveitando
+a mesma função `buscarLotesDisponiveis` em `app/movimentacoes/page.tsx`.
+
+**Desmame vira uma estrutura própria** (`linhasDesmame`, não reaproveita `LinhaCategoria`/`linhas`) —
+categoria origem/destino, fazenda e pasto ficam fixos no cabeçalho do lançamento (únicos por
+lançamento, igual antes), e as linhas repetíveis variam só por lote (safra) + quantidade + peso médio
+— um mesmo lançamento pode desmamar de safras diferentes (raro, mas suportado) ou em ondas ao longo
+do tempo (cada Desmame é um lançamento novo, reduzindo o saldo daquela safra). Editar reabre via
+`iniciarEdicaoDesmame`, que reaproveita o mesmo mecanismo `editandoGrupoId`/
+`editandoGrupoLinhasOriginais` já usado pelos demais lotes (mesmo quando é 1 linha só) — inclusive o
+mesmo limite conhecido de que o botão "Salvar edição"/"Cancelar edição" só reage a `editandoId`, não
+a `editandoGrupoId` (comportamento pré-existente dos outros tipos em lote, não específico do Desmame).
+
+**Saldo inicial também pode declarar bezerro** — confirmado explicitamente pelo usuário (contradição
+que seria criada por "bezerro só entra por Nascimento/Compra" levada ao pé da letra, já que fazendas
+novas precisam poder declarar um plantel pré-existente com bezerros). `app/saldo-inicial/page.tsx`
+ganha a mesma coluna de safra que Compra, condicional por linha (`categoriaEhBezerro`), suprimida
+inteiramente da tabela quando nenhuma categoria da fazenda é bezerro (`existeCategoriaBezerro`).

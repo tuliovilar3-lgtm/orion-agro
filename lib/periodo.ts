@@ -53,3 +53,18 @@ export function opcoesAno(quantidadeAnteriores = 5) {
   const atual = anoCalendarioAtual()
   return Array.from({ length: quantidadeAnteriores + 1 }, (_, i) => atual - i)
 }
+
+// mesma regra julho-junho de anoInicioSafraAtual, mas generalizada pra
+// qualquer data (não só hoje) — usada pra sugerir a safra de nascimento
+// a partir da data de um lançamento. Sempre editável: a parição real
+// pode cair fora dessa janela calendário (ex.: bezerro da safra 26/27
+// nascido no fim de junho de 2026, ainda dentro da janela da safra 25/26).
+export function safraSugeridaParaData(dataIso: string) {
+  const [ano, mes] = dataIso.split('-').map(Number)
+  return mes >= 7 ? ano : ano - 1
+}
+
+// rótulo de exibição da safra (ex.: 2025 -> "2025/2026")
+export function formatSafra(anoInicio: number) {
+  return `${anoInicio}/${anoInicio + 1}`
+}

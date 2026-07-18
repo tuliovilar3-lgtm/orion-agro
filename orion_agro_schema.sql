@@ -284,6 +284,25 @@ create trigger trg_validar_delete_categoria
 before delete on categorias_animal
 for each row execute function fn_validar_delete_categoria();
 
+-- ---------------------------------------------------------------------
+-- fn_categoria_e_bezerro: true se a categoria tem o papel Bezerro/
+-- Bezerra Mamando (grupos_categoria_papel.nome) — helper reaproveitado
+-- pelas triggers de lote de nascimento (migração 030).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_categoria_e_bezerro(p_categoria_id uuid)
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1 from categorias_animal c
+    join grupos_categoria_papel g on g.id = c.grupo_categoria_papel_id
+    where c.id = p_categoria_id
+      and g.nome in ('Bezerros Mamando', 'Bezerras Mamando')
+  );
+$$;
+
 create table clientes_fornecedores (
   id              uuid primary key default gen_random_uuid(),
   nome            text not null,
@@ -862,6 +881,16 @@ create table movimentacoes_rebanho (
   peso_medio_kg         numeric(10,2),
   peso_total_kg         numeric(12,2),
 
+  -- lote de nascimento (safra) — só usado quando a categoria envolvida
+  -- é Bezerro/Bezerra Mamando (ver fn_categoria_e_bezerro). Sugerida
+  -- automaticamente (regra julho-junho) mas sempre editável — a
+  -- parição real pode cair fora da janela calendário. Migração 030
+  -- também tinha mes_nascimento (mês exato); removido na migração 031
+  -- por decisão do usuário — mês exigia um segundo campo em todo
+  -- lançamento sem ganho proporcional (não sobrevivia além do
+  -- lançamento de entrada de qualquer forma).
+  safra_nascimento_ano_inicio int,
+
   -- comercial (compra / venda em pé / venda abate / consumo-doação)
   -- as 4 formas de valor abaixo são intercambiáveis: preencha UMA
   -- (ou valor_total, ou uma das 3 unitárias) e o trigger
@@ -906,9 +935,12 @@ create table movimentacoes_rebanho (
 
   -- MUDANCA_CATEGORIA e DESMAME exigem categoria_destino_id preenchido
   -- e diferente da categoria de origem; nenhum outro tipo pode usá-lo.
-  -- Em DESMAME, categoria_destino_id é a categoria (jovem) para a qual
-  -- o bezerro evolui após o desmame — validado na aplicação para ser
-  -- do grupo JOVEM e do mesmo sexo da categoria de origem.
+  -- Em DESMAME, categoria_destino_id é a categoria para a qual o
+  -- bezerro evolui após o desmame — mesmo sexo da origem validado na
+  -- aplicação, era 08-12 validada no banco (fn_validar_lote_nascimento_bezerro,
+  -- migração 030). MUDANCA_CATEGORIA nunca pode envolver categoria de
+  -- bezerro, nem como origem nem como destino (mesma trigger) — a
+  -- única evolução de bezerro é o Desmame.
   constraint ck_categoria_destino check (
     (tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and categoria_destino_id is not null
        and categoria_destino_id <> categoria_id)
@@ -1052,6 +1084,59 @@ $$ language plpgsql;
 create trigger trg_calcular_peso_total
 before insert or update on movimentacoes_rebanho
 for each row execute function fn_calcular_peso_total_movimentacao();
+
+-- ---------------------------------------------------------------------
+-- fn_validar_lote_nascimento_bezerro (migração 030, ajustada na 031
+-- pra exigir só safra_nascimento_ano_inicio, sem mês): Mudança de
+-- Categoria nunca pode envolver categoria de bezerro (nem origem nem
+-- destino — a única evolução de bezerro é o Desmame, e bezerro só
+-- entra por Nascimento/Compra/Saldo Inicial). Desmame exige categoria
+-- destino com era 08-12. Todo lançamento cuja categoria de origem é
+-- bezerro exige safra_nascimento_ano_inicio preenchido. Roda pra
+-- frente a partir de agora, sem invalidar retroativamente lançamentos
+-- antigos (mesmo princípio do peso médio na migração 028).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_validar_lote_nascimento_bezerro()
+returns trigger as $$
+declare
+  v_origem_bezerro  boolean;
+  v_destino_bezerro boolean;
+  v_era_destino     text;
+begin
+  v_origem_bezerro := fn_categoria_e_bezerro(new.categoria_id);
+  v_destino_bezerro := new.categoria_destino_id is not null and fn_categoria_e_bezerro(new.categoria_destino_id);
+
+  if new.tipo = 'MUDANCA_CATEGORIA' then
+    if v_origem_bezerro or v_destino_bezerro then
+      raise exception 'Mudança de Categoria não pode ser usada com categoria de bezerro — bezerros só evoluem de categoria pelo Desmame, e só entram no sistema por Nascimento, Compra ou Saldo Inicial.';
+    end if;
+    return new;
+  end if;
+
+  if new.tipo = 'DESMAME' then
+    select era into v_era_destino from categorias_animal where id = new.categoria_destino_id;
+    if v_era_destino is distinct from '08-12' then
+      raise exception 'A categoria destino do Desmame precisa ter era 08-12.';
+    end if;
+  end if;
+
+  if v_origem_bezerro and new.tipo in (
+    'NASCIMENTO', 'COMPRA', 'SALDO_INICIAL',
+    'MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME', 'TRANSFERENCIA'
+  ) then
+    if new.safra_nascimento_ano_inicio is null then
+      raise exception 'Informe a safra de nascimento do lote de bezerros envolvido.';
+    end if;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_lote_nascimento_bezerro
+before insert or update on movimentacoes_rebanho
+for each row execute function fn_validar_lote_nascimento_bezerro();
 
 create or replace function fn_calcular_valores_movimentacao()
 returns trigger as $$
@@ -1234,12 +1319,96 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
+-- fn_saldo_categoria_safra (migração 030, renomeada/simplificada na
+-- 031 — só safra, sem mês): mesmo princípio de fn_saldo_categoria_pasto,
+-- mas pra dimensão do lote de nascimento, independente do pasto — as
+-- duas dimensões (pasto e lote) não se cruzam.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_saldo_categoria_safra(
+  p_fazenda_id uuid, p_categoria_id uuid, p_safra int, p_data date
+)
+returns integer
+language plpgsql
+stable
+as $$
+declare
+  v_entradas int;
+  v_saidas   int;
+begin
+  select coalesce(sum(quantidade), 0) into v_entradas
+  from (
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id
+      and safra_nascimento_ano_inicio = p_safra
+      and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_destino_id = p_fazenda_id and categoria_id = p_categoria_id
+      and safra_nascimento_ano_inicio = p_safra
+      and tipo = 'TRANSFERENCIA' and data <= p_data
+  ) e;
+
+  select coalesce(sum(quantidade), 0) into v_saidas
+  from (
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id
+      and safra_nascimento_ano_inicio = p_safra
+      and tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_origem_id = p_fazenda_id and categoria_id = p_categoria_id
+      and safra_nascimento_ano_inicio = p_safra
+      and tipo = 'TRANSFERENCIA' and data <= p_data
+  ) s;
+
+  return v_entradas - v_saidas;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
+-- fn_lotes_nascimento_disponiveis (migração 030, simplificada na 031):
+-- lista os lotes (safra) com saldo > 0 numa fazenda+categoria numa
+-- data — alimenta o seletor de lote no frontend (Desmame e as demais
+-- movimentações de saída — Morte, Venda em Pé, Venda Abate,
+-- Consumo/Doação, Transferência — quando a categoria envolvida é
+-- bezerro), mostrando só a quantidade disponível, sem peso (não faz
+-- sentido pro lote de origem).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_lotes_nascimento_disponiveis(p_fazenda_id uuid, p_categoria_id uuid, p_data date)
+returns table(safra int, saldo int)
+language plpgsql
+stable
+as $$
+begin
+  return query
+  select t.safra_nascimento_ano_inicio, s.saldo
+  from (
+    select distinct safra_nascimento_ano_inicio
+    from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id
+      and safra_nascimento_ano_inicio is not null
+      and data <= p_data
+  ) t
+  cross join lateral (
+    select fn_saldo_categoria_safra(p_fazenda_id, p_categoria_id, t.safra_nascimento_ano_inicio, p_data) as saldo
+  ) s
+  where s.saldo > 0
+  order by t.safra_nascimento_ano_inicio;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
 -- TRIGGER: impede lançar mais animais do que o saldo disponível na
 -- categoria de origem, na data do lançamento. Não se aplica a
 -- NASCIMENTO/COMPRA (só entram animais). TRANSFERENCIA checa o saldo
 -- na fazenda de origem. Checa tanto o saldo da fazenda inteira quanto
 -- o saldo do pasto específico (este último cobre também MUDANCA_PASTO,
--- que não mexe no saldo da fazenda — só desloca dentro dela).
+-- que não mexe no saldo da fazenda — só desloca dentro dela). Quando o
+-- lançamento carrega safra de nascimento (lote de bezerro), checa
+-- também o saldo do lote (migração 030/031) — defesa em profundidade
+-- junto com fn_validar_lote_nascimento_bezerro.
 -- ---------------------------------------------------------------------
 
 create or replace function fn_validar_saldo_categoria()
@@ -1248,7 +1417,9 @@ declare
   v_fazenda_checagem uuid;
   v_saldo            int;
   v_saldo_pasto      int;
+  v_saldo_lote       int;
   v_nome_pasto       text;
+  v_fazenda_lote     uuid;
 begin
   if new.tipo in ('VENDA_PE', 'VENDA_ABATE', 'MORTE', 'CONSUMO_DOACAO', 'DESMAME', 'MUDANCA_CATEGORIA') then
     v_fazenda_checagem := new.fazenda_id;
@@ -1273,6 +1444,19 @@ begin
     select nome into v_nome_pasto from pastos where id = new.pasto_id;
     raise exception 'Saldo insuficiente no pasto %: % cabeça(s) disponível(is) dessa categoria na data %, mas % foi(ram) solicitada(s).',
       v_nome_pasto, v_saldo_pasto, new.data, new.quantidade;
+  end if;
+
+  if new.safra_nascimento_ano_inicio is not null
+     and new.tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME', 'TRANSFERENCIA') then
+    v_fazenda_lote := case when new.tipo = 'TRANSFERENCIA' then new.fazenda_origem_id else new.fazenda_id end;
+    v_saldo_lote := fn_saldo_categoria_safra(
+      v_fazenda_lote, new.categoria_id, new.safra_nascimento_ano_inicio, new.data
+    );
+    if v_saldo_lote < new.quantidade then
+      raise exception 'Saldo insuficiente no lote de nascimento (safra %/%): % cabeça(s) disponível(is) na data %, mas % foi(ram) solicitada(s).',
+        new.safra_nascimento_ano_inicio, new.safra_nascimento_ano_inicio + 1,
+        v_saldo_lote, new.data, new.quantidade;
+    end if;
   end if;
 
   return new;
@@ -1566,6 +1750,120 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------
+-- fn_delta_para_par_lote / fn_checar_saldo_lote_futuro (migração 030,
+-- simplificadas na 031 — só safra, sem mês): mesma lógica de
+-- trajetória de fn_delta_para_par / fn_checar_edicao_movimentacao, só
+-- que pra dimensão do lote de nascimento, mantida deliberadamente
+-- SEPARADA (função e assinatura próprias) pra não mexer nos call sites
+-- já existentes da versão por pasto. Só é chamada pelas triggers de
+-- bloqueio abaixo — não é exposta ao frontend pro aviso de confirmação
+-- "há lançamentos futuros" (só a versão por pasto tem esse aviso);
+-- violação na dimensão do lote vira exceção direta do banco.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_delta_para_par_lote(
+  p_tipo tipo_movimentacao, p_fazenda_id uuid, p_fazenda_origem_id uuid, p_fazenda_destino_id uuid,
+  p_categoria_id uuid, p_safra int, p_quantidade int,
+  p_par_fazenda_id uuid, p_par_categoria_id uuid, p_par_safra int
+) returns int
+language plpgsql
+immutable
+as $$
+declare
+  v_total int := 0;
+begin
+  if p_safra is null or p_par_safra is null or p_safra <> p_par_safra then
+    return 0;
+  end if;
+
+  if p_tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') then
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id then
+      v_total := v_total + p_quantidade;
+    end if;
+  elsif p_tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') then
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id then
+      v_total := v_total - p_quantidade;
+    end if;
+  elsif p_tipo = 'TRANSFERENCIA' then
+    if p_fazenda_origem_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id then
+      v_total := v_total - p_quantidade;
+    end if;
+    if p_fazenda_destino_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id then
+      v_total := v_total + p_quantidade;
+    end if;
+  end if;
+  return v_total;
+end;
+$$;
+
+create or replace function fn_checar_saldo_lote_futuro(
+  p_id uuid, p_tipo tipo_movimentacao, p_fazenda_id uuid, p_fazenda_origem_id uuid, p_fazenda_destino_id uuid,
+  p_categoria_id uuid, p_safra int, p_data date, p_quantidade int
+) returns table(saldo_ficaria_negativo boolean, data_saldo_negativo date, saldo_minimo int)
+language plpgsql
+as $$
+declare
+  v_old        movimentacoes_rebanho%rowtype;
+  v_par        record;
+  v_data       date;
+  v_saldo      int;
+  v_pior_saldo int;
+  v_pior_data  date;
+begin
+  select * into v_old from movimentacoes_rebanho where id = p_id;
+
+  for v_par in (
+    select distinct fazenda_id, categoria_id, safra from (
+      values
+        (v_old.fazenda_id, v_old.categoria_id, v_old.safra_nascimento_ano_inicio),
+        (v_old.fazenda_destino_id, v_old.categoria_id, v_old.safra_nascimento_ano_inicio),
+        (p_fazenda_id, p_categoria_id, p_safra),
+        (p_fazenda_destino_id, p_categoria_id, p_safra)
+    ) as t(fazenda_id, categoria_id, safra)
+    where fazenda_id is not null and categoria_id is not null and safra is not null
+  )
+  loop
+    for v_data in (
+      select distinct m.data from movimentacoes_rebanho m
+      where m.id <> p_id
+        and m.data >= p_data
+        and m.safra_nascimento_ano_inicio = v_par.safra
+        and (
+          (m.fazenda_id = v_par.fazenda_id and m.categoria_id = v_par.categoria_id)
+          or (m.fazenda_destino_id = v_par.fazenda_id and m.categoria_id = v_par.categoria_id)
+        )
+      union
+      select p_data
+      order by 1
+    )
+    loop
+      v_saldo := fn_saldo_categoria_safra(v_par.fazenda_id, v_par.categoria_id, v_par.safra, v_data)
+        - case when v_old.data <= v_data
+            then fn_delta_para_par_lote(v_old.tipo, v_old.fazenda_id, v_old.fazenda_origem_id, v_old.fazenda_destino_id,
+                                    v_old.categoria_id, v_old.safra_nascimento_ano_inicio, v_old.quantidade,
+                                    v_par.fazenda_id, v_par.categoria_id, v_par.safra)
+            else 0 end
+        + case when p_data <= v_data
+            then fn_delta_para_par_lote(p_tipo, p_fazenda_id, p_fazenda_origem_id, p_fazenda_destino_id,
+                                    p_categoria_id, p_safra, p_quantidade,
+                                    v_par.fazenda_id, v_par.categoria_id, v_par.safra)
+            else 0 end;
+
+      if v_saldo < 0 and (v_pior_data is null or v_data < v_pior_data) then
+        v_pior_saldo := v_saldo;
+        v_pior_data := v_data;
+      end if;
+    end loop;
+  end loop;
+
+  saldo_ficaria_negativo := v_pior_data is not null;
+  data_saldo_negativo := v_pior_data;
+  saldo_minimo := v_pior_saldo;
+  return next;
+end;
+$$;
+
 -- trigger de bloqueio (defesa em profundidade — a tela já deve chamar
 -- fn_checar_edicao_movimentacao antes de mandar o UPDATE, pra mostrar o
 -- aviso de confirmação; esta trigger garante que mesmo sem passar pela
@@ -1573,7 +1871,8 @@ $$;
 create or replace function fn_validar_edicao_movimentacao()
 returns trigger as $$
 declare
-  v_check record;
+  v_check      record;
+  v_check_lote record;
 begin
   select * into v_check from fn_checar_edicao_movimentacao(
     old.id, new.tipo, new.fazenda_id, new.fazenda_origem_id, new.fazenda_destino_id,
@@ -1584,6 +1883,18 @@ begin
   if v_check.saldo_ficaria_negativo then
     raise exception 'Não é possível editar: o saldo da categoria % no pasto % ficaria negativo (%) em %.',
       v_check.categoria_saldo_negativo, v_check.pasto_saldo_negativo, v_check.saldo_minimo, v_check.data_saldo_negativo;
+  end if;
+
+  if new.safra_nascimento_ano_inicio is not null then
+    select * into v_check_lote from fn_checar_saldo_lote_futuro(
+      old.id, new.tipo, new.fazenda_id, new.fazenda_origem_id, new.fazenda_destino_id,
+      new.categoria_id, new.safra_nascimento_ano_inicio, new.data, new.quantidade
+    );
+    if v_check_lote.saldo_ficaria_negativo then
+      raise exception 'Não é possível editar: o saldo do lote de nascimento (safra %/%) ficaria negativo (%) em %.',
+        new.safra_nascimento_ano_inicio, new.safra_nascimento_ano_inicio + 1,
+        v_check_lote.saldo_minimo, v_check_lote.data_saldo_negativo;
+    end if;
   end if;
 
   return new;
@@ -1605,7 +1916,8 @@ for each row execute function fn_validar_edicao_movimentacao();
 create or replace function fn_validar_delete_movimentacao()
 returns trigger as $$
 declare
-  v_check record;
+  v_check      record;
+  v_check_lote record;
 begin
   select * into v_check from fn_checar_edicao_movimentacao(
     old.id, old.tipo, old.fazenda_id, old.fazenda_origem_id, old.fazenda_destino_id,
@@ -1616,6 +1928,18 @@ begin
   if v_check.saldo_ficaria_negativo then
     raise exception 'Não é possível excluir: o saldo da categoria % no pasto % ficaria negativo (%) em %.',
       v_check.categoria_saldo_negativo, v_check.pasto_saldo_negativo, v_check.saldo_minimo, v_check.data_saldo_negativo;
+  end if;
+
+  if old.safra_nascimento_ano_inicio is not null then
+    select * into v_check_lote from fn_checar_saldo_lote_futuro(
+      old.id, old.tipo, old.fazenda_id, old.fazenda_origem_id, old.fazenda_destino_id,
+      old.categoria_id, old.safra_nascimento_ano_inicio, old.data, 0
+    );
+    if v_check_lote.saldo_ficaria_negativo then
+      raise exception 'Não é possível excluir: o saldo do lote de nascimento (safra %/%) ficaria negativo (%) em %.',
+        old.safra_nascimento_ano_inicio, old.safra_nascimento_ano_inicio + 1,
+        v_check_lote.saldo_minimo, v_check_lote.data_saldo_negativo;
+    end if;
   end if;
 
   return old;
