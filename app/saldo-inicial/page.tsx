@@ -25,6 +25,7 @@ type LinhaSaldo = {
 
 type Sexo = 'MACHO' | 'FEMEA'
 type GrupoCategoriaPapel = { id: string; nome: string; sexo: Sexo | null }
+type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 
 function round2(n: number) {
   return Math.round(n * 100) / 100
@@ -61,7 +62,14 @@ function SaldoInicialContent() {
   const [novaCategoriaPesoReferencia, setNovaCategoriaPesoReferencia] = useState('')
   const [salvandoCategoria, setSalvandoCategoria] = useState(false)
 
+  const [pastos, setPastos] = useState<Pasto[]>([])
+  const [controlaPasto, setControlaPasto] = useState(false)
+  const [pastoId, setPastoId] = useState('')
+
   const supabase = createClient()
+
+  const pastosDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId)
+  const mostrarSeletorPasto = controlaPasto && pastosDisponiveis.length > 1
 
   const papelSelecionado = papeis.find((p) => p.id === novaCategoriaPapelId)
   const sexoEhLivre = !!papelSelecionado && papelSelecionado.sexo === null
@@ -85,6 +93,17 @@ function SaldoInicialContent() {
       .select('id, nome, sexo')
       .order('ordem')
       .then(({ data }) => setPapeis(data || []))
+    supabase
+      .from('pastos')
+      .select('id, modulo_id, nome, ativo, modulo:modulos!modulo_id(fazenda_id)')
+      .eq('ativo', true)
+      .order('nome')
+      .then(({ data }) => setPastos((data as unknown as Pasto[]) || []))
+    supabase
+      .from('configuracoes')
+      .select('controla_pasto')
+      .single()
+      .then(({ data }) => setControlaPasto(data?.controla_pasto ?? false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -92,6 +111,23 @@ function SaldoInicialContent() {
     setNovaCategoriaSexo('')
     setNovaCategoriaEra('')
   }, [novaCategoriaPapelId])
+
+  // pasto: some pro "Geral" sozinho quando o seletor está escondido
+  // (grupo sem controla_pasto, ou só um pasto ativo) — mesmo princípio
+  // já usado em Movimentações e Controle de Pasto
+  useEffect(() => {
+    if (!fazendaId) {
+      setPastoId('')
+      return
+    }
+    if (!mostrarSeletorPasto) {
+      const geral = pastosDisponiveis.find((p) => p.nome === 'Geral') || pastosDisponiveis[0]
+      setPastoId(geral ? geral.id : '')
+    } else if (!pastosDisponiveis.some((p) => p.id === pastoId)) {
+      setPastoId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId, mostrarSeletorPasto, pastos])
 
   async function handleCriarCategoria(e: React.FormEvent) {
     e.preventDefault()
@@ -128,7 +164,7 @@ function SaldoInicialContent() {
       supabase.from('categorias_animal').select('id, nome, ordem_ciclo').eq('ativa', true).order('ordem_ciclo').order('nome'),
       supabase
         .from('movimentacoes_rebanho')
-        .select('id, categoria_id, quantidade, peso_medio_kg, data')
+        .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, data')
         .eq('fazenda_id', fId)
         .eq('tipo', 'SALDO_INICIAL'),
       supabase
@@ -155,6 +191,8 @@ function SaldoInicialContent() {
 
     const primeiraData = (existentes || [])[0]?.data
     if (primeiraData) setData(primeiraData)
+    const primeiroPastoId = (existentes || [])[0]?.pasto_id
+    if (primeiroPastoId) setPastoId(primeiroPastoId)
 
     setLoading(false)
   }
@@ -186,6 +224,11 @@ function SaldoInicialContent() {
       return
     }
 
+    if (!pastoId) {
+      alert('Selecione o pasto.')
+      return
+    }
+
     if (confirmado) {
       setMostrarAvisoEdicao(true)
     } else {
@@ -210,7 +253,13 @@ function SaldoInicialContent() {
         if (linha.existingId) {
           await supabase
             .from('movimentacoes_rebanho')
-            .update({ quantidade: quantidadeNum, peso_medio_kg: pesoMedioNum, peso_total_kg: pesoTotal, data })
+            .update({
+              quantidade: quantidadeNum,
+              peso_medio_kg: pesoMedioNum,
+              peso_total_kg: pesoTotal,
+              pasto_id: pastoId,
+              data,
+            })
             .eq('id', linha.existingId)
         } else {
           await supabase.from('movimentacoes_rebanho').insert({
@@ -221,6 +270,7 @@ function SaldoInicialContent() {
             quantidade: quantidadeNum,
             peso_medio_kg: pesoMedioNum,
             peso_total_kg: pesoTotal,
+            pasto_id: pastoId,
           })
         }
       } else if (linhaVazia && linha.existingId) {
@@ -303,6 +353,26 @@ function SaldoInicialContent() {
             onChange={(e) => setData(e.target.value)}
           />
         </div>
+        {mostrarSeletorPasto && (
+          <div>
+            <label className="block text-sm mb-1">
+              Pasto
+              <Required />
+            </label>
+            <select
+              className="border rounded px-3 py-2"
+              value={pastoId}
+              onChange={(e) => setPastoId(e.target.value)}
+            >
+              <option value="">Selecione...</option>
+              {pastosDisponiveis.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {!fazendaId ? (

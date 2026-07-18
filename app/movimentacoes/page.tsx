@@ -219,7 +219,6 @@ export default function MovimentacoesPage() {
   const [pastoDestinoId, setPastoDestinoId] = useState('')
   const [quantidade, setQuantidade] = useState('')
   const [pesoMedio, setPesoMedio] = useState('')
-  const [pesoTotal, setPesoTotal] = useState('')
   const [pesoMorto, setPesoMorto] = useState('')
   const [rendimentoCarcaca, setRendimentoCarcaca] = useState('')
   const [campoPreco, setCampoPreco] = useState<CampoPreco>('valor_arroba')
@@ -639,7 +638,6 @@ export default function MovimentacoesPage() {
     setPastoDestinoId('')
     setQuantidade('')
     setPesoMedio('')
-    setPesoTotal('')
     setPesoMorto('')
     setRendimentoCarcaca('')
     setCampoPreco('valor_arroba')
@@ -741,7 +739,6 @@ export default function MovimentacoesPage() {
     setPastoDestinoId(m.pasto_destino_id || '')
     setQuantidade(String(m.quantidade))
     setPesoMedio(m.peso_medio_kg != null ? String(m.peso_medio_kg) : '')
-    setPesoTotal(m.peso_total_kg != null ? String(m.peso_total_kg) : '')
     setPesoMorto(m.peso_morto_kg != null ? String(round2(m.peso_morto_kg / m.quantidade)) : '')
     setRendimentoCarcaca(m.rendimento_carcaca_pct != null ? String(m.rendimento_carcaca_pct) : '')
     const campoComValor = CAMPOS_PRECO.find((c) => m[c.key] != null)
@@ -968,16 +965,16 @@ export default function MovimentacoesPage() {
       return
     }
 
-    if ((isDesmame || isVendaAbate) && !pesoMedio) return
-    payload.peso_medio_kg = pesoMedio ? parseFloat(pesoMedio) : null
-
-    if (isComPreco) {
-      payload.peso_total_kg = pesoTotalCalculado
-    } else if (isMudancaCategoria) {
-      payload.peso_total_kg = pesoTotal ? parseFloat(pesoTotal) : null
-    } else {
-      payload.peso_total_kg = null
-    }
+    // peso médio é obrigatório em toda movimentação (Mudança de Pasto
+    // nem passa por esse formulário — tem tela própria em Controle de
+    // Pasto, com peso opcional)
+    if (!pesoMedio) return
+    payload.peso_medio_kg = parseFloat(pesoMedio)
+    // peso_total_kg é sempre derivado no banco (peso_medio_kg × quantidade,
+    // ver fn_calcular_peso_total_movimentacao) — enviar o calculado aqui é
+    // só pra não deixar a coluna momentaneamente desatualizada antes do
+    // trigger rodar, o banco sempre tem a palavra final
+    payload.peso_total_kg = pesoTotalCalculado
 
     if (isVendaAbate) {
       if (!pesoMorto && !rendimentoCarcaca) {
@@ -1180,8 +1177,10 @@ export default function MovimentacoesPage() {
     if (precisaCliente && !clienteFornecedorId) return
     if (isMorte && !causaMorte.trim()) return
     if (isConsumoDoacao && !subtipoConsumoDoacao) return
+    // peso médio é obrigatório em toda categoria do lote (Mudança de Pasto
+    // não usa esse formulário — tem tela própria em Controle de Pasto)
+    if (linhasValidas.some((l) => !l.pesoMedio)) return
     if (isVendaAbate) {
-      if (linhasValidas.some((l) => !l.pesoMedio)) return
       if (linhasValidas.some((l) => !l.pesoMorto && !l.rendimentoCarcaca)) {
         alert(
           'Informe o peso morto ou o rendimento de carcaça em todas as categorias — sem isso não dá pra calcular a arroba corretamente.'
@@ -1215,7 +1214,10 @@ export default function MovimentacoesPage() {
         categoria_destino_id: null,
         observacao: observacao.trim() || null,
         peso_medio_kg: linha.pesoMedio ? parseFloat(linha.pesoMedio) : null,
-        peso_total_kg: isComPreco ? pesoTotal : null,
+        // peso_total_kg é sempre derivado no banco (peso_medio_kg × quantidade,
+        // ver fn_calcular_peso_total_movimentacao) — enviar o calculado aqui é
+        // só pra não deixar a coluna momentaneamente desatualizada
+        peso_total_kg: pesoTotal,
         // total do lote (mesma convenção de peso_total_kg) — o campo do
         // formulário é por animal, igual peso médio
         peso_morto_kg:
@@ -1714,7 +1716,7 @@ export default function MovimentacoesPage() {
           <div>
             <label className="block text-sm mb-1">
               Peso médio (kg)
-              {(isDesmame || isVendaAbate) && <Required />}
+              <Required />
             </label>
             <input
               type="number"
@@ -1723,7 +1725,7 @@ export default function MovimentacoesPage() {
               className="border rounded px-3 py-2 w-full"
               value={pesoMedio}
               onChange={(e) => setPesoMedio(e.target.value)}
-              required={isDesmame || isVendaAbate}
+              required
             />
             {isComPreco && (
               <p className="text-xs text-gray-500 mt-1">
@@ -1766,19 +1768,6 @@ export default function MovimentacoesPage() {
           </div>
         )}
 
-        {isMudancaCategoria && (
-          <div>
-            <label className="block text-sm mb-1">Peso total (kg)</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              className="border rounded px-3 py-2 w-full"
-              value={pesoTotal}
-              onChange={(e) => setPesoTotal(e.target.value)}
-            />
-          </div>
-        )}
         </>
         ) : (
         <div className="border rounded p-3 space-y-3">
@@ -1851,7 +1840,7 @@ export default function MovimentacoesPage() {
                   <div>
                     <label className="block text-xs mb-1">
                       Peso médio (kg)
-                      {isVendaAbate && <Required />}
+                      <Required />
                     </label>
                     <input
                       type="number"

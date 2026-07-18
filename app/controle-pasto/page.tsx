@@ -5,16 +5,16 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
-import { formatQuantidade } from '@/lib/format'
+import { formatQuantidade, formatPeso } from '@/lib/format'
 
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Categoria = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 
-type LinhaPasto = { categoriaId: string; quantidade: string }
+type LinhaPasto = { categoriaId: string; quantidade: string; pesoMedio: string }
 
 function novaLinhaPasto(): LinhaPasto {
-  return { categoriaId: '', quantidade: '' }
+  return { categoriaId: '', quantidade: '', pesoMedio: '' }
 }
 
 type Movimentacao = {
@@ -29,6 +29,7 @@ type Movimentacao = {
   pasto: { nome: string } | null
   pasto_destino_id: string
   pasto_destino: { nome: string } | null
+  peso_medio_kg: number | null
   observacao: string | null
   grupo_lancamento_id: string | null
 }
@@ -110,7 +111,7 @@ export default function ControlePastoPage() {
       .from('movimentacoes_rebanho')
       .select(
         `
-        id, data, quantidade, categoria_id, fazenda_id, pasto_id, pasto_destino_id, observacao, grupo_lancamento_id,
+        id, data, quantidade, categoria_id, fazenda_id, pasto_id, pasto_destino_id, peso_medio_kg, observacao, grupo_lancamento_id,
         categoria:categorias_animal!categoria_id(nome),
         fazenda:fazendas!fazenda_id(nome),
         pasto:pastos!pasto_id(nome),
@@ -209,7 +210,13 @@ export default function ControlePastoPage() {
     setPastoId(primeira.pasto_id)
     setPastoDestinoId(primeira.pasto_destino_id)
     setObservacao(primeira.observacao || '')
-    setLinhas(rows.map((r) => ({ categoriaId: r.categoria_id, quantidade: String(r.quantidade) })))
+    setLinhas(
+      rows.map((r) => ({
+        categoriaId: r.categoria_id,
+        quantidade: String(r.quantidade),
+        pesoMedio: r.peso_medio_kg != null ? String(r.peso_medio_kg) : '',
+      }))
+    )
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -295,7 +302,10 @@ export default function ControlePastoPage() {
       categoria_id: linha.categoriaId,
       categoria_destino_id: null,
       quantidade: parseInt(linha.quantidade, 10),
-      peso_medio_kg: null,
+      // opcional — se não informado, o lote continua com o último peso
+      // conhecido (peso_total_kg é sempre derivado no banco quando
+      // peso_medio_kg vem preenchido, ver fn_calcular_peso_total_movimentacao)
+      peso_medio_kg: linha.pesoMedio ? parseFloat(linha.pesoMedio) : null,
       peso_total_kg: null,
       peso_morto_kg: null,
       rendimento_carcaca_pct: null,
@@ -575,6 +585,20 @@ export default function ControlePastoPage() {
                         )}
                       </div>
                     </div>
+                    <div className="mt-2">
+                      <label className="mb-1 block text-xs text-text-secondary">Peso médio (kg) — opcional</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        className="w-full rounded-control border border-border bg-surface px-2 py-1 text-sm text-text-primary outline-none focus:border-brand-500"
+                        value={linha.pesoMedio}
+                        onChange={(e) => atualizarLinha(i, { pesoMedio: e.target.value })}
+                      />
+                      <p className="mt-1 text-xs text-text-secondary">
+                        Se não informado, o lote continua com o último peso conhecido.
+                      </p>
+                    </div>
                   </div>
                 )
               })}
@@ -658,6 +682,7 @@ export default function ControlePastoPage() {
                     <li key={m.id} className="text-sm text-text-secondary">
                       <span className="font-medium text-text-primary">{m.categoria?.nome ?? '—'}</span> —{' '}
                       {formatQuantidade(m.quantidade)} cab.
+                      {m.peso_medio_kg != null ? ` · ${formatPeso(m.peso_medio_kg)} kg/cab` : ''}
                     </li>
                   ))}
                 </ul>

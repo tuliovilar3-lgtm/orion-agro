@@ -387,6 +387,57 @@ pasto, porque fazendas com muitos pastos ficariam apertadas num crosstab horizon
 totais" acima), mas só sobre as linhas com peso conhecido — misturar quantidade de peso desconhecido
 como se fosse "0 kg" puxaria a média pra baixo indevidamente.
 
+## Peso médio obrigatório e compilação automática em Pesagens
+
+Peso médio (`peso_medio_kg`) é obrigatório em **toda** movimentação, tanto no formulário quanto no
+banco (`ck_peso_medio_obrigatorio`), com uma única exceção: `MUDANCA_PASTO`, onde o peso é opcional
+— se não informado no lançamento de Controle de Pasto, o lote simplesmente continua com o último
+peso conhecido (nenhuma ação precisa acontecer nesse caso). A constraint foi adicionada `not valid`
+na migração 028 — não quebra os lançamentos antigos sem peso já existentes (a maioria é Mudança de
+Pasto, que continua sem exigir; sobravam 1 Nascimento e 1 Compra legados), só passa a valer pra
+inserts/updates novos. Se um desses lançamentos antigos for editado, o peso passa a ser exigido
+nesse momento — não é retroativo.
+
+`peso_total_kg` deixou de ser calculado por tipo (antes só os comerciais/transferência calculavam
+via `fn_calcular_valores_movimentacao`, e Mudança de Categoria tinha um campo "Peso total" digitado
+à mão, sem relação garantida com o peso médio) e passou a ser **sempre** derivado de
+`peso_medio_kg × quantidade` por um trigger novo (`fn_calcular_peso_total_movimentacao`), pra
+qualquer tipo. Esse trigger roda antes de `fn_calcular_valores_movimentacao` (ordem alfabética do
+nome: `trg_calcular_peso_total` < `trg_calcular_valores_movimentacao`), já que este último usa
+`peso_total_kg` como entrada pro cálculo de arroba/valor.
+
+**Toda movimentação salva com peso médio compila automaticamente em `pesagens`** — não só as
+lançadas manualmente na tela de Pesagens. `fn_compilar_pesagem_movimentacao` (trigger `AFTER INSERT
+OR UPDATE` em `movimentacoes_rebanho`) cria ou atualiza um registro em `pesagens` ligado por
+`pesagens.movimentacao_id` (nulo pras pesagens manuais). Fazenda/categoria/pasto usados são sempre
+os de "destino" quando existem, senão os campos únicos (`coalesce(fazenda_destino_id, fazenda_id)`
+e o mesmo padrão pra categoria/pasto) — cobre todos os tipos sem lógica por tipo: Mudança de
+Categoria/Desmame usam a categoria nova, Transferência usa a fazenda/pasto de destino, Mudança de
+Pasto usa o pasto de destino. `on delete cascade` na FK apaga o registro compilado junto quando a
+movimentação é apagada; o `UPDATE` do trigger cobre edição (inclusive remover o peso de uma Mudança
+de Pasto, que apaga o registro compilado). "O último peso sempre atualiza o anterior do lote" não
+precisou de lógica nova — como a busca de peso mais recente (`fn_relatorio_rebanho_por_pasto`) já
+pega sempre o registro de `pesagens` com maior `data`, isso já funciona automaticamente assim que o
+dado entra na tabela, venha de onde vier.
+
+Um registro compilado automaticamente **não pode ser excluído direto na tela de Pesagens**
+(`fn_validar_delete_pesagem` bloqueia com uma mensagem explicando pra editar/excluir a movimentação
+em vez disso) — excluir o registro de peso por fora deixaria a movimentação e Pesagens
+dessincronizados até a próxima edição dela. Essa trigger precisa checar se a movimentação de origem
+**ainda existe** (não só se `movimentacao_id` não é nulo): apagar a movimentação dispara o `on
+delete cascade` da mesma FK, que tenta apagar o registro compilado — nesse ponto a movimentação já
+não existe mais, e a exclusão precisa ser permitida, senão a cascata trava e a movimentação nem
+consegue ser apagada (bug encontrado e corrigido ainda durante o teste desta funcionalidade, antes
+de qualquer uso real — ver migração 029).
+
+`app/saldo-inicial/page.tsx` tinha um bug pré-existente descoberto ao implementar essa regra: nunca
+enviava `pasto_id` no lançamento, e como essa coluna é `not null`, qualquer categoria *nova*
+adicionada ao saldo inicial falhava (com uma mensagem de erro enganosa de "pasto não pertence à
+fazenda", vinda de `fn_validar_pasto_pertence_fazenda` rodando antes da checagem de not-null). A
+tela ganhou o mesmo padrão de seletor de pasto já usado em Controle de Pasto (some sozinho pro
+"Geral" quando o grupo não usa `controla_pasto` ou a fazenda só tem um pasto ativo) — um único pasto
+por lançamento de saldo inicial, aplicado a todas as categorias daquela fazenda.
+
 ## Desconto e acréscimo em movimentações comerciais
 
 Vale só pros 4 tipos com `valor_total` (`COMPRA`, `VENDA_PE`, `VENDA_ABATE`, `CONSUMO_DOACAO`) —
@@ -494,9 +545,9 @@ número só aparecia depois de salvo, dentro do valor calculado.
 Todos os campos que alimentam esse cálculo são obrigatórios em `VENDA_ABATE`: categoria, quantidade,
 peso médio, peso morto **ou** rendimento (um dos dois, com o mesmo `<Required />` condicional já
 usado noutros campos condicionalmente obrigatórios), e depois um dos quatro campos de preço (arroba/
-cabeça/kg/total). O peso médio passou a ser obrigatório em `VENDA_ABATE` pelo mesmo motivo que já era
-em `DESMAME` (`isDesmame || isVendaAbate`) — sem ele não dá pra resolver o peso base da arroba nem
-mostrar o preview.
+cabeça/kg/total). Peso médio já era obrigatório em `VENDA_ABATE` antes de virar obrigatório em toda
+movimentação (ver "Peso médio obrigatório e compilação automática em Pesagens") — sem ele não dá pra
+resolver o peso base da arroba nem mostrar o preview.
 
 **Bruto por categoria, sem duplicar o total do lançamento**: cada linha sempre mostra seu "Valor
 total (bruto) dessa categoria" (via `calcularLinha`), mas a linha separada "Valor bruto total do

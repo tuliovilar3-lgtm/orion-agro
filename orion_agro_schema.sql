@@ -959,9 +959,12 @@ create table movimentacoes_rebanho (
     (tipo not in ('MUDANCA_PASTO', 'TRANSFERENCIA') and pasto_destino_id is null)
   ),
 
-  -- saldo inicial exige peso médio informado junto com a quantidade
-  constraint ck_peso_medio_obrigatorio_saldo_inicial check (
-    tipo <> 'SALDO_INICIAL' or peso_medio_kg is not null
+  -- peso médio obrigatório em toda movimentação, exceto Mudança de
+  -- Pasto (peso opcional lá — se não informado, o lote continua com o
+  -- último peso conhecido). Adicionada NOT VALID na migração 028 pra
+  -- não quebrar lançamentos antigos sem peso já existentes.
+  constraint ck_peso_medio_obrigatorio check (
+    tipo = 'MUDANCA_PASTO' or peso_medio_kg is not null
   ),
 
   -- ---------------------------------------------------------------
@@ -1026,6 +1029,29 @@ create unique index uq_saldo_inicial_por_categoria
 -- Se quem lançar preencher direto o valor_total, ele é respeitado como
 -- fonte da verdade e as 3 formas unitárias são recalculadas a partir dele.
 -- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- fn_calcular_peso_total_movimentacao — peso_total_kg é sempre
+-- derivado de peso_medio_kg × quantidade, pra todo tipo de
+-- movimentação (não só os comerciais). Roda antes de
+-- fn_calcular_valores_movimentacao (ordem alfabética do nome do
+-- trigger: "calcular_peso_total" < "calcular_valores"), já que esse
+-- último usa peso_total_kg como entrada pro cálculo de arroba/valor.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_calcular_peso_total_movimentacao()
+returns trigger as $$
+begin
+  if new.peso_medio_kg is not null and new.quantidade is not null then
+    new.peso_total_kg := round(new.peso_medio_kg * new.quantidade, 2);
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_calcular_peso_total
+before insert or update on movimentacoes_rebanho
+for each row execute function fn_calcular_peso_total_movimentacao();
 
 create or replace function fn_calcular_valores_movimentacao()
 returns trigger as $$
@@ -1618,7 +1644,14 @@ create table pesagens (
   peso_medio_kg   numeric(10,2) not null check (peso_medio_kg > 0),
   observacao      text,
   usuario_id      uuid references usuarios(id),
-  created_at      timestamptz not null default now()
+  -- não nulo só pras pesagens compiladas automaticamente a partir de
+  -- uma movimentação (ver fn_compilar_pesagem_movimentacao, migração
+  -- 028) — pesagens lançadas manualmente na tela de Pesagens ficam
+  -- com isso null. on delete cascade: apagar a movimentação apaga o
+  -- registro de peso ligado a ela.
+  movimentacao_id uuid references movimentacoes_rebanho(id) on delete cascade,
+  created_at      timestamptz not null default now(),
+  constraint uq_pesagens_movimentacao unique (movimentacao_id)
 );
 
 create index idx_pesagens_fazenda_categoria_pasto_data on pesagens(fazenda_id, categoria_id, pasto_id, data);
@@ -1694,6 +1727,79 @@ begin
   end loop;
 end;
 $$;
+
+-- ---------------------------------------------------------------------
+-- fn_compilar_pesagem_movimentacao: toda movimentação salva com
+-- peso_medio_kg cria/atualiza um registro em pesagens, ligado por
+-- movimentacao_id — pesagens vira a fonte única de "peso mais recente"
+-- pra relatórios, venha o dado de onde vier (lançamento manual em
+-- Pesagens ou qualquer movimentação). Fazenda/categoria/pasto usados
+-- são sempre os de "destino" quando existem (coalesce), senão os
+-- campos únicos — cobre todos os tipos sem precisar de lógica por
+-- tipo (mudança de categoria/desmame usam categoria_destino_id,
+-- transferência usa fazenda/pasto_destino_id, mudança de pasto usa
+-- pasto_destino_id). on delete cascade na FK cuida da limpeza quando a
+-- movimentação é apagada; o UPDATE do trigger cobre edição (inclusive
+-- apagar o peso de uma Mudança de Pasto, que remove o registro
+-- compilado).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_compilar_pesagem_movimentacao()
+returns trigger as $$
+declare
+  v_fazenda_id   uuid;
+  v_categoria_id uuid;
+  v_pasto_id     uuid;
+begin
+  v_fazenda_id := coalesce(new.fazenda_destino_id, new.fazenda_id);
+  v_categoria_id := coalesce(new.categoria_destino_id, new.categoria_id);
+  v_pasto_id := coalesce(new.pasto_destino_id, new.pasto_id);
+
+  if new.peso_medio_kg is not null and new.peso_medio_kg > 0 then
+    insert into pesagens (fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
+    values (v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
+            'Peso compilado automaticamente da movimentação')
+    on conflict (movimentacao_id) do update set
+      fazenda_id = excluded.fazenda_id,
+      categoria_id = excluded.categoria_id,
+      pasto_id = excluded.pasto_id,
+      data = excluded.data,
+      peso_medio_kg = excluded.peso_medio_kg;
+  else
+    delete from pesagens where movimentacao_id = new.id;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_compilar_pesagem_movimentacao
+after insert or update on movimentacoes_rebanho
+for each row execute function fn_compilar_pesagem_movimentacao();
+
+-- pesagem compilada automaticamente só pode ser removida editando ou
+-- apagando a movimentação de origem — excluir direto na tela de
+-- Pesagens deixaria a movimentação e o peso dessincronizados até a
+-- próxima edição dela. Precisa checar se a movimentação AINDA EXISTE
+-- (não só se movimentacao_id não é nulo): quando a movimentação de
+-- origem é apagada, o on delete cascade dessa mesma FK dispara essa
+-- trigger de novo pra limpar o registro compilado — nesse caso a
+-- movimentação já não existe mais e a exclusão precisa ser permitida,
+-- senão a cascata trava e a movimentação nem consegue ser apagada.
+create or replace function fn_validar_delete_pesagem()
+returns trigger as $$
+begin
+  if old.movimentacao_id is not null
+     and exists (select 1 from movimentacoes_rebanho where id = old.movimentacao_id) then
+    raise exception 'Esse peso foi registrado automaticamente por uma movimentação — edite ou exclua a movimentação para alterá-lo.';
+  end if;
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_pesagem
+before delete on pesagens
+for each row execute function fn_validar_delete_pesagem();
 
 -- =====================================================================
 -- 2c. AJUSTES FINANCEIROS — desconto/acréscimo lançados em cima do
