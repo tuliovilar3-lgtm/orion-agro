@@ -2203,6 +2203,11 @@ export default function MovimentacoesPage() {
                 value={safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
                 onChange={(e) => setSafraNascimento(e.target.value)}
               />
+              {(safraNascimento || data) && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Safra {formatSafra(parseInt(safraNascimento || String(safraSugeridaParaData(data)), 10))}
+                </p>
+              )}
             </div>
           ) : (
             <div>
@@ -2359,6 +2364,12 @@ export default function MovimentacoesPage() {
                           value={linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
                           onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
                         />
+                        {(linha.safraNascimento || data) && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Safra{' '}
+                            {formatSafra(parseInt(linha.safraNascimento || String(safraSugeridaParaData(data)), 10))}
+                          </p>
+                        )}
                       </div>
                     )
                   }

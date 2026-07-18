@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
-import { safraSugeridaParaData } from '@/lib/periodo'
+import { safraSugeridaParaData, formatSafra } from '@/lib/periodo'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatQuantidade, formatPeso } from '@/lib/format'
@@ -467,12 +467,20 @@ function SaldoInicialContent() {
                     {existeCategoriaBezerro && (
                       <td className="border p-2">
                         {l.categoriaEhBezerro && (
-                          <input
-                            type="number"
-                            className="border rounded px-2 py-1 w-20"
-                            value={l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
-                            onChange={(e) => atualizarLinha(l.categoriaId, 'safraNascimento', e.target.value)}
-                          />
+                          <>
+                            <input
+                              type="number"
+                              className="border rounded px-2 py-1 w-20"
+                              value={l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
+                              onChange={(e) => atualizarLinha(l.categoriaId, 'safraNascimento', e.target.value)}
+                            />
+                            {(l.safraNascimento || data) && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Safra{' '}
+                                {formatSafra(parseInt(l.safraNascimento || String(safraSugeridaParaData(data)), 10))}
+                              </p>
+                            )}
+                          </>
                         )}
                       </td>
                     )}
