@@ -6,7 +6,7 @@ import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatMoeda, formatQuantidade, formatPeso, formatDecimal } from '@/lib/format'
 import { PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
-import { safraSugeridaParaData, formatSafra } from '@/lib/periodo'
+import { safraSugeridaParaData, formatSafra, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
 
 type TipoMovimentacao =
   | 'NASCIMENTO'
@@ -2198,16 +2198,12 @@ export default function MovimentacoesPage() {
                 <Required />
               </label>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
                 className="border rounded px-3 py-2 w-full"
-                value={safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
-                onChange={(e) => setSafraNascimento(e.target.value)}
+                value={formatSafraInput(safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                onChange={(e) => setSafraNascimento(extrairAnoSafraDigitado(e.target.value))}
               />
-              {(safraNascimento || data) && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Safra {formatSafra(parseInt(safraNascimento || String(safraSugeridaParaData(data)), 10))}
-                </p>
-              )}
             </div>
           ) : (
             <div>
@@ -2359,17 +2355,12 @@ export default function MovimentacoesPage() {
                           <Required />
                         </label>
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="numeric"
                           className="border rounded px-2 py-1 w-full text-sm"
-                          value={linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : '')}
-                          onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                          value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                          onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
                         />
-                        {(linha.safraNascimento || data) && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            Safra{' '}
-                            {formatSafra(parseInt(linha.safraNascimento || String(safraSugeridaParaData(data)), 10))}
-                          </p>
-                        )}
                       </div>
                     )
                   }

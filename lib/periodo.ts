@@ -68,3 +68,19 @@ export function safraSugeridaParaData(dataIso: string) {
 export function formatSafra(anoInicio: number) {
   return `${anoInicio}/${anoInicio + 1}`
 }
+
+// extrai só os dígitos do que foi digitado no campo de safra (ignora
+// a "/", o ano seguinte e qualquer outro caractere), limitado a 4 —
+// é o que fica guardado no estado (só o ano de início); o campo em si
+// sempre exibe o valor já formatado via formatSafraInput.
+export function extrairAnoSafraDigitado(valor: string) {
+  return valor.replace(/\D/g, '').slice(0, 4)
+}
+
+// valor exibido no campo de safra: enquanto o ano ainda não tem 4
+// dígitos, mostra só o que foi digitado até agora; assim que completa,
+// já formata como "2025/2026" — o campo nunca aceita digitar direto no
+// ano seguinte, ele é sempre derivado do ano de início.
+export function formatSafraInput(digitos: string) {
+  return digitos.length === 4 ? formatSafra(parseInt(digitos, 10)) : digitos
+}
