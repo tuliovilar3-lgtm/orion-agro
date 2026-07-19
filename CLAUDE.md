@@ -656,3 +656,60 @@ que seria criada por "bezerro só entra por Nascimento/Compra" levada ao pé da 
 novas precisam poder declarar um plantel pré-existente com bezerros). `app/saldo-inicial/page.tsx`
 ganha a mesma coluna de safra que Compra, condicional por linha (`categoriaEhBezerro`), suprimida
 inteiramente da tabela quando nenhuma categoria da fazenda é bezerro (`existeCategoriaBezerro`).
+
+## Relatórios por tipo de movimentação
+
+`app/relatorios/page.tsx` é **uma página só com abas**, uma por tipo de movimentação (Nascimento,
+Desmame, Compra, Venda em Pé, Venda Abate, Mortalidade, Consumo/Doação, Transferência) — não 8 rotas
+separadas — decisão confirmada com o usuário, pra reaproveitar um único bloco de filtros
+(fazenda/categoria/período) trocando só o conteúdo abaixo conforme a aba ativa. Os filtros replicam
+o mesmo padrão já usado em `app/relatorio-movimentacao/page.tsx` (multi-fazenda por checkbox,
+período Mês/Ano Safra/Ano Calendário/Personalizado via `lib/periodo.ts`), mas com o visual
+atualizado pros tokens do design system (`rounded-card`, `bg-surface`, `text-text-*`) em vez do
+estilo legado daquela tela. Filtro de categoria casa `categoria_id` OU `categoria_destino_id` (mesmo
+princípio do filtro de Movimentações), e o de fazenda usa `.in('fazenda_id', ...)` pros 7 tipos que
+têm fazenda única, mas `.or('fazenda_origem_id.in.(...),fazenda_destino_id.in.(...)')` só pra
+Transferência (único tipo sem `fazenda_id` próprio).
+
+**`recharts`** foi adicionado como dependência nova (nenhuma lib de gráfico existia antes) — os
+gráficos existentes no app (barra empilhada de Gestão de Áreas) eram `<div>`s com CSS puro, sem SVG.
+`lib/relatorio-cores.ts` replica o padrão categórico de `lib/area-cores.ts` (paleta fixa +
+`corCategorica(indice)` cíclica) e acrescenta `CORES_BINARIAS` (par brand-500/warning) pra divisões
+de duas categorias (sexo, consumo×doação) — nunca `success` puro nesse contexto, reservado pra
+confirmação em outras telas.
+
+`components/relatorios/tipos.ts` centraliza o tipo de linha (`MovimentacaoRelatorio`, já com os
+relacionamentos de fazenda/categoria/cliente/ajustes) e os helpers reusados pelos 8 componentes:
+`valorLiquido` (bruto − desconto + acréscimo, igual usado em Movimentações), `mediaPonderada`
+(pondera pela quantidade — ou outro peso — nunca média simples das médias por linha, mesma regra já
+documentada em "Peso e valor médio em totais"), `agruparPorChave` (agrupamento genérico usado por
+todo gráfico de evolução mensal/por categoria/por safra) e formatação de data/safra/mês.
+`components/relatorios/KpiCard.tsx` é o card de estatística reusado nas 8 abas.
+
+Os quatro campos de valor comercial (`valor_arroba`/`valor_cabeca`/`valor_kg`/`valor_total`) e os de
+carcaça (`peso_morto_kg`/`rendimento_carcaca_pct`) já vêm **todos preenchidos pelo banco**
+(`fn_calcular_valores_movimentacao`), então os relatórios nunca recalculam esses valores a partir do
+primeiro campo preenchido (isso já aconteceu na tela de lançamento) — só derivam o que não é uma
+coluna própria: arroba total (`peso_total_kg/30` pra tipos de peso vivo — Compra/Venda em Pé/
+Transferência; `peso_morto_kg/15` pra Venda Abate, que sempre tem peso morto/rendimento por ser
+obrigatório; Consumo/Doação tenta peso morto primeiro e cai pro fallback de peso vivo/30 quando não
+informado, mesmo princípio de `resolverBaseArroba` em `app/movimentacoes/page.tsx` mas sem
+recalcular rendimento/peso morto, que o banco já resolveu). Peso morto por animal (exibido em Venda
+Abate) é sempre `peso_morto_kg / quantidade`, já que a coluna é gravada como total do lote (mesma
+convenção de `peso_total_kg`, documentada acima em "Peso morto/rendimento de carcaça obrigatório em
+venda abate").
+
+Cada aba tem seu conjunto próprio de KPIs/gráficos pensado pro que faz sentido de decisão pro tipo
+(ex.: Nascimento mostra % macho/fêmea e nascimentos por safra; Compra/Venda mostram preço médio da
+arroba ponderado e ranking de fornecedor/cliente; Venda Abate mostra rendimento de carcaça médio
+ponderado ao longo do tempo; Mortalidade quebra por causa mortis **e** por grupo faixa etária
+— `categoria.grupo.nome`, pedido explícito do usuário; Transferência mostra fluxo líquido por
+fazenda e uma tabela cruzada origem×destino). Estado vazio (`linhas.length === 0`) segue o padrão de
+card tracejado já estabelecido no design system, nunca só "Nenhum registro".
+
+Desmame mostra a **categoria destino** (a categoria jovem resultante) na coluna "Categoria", não a
+categoria de bezerro de origem — mais informativo pra gestão, já que a origem é sempre um papel de
+bezerro conhecido e o destino é o dado novo do lançamento. Link de navegação "Relatórios por tipo"
+foi adicionado ao grupo "Movimentação" da sidebar (`components/Sidebar.tsx`), com ícone próprio
+(`ICONS.relatorios`, um grid de painéis) pra não ser confundido com o "Relatório" (singular, já
+existente, aponta pro relatório de estoque por período em `relatorio-movimentacao`).

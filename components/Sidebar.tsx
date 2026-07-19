@@ -64,6 +64,14 @@ const ICONS = {
       <path d="M3 20h18" />
     </Icon>
   ),
+  relatorios: (
+    <Icon>
+      <rect x="3" y="3" width="7" height="9" rx="1" />
+      <rect x="14" y="3" width="7" height="5" rx="1" />
+      <rect x="3" y="16" width="7" height="5" rx="1" />
+      <rect x="14" y="12" width="7" height="9" rx="1" />
+    </Icon>
+  ),
   areas: (
     <Icon>
       <path d="M4 4h16v16H4z" />
@@ -138,6 +146,7 @@ const GROUPS: NavGroup[] = [
       { label: 'Saldo inicial', href: '/saldo-inicial', icon: ICONS.saldoInicial },
       { label: 'Pesagens', href: '/pesagens', icon: ICONS.pesagens },
       { label: 'Relatório', href: '/relatorio-movimentacao', icon: ICONS.relatorio },
+      { label: 'Relatórios por tipo', href: '/relatorios', icon: ICONS.relatorios },
     ],
   },
   {
