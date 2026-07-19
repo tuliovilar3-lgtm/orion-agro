@@ -182,7 +182,7 @@ export default function RelatoriosPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Relatórios de movimentação</h1>
+      <h1 className="text-2xl font-extrabold text-text-primary">Relatórios de Movimentações</h1>
       <p className="mt-1 text-sm text-text-secondary">
         KPIs, gráficos e detalhamento por tipo de movimentação — use os filtros abaixo para restringir período,
         fazenda e categoria.

@@ -52,12 +52,6 @@ const ICONS = {
       <path d="M17 16H5m0 0 4-4m-4 4 4 4" />
     </Icon>
   ),
-  saldoInicial: (
-    <Icon>
-      <path d="M6 3v18" />
-      <path d="M6 4h12l-3 4 3 4H6" />
-    </Icon>
-  ),
   relatorio: (
     <Icon>
       <path d="M5 20v-6m6 6V8m6 12v-9" />
@@ -132,7 +126,7 @@ const ICONS = {
 
 const GROUPS: NavGroup[] = [
   {
-    label: 'Gestão',
+    label: 'Gerenciamento',
     items: [
       { label: 'Fazendas', href: '/fazendas', icon: ICONS.fazendas },
       { label: 'Categorias', href: '/categorias', icon: ICONS.categorias },
@@ -140,25 +134,24 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Movimentação',
+    label: 'Rebanho',
     items: [
-      { label: 'Movimentações', href: '/movimentacoes', icon: ICONS.movimentacoes },
-      { label: 'Saldo inicial', href: '/saldo-inicial', icon: ICONS.saldoInicial },
+      { label: 'Lançamento de Movimentações', href: '/movimentacoes', icon: ICONS.movimentacoes },
       { label: 'Pesagens', href: '/pesagens', icon: ICONS.pesagens },
-      { label: 'Relatório', href: '/relatorio-movimentacao', icon: ICONS.relatorio },
-      { label: 'Relatórios por tipo', href: '/relatorios', icon: ICONS.relatorios },
+      { label: 'Resumo de Movimentação de Rebanho', href: '/relatorio-movimentacao', icon: ICONS.relatorio },
+      { label: 'Relatórios de Movimentações', href: '/relatorios', icon: ICONS.relatorios },
     ],
   },
   {
-    label: 'Pastejo',
+    label: 'Controle de Pasto',
     items: [
-      { label: 'Controle de Pasto', href: '/controle-pasto', icon: ICONS.controlePasto },
+      { label: 'Mudança de Pasto', href: '/controle-pasto', icon: ICONS.controlePasto },
       { label: 'Rebanho por pasto', href: '/relatorio-rebanho-por-pasto', icon: ICONS.rebanhoPorPasto },
     ],
   },
   {
-    label: 'Áreas',
-    items: [{ label: 'Gestão de áreas', href: '/gestao-areas', icon: ICONS.areas }],
+    label: 'Gestão de Áreas',
+    items: [{ label: 'Distribuição da Área', href: '/gestao-areas', icon: ICONS.areas }],
   },
 ]
 

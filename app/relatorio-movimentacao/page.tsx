@@ -226,7 +226,7 @@ export default function RelatorioMovimentacaoPage() {
 
   return (
     <div className="p-8 max-w-6xl">
-      <h1 className="text-2xl font-bold mb-6">Relatório de movimentação de rebanho</h1>
+      <h1 className="text-2xl font-bold mb-6">Resumo de Movimentação de Rebanho</h1>
 
       <div className="flex flex-wrap gap-4 mb-6 border p-4 rounded">
         <div>

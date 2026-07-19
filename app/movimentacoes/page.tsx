@@ -1774,7 +1774,7 @@ export default function MovimentacoesPage() {
 
   return (
     <div className="p-8 max-w-2xl">
-      <h1 className="text-2xl font-bold mb-6">Movimentações de rebanho</h1>
+      <h1 className="text-2xl font-bold mb-6">Lançamento de Movimentações de Rebanho</h1>
 
       <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter} className="mb-8 space-y-3 border p-4 rounded">
         <h2 className="font-semibold">{editandoId ? 'Editar movimentação' : 'Nova movimentação'}</h2>
@@ -1924,8 +1924,8 @@ export default function MovimentacoesPage() {
               ? `A fazenda "${fazendasSemSaldoInicial[0].nome}" ainda não teve o saldo inicial preenchido e confirmado.`
               : `As fazendas ${fazendasSemSaldoInicial.map((f) => `"${f.nome}"`).join(' e ')} ainda não tiveram o saldo inicial preenchido e confirmado.`}{' '}
             Isso precisa ser feito antes de lançar qualquer outra movimentação.{' '}
-            <a href="/saldo-inicial" className="underline font-medium">
-              Ir para saldo inicial
+            <a href="/fazendas" className="underline font-medium">
+              Ir para Fazendas
             </a>
           </div>
         )}

@@ -81,6 +81,10 @@ create table configuracoes (
   -- tela — tudo é lançado no módulo/pasto "Geral", que sempre existe
   -- em toda fazenda (ver fn_criar_modulo_pasto_geral).
   controla_pasto  boolean not null default false,
+  -- opt-in (migração 032): equivalente pra área — desligado, todo
+  -- lançamento de área usa o subtipo "Geral" do tipo de uso, sem tela
+  -- de seleção nenhuma.
+  controla_subtipo_area boolean not null default false,
   updated_at      timestamptz not null default now()
 );
 create unique index uq_configuracoes_singleton on configuracoes ((true));
@@ -354,6 +358,25 @@ create table tipos_uso_area (
 -- ver comentário em grupos_categoria_papel sobre RLS padrão em tabela nova
 alter table tipos_uso_area disable row level security;
 
+-- subtipos_uso_area (migração 032): dimensão mais fina dentro de um
+-- tipo de uso — mesmo princípio de pasto dentro de fazenda+categoria.
+-- Mecanismo genérico (qualquer tipo_uso pode ter subtipos), mas só
+-- exposto na UI hoje pra Pecuária e Agricultura. Opt-in por grupo via
+-- configuracoes.controla_subtipo_area — desligado, tudo usa o subtipo
+-- "Geral" que sempre existe pra cada tipo de uso (seed abaixo).
+create table subtipos_uso_area (
+  id           uuid primary key default gen_random_uuid(),
+  tipo_uso_id  uuid not null references tipos_uso_area(id),
+  nome         text not null,
+  ativo        boolean not null default true,
+  -- "Geral" nunca pode ser excluído (ver fn_validar_delete_subtipo_uso_area)
+  sistema      boolean not null default false,
+  ordem        int not null default 0,
+  created_at   timestamptz not null default now(),
+  constraint uq_subtipo_nome_tipo_uso unique (tipo_uso_id, nome)
+);
+alter table subtipos_uso_area disable row level security;
+
 create table movimentacoes_area (
   id                    uuid primary key default gen_random_uuid(),
   fazenda_id            uuid not null references fazendas(id),
@@ -362,15 +385,24 @@ create table movimentacoes_area (
   -- null apenas em SALDO_INICIAL — todo MUDANCA_USO tem uma origem
   tipo_uso_origem_id    uuid references tipos_uso_area(id),
   tipo_uso_destino_id   uuid not null references tipos_uso_area(id),
+  -- subtipo (migração 032) espelha o par origem/destino acima, num
+  -- nível mais fino — destino sempre obrigatório, origem só em
+  -- MUDANCA_USO (mesmo padrão de pasto_id/pasto_destino_id no rebanho)
+  subtipo_uso_origem_id  uuid references subtipos_uso_area(id),
+  subtipo_uso_destino_id uuid not null references subtipos_uso_area(id),
   area_ha               numeric(12,2) not null check (area_ha > 0),
-  -- só relevante quando tipo_uso_destino é "Agricultura" — não impõe
-  -- lista fechada de propriedade (cultura muda com frequência)
+  -- superseded pelo subtipo estruturado (migração 032) — mantido só
+  -- como histórico bruto, não é mais lido/escrito pelo frontend
   cultura               text,
   observacao            text,
   created_at            timestamptz not null default now(),
   constraint ck_area_movimentacao_origem check (
     (tipo = 'SALDO_INICIAL' and tipo_uso_origem_id is null)
     or (tipo = 'MUDANCA_USO' and tipo_uso_origem_id is not null and tipo_uso_origem_id <> tipo_uso_destino_id)
+  ),
+  constraint ck_subtipo_area_origem check (
+    (tipo = 'SALDO_INICIAL' and subtipo_uso_origem_id is null)
+    or (tipo = 'MUDANCA_USO' and subtipo_uso_origem_id is not null)
   )
 );
 
@@ -409,24 +441,101 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
+-- fn_area_por_subtipo_uso (migração 032): mesma ideia de fn_area_por_uso,
+-- refinada pro nível de subtipo. Fazenda que não usa
+-- controla_subtipo_area só tem o subtipo "Geral" de cada tipo de uso,
+-- então o saldo por subtipo coincide com o saldo do tipo de uso
+-- inteiro nesse caso. Vale sempre: fn_area_por_uso(fazenda, tipo_uso,
+-- data) = soma, sobre todos os subtipos daquele tipo de uso, de
+-- fn_area_por_subtipo_uso.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_area_por_subtipo_uso(
+  p_fazenda_id uuid, p_tipo_uso_id uuid, p_subtipo_uso_id uuid, p_data date
+)
+returns numeric
+language plpgsql
+stable
+as $$
+declare
+  v_entradas numeric;
+  v_saidas   numeric;
+begin
+  select coalesce(sum(area_ha), 0) into v_entradas
+  from movimentacoes_area
+  where fazenda_id = p_fazenda_id and tipo_uso_destino_id = p_tipo_uso_id
+    and subtipo_uso_destino_id = p_subtipo_uso_id and data <= p_data;
+
+  select coalesce(sum(area_ha), 0) into v_saidas
+  from movimentacoes_area
+  where fazenda_id = p_fazenda_id and tipo_uso_origem_id = p_tipo_uso_id
+    and subtipo_uso_origem_id = p_subtipo_uso_id and data <= p_data;
+
+  return v_entradas - v_saidas;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
+-- TRIGGER: o subtipo selecionado precisa pertencer ao tipo de uso do
+-- lançamento (mesmo princípio de fn_validar_pasto_pertence_fazenda)
+-- ---------------------------------------------------------------------
+
+create or replace function fn_validar_subtipo_pertence_tipo_uso()
+returns trigger as $$
+declare
+  v_tipo_uso_destino uuid;
+  v_tipo_uso_origem  uuid;
+begin
+  select tipo_uso_id into v_tipo_uso_destino from subtipos_uso_area where id = new.subtipo_uso_destino_id;
+  if v_tipo_uso_destino is distinct from new.tipo_uso_destino_id then
+    raise exception 'O subtipo de destino selecionado não pertence ao tipo de uso de destino.';
+  end if;
+
+  if new.subtipo_uso_origem_id is not null then
+    select tipo_uso_id into v_tipo_uso_origem from subtipos_uso_area where id = new.subtipo_uso_origem_id;
+    if v_tipo_uso_origem is distinct from new.tipo_uso_origem_id then
+      raise exception 'O subtipo de origem selecionado não pertence ao tipo de uso de origem.';
+    end if;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_subtipo_pertence_tipo_uso
+before insert or update on movimentacoes_area
+for each row execute function fn_validar_subtipo_pertence_tipo_uso();
+
+-- ---------------------------------------------------------------------
 -- TRIGGER: MUDANCA_USO não pode tirar mais área de um tipo de uso do
--- que ele tem disponível na data; SALDO_INICIAL não pode fazer a soma
--- de todos os tipos de uso da fazenda ultrapassar a área total dela
--- (fazendas.area_ha — se estiver em branco, não há teto pra checar).
+-- que ele tem disponível na data (checado também no nível de subtipo,
+-- migração 032 — defesa em profundidade, mesmo princípio de
+-- fn_validar_saldo_categoria com pasto); SALDO_INICIAL não pode fazer
+-- a soma de todos os tipos de uso da fazenda ultrapassar a área total
+-- dela (fazendas.area_ha — se estiver em branco, não há teto pra checar).
 -- ---------------------------------------------------------------------
 
 create or replace function fn_validar_saldo_area()
 returns trigger as $$
 declare
-  v_area_disponivel numeric;
-  v_area_total      numeric;
-  v_area_alocada    numeric;
+  v_area_disponivel         numeric;
+  v_area_disponivel_subtipo numeric;
+  v_area_total              numeric;
+  v_area_alocada            numeric;
 begin
   if new.tipo = 'MUDANCA_USO' then
     v_area_disponivel := fn_area_por_uso(new.fazenda_id, new.tipo_uso_origem_id, new.data);
     if v_area_disponivel < new.area_ha then
       raise exception 'Área insuficiente: % ha disponível(is) nesse tipo de uso na data %, mas % foi(ram) solicitado(s).',
         v_area_disponivel, new.data, new.area_ha;
+    end if;
+
+    v_area_disponivel_subtipo := fn_area_por_subtipo_uso(
+      new.fazenda_id, new.tipo_uso_origem_id, new.subtipo_uso_origem_id, new.data
+    );
+    if v_area_disponivel_subtipo < new.area_ha then
+      raise exception 'Área insuficiente nesse subtipo de uso: % ha disponível(is) na data %, mas % foi(ram) solicitado(s).',
+        v_area_disponivel_subtipo, new.data, new.area_ha;
     end if;
   elsif new.tipo = 'SALDO_INICIAL' then
     select area_ha into v_area_total from fazendas where id = new.fazenda_id;
@@ -558,6 +667,100 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------
+-- Trajetória de edição/exclusão ciente do subtipo (migração 032) —
+-- mesmo princípio de fn_delta_area_para_tipo/fn_checar_edicao_area, só
+-- que pra dimensão do subtipo. Mantida como função própria e paralela
+-- (não mexe no retorno de fn_checar_edicao_area nem nos call sites já
+-- existentes em Gestão de Áreas) — o bloqueio abaixo é a fonte de
+-- verdade; ainda não tem o aviso amigável com data/quantidade que a
+-- versão por tipo de uso tem (mesmo princípio já aceito pra trajetória
+-- de lote de nascimento: vira exceção direta do banco em vez do aviso
+-- amigável, até que valha a pena estender a versão detalhada).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_delta_area_para_subtipo(
+  p_tipo tipo_movimentacao_area,
+  p_subtipo_uso_origem_id uuid,
+  p_subtipo_uso_destino_id uuid,
+  p_area_ha numeric,
+  p_par_subtipo_id uuid
+) returns numeric
+language plpgsql
+immutable
+as $$
+declare
+  v_total numeric := 0;
+begin
+  if p_subtipo_uso_destino_id = p_par_subtipo_id then
+    v_total := v_total + p_area_ha;
+  end if;
+  if p_tipo = 'MUDANCA_USO' and p_subtipo_uso_origem_id = p_par_subtipo_id then
+    v_total := v_total - p_area_ha;
+  end if;
+  return v_total;
+end;
+$$;
+
+create or replace function fn_subtipo_area_ficaria_negativo(
+  p_id uuid,
+  p_fazenda_id uuid,
+  p_tipo tipo_movimentacao_area,
+  p_subtipo_uso_origem_id uuid,
+  p_subtipo_uso_destino_id uuid,
+  p_data date,
+  p_area_ha numeric
+) returns boolean
+language plpgsql
+as $$
+declare
+  v_old         movimentacoes_area%rowtype;
+  v_subtipo_id  uuid;
+  v_data        date;
+  v_saldo       numeric;
+  v_tipo_uso_id uuid;
+begin
+  select * into v_old from movimentacoes_area where id = p_id;
+
+  for v_subtipo_id in (
+    select distinct t from (
+      values (v_old.subtipo_uso_origem_id), (v_old.subtipo_uso_destino_id),
+             (p_subtipo_uso_origem_id), (p_subtipo_uso_destino_id)
+    ) as x(t)
+    where t is not null
+  )
+  loop
+    select tipo_uso_id into v_tipo_uso_id from subtipos_uso_area where id = v_subtipo_id;
+
+    for v_data in (
+      select distinct m.data from movimentacoes_area m
+      where m.id <> p_id and m.fazenda_id = p_fazenda_id and m.data >= p_data
+        and (m.subtipo_uso_origem_id = v_subtipo_id or m.subtipo_uso_destino_id = v_subtipo_id)
+      union
+      select p_data
+      order by 1
+    )
+    loop
+      v_saldo := fn_area_por_subtipo_uso(p_fazenda_id, v_tipo_uso_id, v_subtipo_id, v_data)
+        - case when v_old.data <= v_data
+            then fn_delta_area_para_subtipo(v_old.tipo, v_old.subtipo_uso_origem_id, v_old.subtipo_uso_destino_id,
+                                             v_old.area_ha, v_subtipo_id)
+            else 0 end
+        + case when p_data <= v_data
+            then fn_delta_area_para_subtipo(p_tipo, p_subtipo_uso_origem_id, p_subtipo_uso_destino_id,
+                                             p_area_ha, v_subtipo_id)
+            else 0 end;
+
+      if v_saldo < 0 then
+        return true;
+      end if;
+    end loop;
+  end loop;
+
+  return false;
+end;
+$$;
+
 create or replace function fn_validar_edicao_area()
 returns trigger as $$
 declare
@@ -570,6 +773,12 @@ begin
   if v_check.saldo_ficaria_negativo then
     raise exception 'Não é possível editar: a área de % ficaria negativa (%) em %.',
       v_check.tipo_uso_saldo_negativo, v_check.saldo_minimo, v_check.data_saldo_negativo;
+  end if;
+
+  if fn_subtipo_area_ficaria_negativo(
+    old.id, new.fazenda_id, new.tipo, new.subtipo_uso_origem_id, new.subtipo_uso_destino_id, new.data, new.area_ha
+  ) then
+    raise exception 'Não é possível editar: essa alteração deixaria negativa a área de algum subtipo de uso envolvido.';
   end if;
 
   return new;
@@ -594,6 +803,12 @@ begin
       v_check.tipo_uso_saldo_negativo, v_check.saldo_minimo, v_check.data_saldo_negativo;
   end if;
 
+  if fn_subtipo_area_ficaria_negativo(
+    old.id, old.fazenda_id, old.tipo, old.subtipo_uso_origem_id, old.subtipo_uso_destino_id, old.data, 0
+  ) then
+    raise exception 'Não é possível excluir: a exclusão deixaria negativa a área de algum subtipo de uso envolvido.';
+  end if;
+
   return old;
 end;
 $$ language plpgsql;
@@ -601,6 +816,36 @@ $$ language plpgsql;
 create trigger trg_validar_delete_area
 before delete on movimentacoes_area
 for each row execute function fn_validar_delete_area();
+
+-- ---------------------------------------------------------------------
+-- Exclusão de subtipo (migração 032) — mesmo princípio de
+-- fn_validar_delete_pasto: "Geral" nunca pode ser excluído (só
+-- inativado), e um subtipo criado pelo usuário só pode ser excluído se
+-- não tiver nenhuma movimentação de área lançada (nem como origem, nem
+-- como destino).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_validar_delete_subtipo_uso_area()
+returns trigger as $$
+begin
+  if old.sistema then
+    raise exception 'O subtipo "Geral" não pode ser excluído — inative-o em vez disso.';
+  end if;
+
+  if exists (
+    select 1 from movimentacoes_area
+    where subtipo_uso_origem_id = old.id or subtipo_uso_destino_id = old.id
+  ) then
+    raise exception 'Não é possível excluir: esse subtipo já tem movimentações lançadas. Inative-o em vez disso.';
+  end if;
+
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_subtipo_uso_area
+before delete on subtipos_uso_area
+for each row execute function fn_validar_delete_subtipo_uso_area();
 
 -- ---------------------------------------------------------------------
 -- RELATÓRIO DE DISTRIBUIÇÃO DE ÁREA — uma linha por (mês, tipo de uso)
@@ -2403,6 +2648,29 @@ insert into tipos_uso_area (nome, ordem) values
   ('Área Alagada', 5),
   ('Infraestrutura', 6),
   ('Outros', 7);
+
+-- subtipos_uso_area (migração 032): "Geral" pra todos os tipos de uso
+-- (garante que todo lançamento sempre tem subtipo pra apontar, mesmo
+-- com controla_subtipo_area desligado) + sugestões iniciais pra
+-- Pecuária e Agricultura (usuário pode cadastrar outras livremente).
+insert into subtipos_uso_area (tipo_uso_id, nome, sistema, ordem)
+select id, 'Geral', true, 0 from tipos_uso_area;
+
+insert into subtipos_uso_area (tipo_uso_id, nome, ordem)
+select t.id, s.nome, s.ordem
+from tipos_uso_area t
+cross join (values
+  ('Corte', 1), ('Leite', 2), ('Ovinocultura', 3), ('Haras', 4)
+) as s(nome, ordem)
+where t.nome = 'Pecuária';
+
+insert into subtipos_uso_area (tipo_uso_id, nome, ordem)
+select t.id, s.nome, s.ordem
+from tipos_uso_area t
+cross join (values
+  ('Soja', 1), ('Milho', 2), ('Cana-de-açúcar', 3), ('Café', 4)
+) as s(nome, ordem)
+where t.nome = 'Agricultura';
 
 -- =====================================================================
 -- FIM DO SCRIPT

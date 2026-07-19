@@ -713,3 +713,114 @@ bezerro conhecido e o destino é o dado novo do lançamento. Link de navegação
 foi adicionado ao grupo "Movimentação" da sidebar (`components/Sidebar.tsx`), com ícone próprio
 (`ICONS.relatorios`, um grid de painéis) pra não ser confundido com o "Relatório" (singular, já
 existente, aponta pro relatório de estoque por período em `relatorio-movimentacao`).
+
+## Reorganização de Fazendas (fazenda selecionável, saldo inicial embutido) e renomeações de navegação
+
+**Fazenda ganha edição inline** (nome/localização/área) em `app/fazendas/page.tsx` — cada card tem
+um botão "Editar" que troca a exibição estática por um formulário inline (`editandoFazendaId`),
+sem navegar pra outra tela. Antes só existia formulário de criação.
+
+**Fazenda passa a ser selecionável, um só painel de detalhe por vez** — em vez dos antigos botões
+avulsos "Área inicial"/"Módulos e pastos" (cada um com seu próprio estado de expansão
+independente, permitindo ver dados de duas fazendas diferentes ao mesmo tempo — fonte de confusão
+identificada pelo usuário), clicar num card agora seleciona a fazenda (`fazendaSelecionadaId`,
+destaque `border-brand-500 bg-brand-100`) e abre **um único painel abaixo da lista, com abas** —
+Saldo Inicial | Área Inicial | Módulos e Pastos (essa última só se `controla_pasto` estiver ligado)
+— mesmo padrão de abas já usado em `app/relatorios/page.tsx`. Nunca é possível ver dados de duas
+fazendas ao mesmo tempo. Clicar no botão "Editar" de um card usa `e.stopPropagation()` pra não
+disparar a seleção da fazenda.
+
+**Saldo inicial sai da rota própria `/saldo-inicial` e vira a aba "Saldo Inicial"** — toda a lógica
+que antes vivia em `app/saldo-inicial/page.tsx` (uma página inteira, selecionada por query
+string `?fazenda=`) foi portada pra `components/fazendas/SaldoInicialPanel.tsx`, um componente que
+recebe `fazendaId` como prop em vez de ler da URL, e usa os tokens do design system em vez do
+estilo legado da página antiga. A rota `/saldo-inicial` foi removida, junto do link na sidebar; os
+poucos lugares que apontavam pra ela (avisos de "saldo inicial não confirmado" em
+`app/movimentacoes/page.tsx` e `app/controle-pasto/page.tsx`) agora apontam pra `/fazendas`. Ao
+cadastrar uma fazenda nova, ela já é automaticamente selecionada com a aba "Área Inicial" aberta
+(antes era um link separado "Continuar para o saldo inicial do rebanho") — o fluxo de setup vira
+tudo dentro do mesmo painel, sem navegar de página.
+
+**Área inicial ganha checagem real de trajetória antes de editar** — antes, editar uma área inicial
+já confirmada não mostrava nenhum aviso, e o erro do banco (se a trigger bloqueasse por causa de uma
+mudança de uso posterior dependente) era descartado silenciosamente (`await
+supabase...update(...)` sem checar `{ error }` — bug real, não só uma lacuna de UX). Agora
+`handleSalvarAreaInicialClick` roda `fn_checar_edicao_area` (mesma função RPC que
+`app/gestao-areas/page.tsx` já usa pra editar `MUDANCA_USO`) pra cada linha com `existingId`, e:
+bloqueia com alerta se a edição faria o saldo de algum tipo de uso ficar negativo; mostra um aviso
+de confirmação (`avisoEdicaoAreaFutura`) se existem mudanças de uso posteriores desses tipos de uso;
+senão salva direto. Optou-se por reaproveitar esse mecanismo (mais preciso, já testado) em vez de
+copiar o aviso estático mais simples do saldo inicial (baseado só numa flag booleana de
+"confirmado", sem checar de fato se há risco real).
+
+## Subtipos de uso de área (Pecuária: Corte/Leite/Ovinocultura/Haras; Agricultura: Soja/Milho/Cana/Café)
+
+Migração 032. Mesmo princípio já usado no controle de rebanho por pasto: **tipo de uso** (Pecuária,
+Agricultura, Reserva...) continua sendo o nível amplo e fixo já existente; **subtipo de uso**
+(Corte, Leite, Soja, Milho...) é uma dimensão mais fina *dentro* de um tipo de uso — igual pasto é
+mais fino dentro de fazenda+categoria. `subtipos_uso_area` (tipo_uso_id, nome, ativo, sistema,
+ordem) é um catálogo **genérico** (mecanismo vale pra qualquer tipo de uso, igual
+`tipo_utilizacao_modulo` reserva `AGRICULTURA` sem usar ainda pros módulos/pastos), mas só exposto
+na UI hoje pra Pecuária e Agricultura — os outros 5 tipos de uso nunca mostram seletor de subtipo,
+sempre usam o "Geral" por baixo dos panos. Cada tipo de uso ganha um subtipo **"Geral"**
+(`sistema = true`, nunca pode ser excluído — mesma proteção de `pastos.sistema`) automaticamente
+seedado; Pecuária e Agricultura ganham sugestões iniciais editáveis (Corte/Leite/Ovinocultura/Haras
+e Soja/Milho/Cana-de-açúcar/Café) que o usuário pode complementar livremente.
+
+**Opt-in por grupo via `configuracoes.controla_subtipo_area`** (mesmo padrão de `controla_pasto`) —
+desligado, todo lançamento de área usa o subtipo "Geral" do tipo de uso automaticamente, sem
+nenhuma tela de seleção. Confirmado explicitamente pelo usuário: subtipo é opcional mesmo depois de
+ligado — "ficar em Geral" é um estado válido permanente, não só uma ponte até o usuário detalhar.
+Por isso a **área inicial (declarada em Fazendas) nunca pede subtipo** — sempre grava no "Geral" do
+tipo de uso, mesmo com o recurso ligado; refinar por subtipo (ex.: separar 10ha de Corte de 5ha de
+Leite dentro de Pecuária) é feito depois via `MUDANCA_USO` em Gestão de Áreas, igual qualquer outra
+realocação de área.
+
+`movimentacoes_area` ganha `subtipo_uso_origem_id`/`subtipo_uso_destino_id`, espelhando o par
+`tipo_uso_origem_id`/`tipo_uso_destino_id` já existente (origem só em `MUDANCA_USO`, destino sempre
+obrigatório). `fn_area_por_subtipo_uso(fazenda, tipo_uso, subtipo_uso, data)` espelha
+`fn_area_por_uso`, com a mesma relação de sempre: `fn_area_por_uso` = soma, sobre todos os subtipos
+daquele tipo de uso, de `fn_area_por_subtipo_uso`. Saldo insuficiente é checado nos dois níveis
+(defesa em profundidade, mesmo princípio de `fn_saldo_categoria` + pasto) — `fn_validar_saldo_area`
+bloqueia tanto por tipo de uso quanto por subtipo. A trajetória de edição/exclusão tem sua própria
+versão paralela e independente da de tipo de uso — `fn_delta_area_para_subtipo`/
+`fn_subtipo_area_ficaria_negativo`, wireada em `fn_validar_edicao_area`/`fn_validar_delete_area` —
+mesmo princípio já usado pra trajetória de lote de nascimento: é a fonte de bloqueio real (defesa em
+profundidade no banco), mas ainda não tem o aviso amigável com data/quantidade que a versão por
+tipo de uso tem; um conflito nessa dimensão hoje vira uma exceção crua do banco em vez de um aviso
+bonito — extensão natural pra quando fizer sentido.
+
+**Superseeds o campo `cultura`** (texto livre, só usado antes quando tipo de uso destino era
+Agricultura, obrigatório nesse caso) — a migração faz backfill dos valores já digitados: cada texto
+único de `cultura` vira (ou casa com) um subtipo real dentro de Agricultura, preservando o dado
+histórico como catálogo estruturado. `cultura` continua na tabela só como histórico bruto — não é
+mais lido nem escrito pelo frontend a partir de agora.
+
+Em `app/gestao-areas/page.tsx`, o formulário de "Lançar mudança de uso" ganha dois seletores de
+subtipo (origem e destino), cada um só aparece quando `controla_subtipo_area` está ligado **e** o
+tipo de uso daquele lado é Pecuária ou Agricultura **e** há 2+ subtipos ativos pra escolher (mesmo
+critério tríplice já usado pro seletor de pasto em Movimentações) — do contrário o subtipo "Geral"
+é preenchido sozinho, sem UI. Cada seletor tem uma opção "+ Novo subtipo..." que revela um campo de
+nome (mesmo padrão inline já usado pro catálogo de `itens_ajuste_financeiro` em desconto/acréscimo,
+sem modal separado) — o subtipo novo é criado no submit do formulário (`resolverSubtipoId`), antes
+de montar o payload do lançamento. A lista "Últimas mudanças de uso" mostra o subtipo entre
+parênteses junto ao tipo de uso (`labelTipoUso`, ex.: "Pecuária (Corte) → Agricultura (Soja)"),
+omitindo o sufixo quando o subtipo é "Geral" pra não poluir a maioria dos lançamentos que não usam
+esse detalhamento.
+
+## Renomeações de navegação
+
+Ajuste puramente de rótulo/organização, sem mudança de rota nem de comportamento (exceto onde
+indicado). Grupos da sidebar: "Gestão" → "Gerenciamento"; "Movimentação" → "Rebanho"; "Pastejo" →
+"Controle de Pasto"; "Áreas" → "Gestão de Áreas". Itens: "Movimentações" → "Lançamento de
+Movimentações"; "Relatório" (singular, `/relatorio-movimentacao`) → "Resumo de Movimentação de
+Rebanho"; "Relatórios por tipo" (`/relatorios`) → "Relatórios de Movimentações"; "Saldo inicial"
+removido (absorvido pela fazenda, ver acima); "Controle de Pasto" (`/controle-pasto`) → "Mudança de
+Pasto"; "Gestão de áreas" (`/gestao-areas`) → "Distribuição da Área". O `<h1>` de cada página
+renomeada foi atualizado junto pro mesmo texto do novo rótulo do item (convenção já seguida antes),
+com uma exceção deliberada: `app/gestao-areas/page.tsx` mantém o `<h1>` "Gestão de Áreas" mesmo com
+o item de menu renomeado pra "Distribuição da Área", porque essa página também é onde se lança
+`MUDANCA_USO` — chamar o `<h1>` de "Distribuição da Área" (só metade do conteúdo da página, a outra
+metade é o formulário de lançamento) seria menos preciso que manter o nome mais abrangente ali;
+"Distribuição da Área" descreve bem o que se acha *pelo menu*, mas não precisa ser também o título
+da página em si.

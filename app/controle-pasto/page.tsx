@@ -399,7 +399,7 @@ export default function ControlePastoPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Controle de Pasto</h1>
+      <h1 className="text-2xl font-extrabold text-text-primary">Mudança de Pasto</h1>
       <p className="mt-1 text-sm text-text-secondary">
         Lançamento de mudança de pasto do rebanho.{' '}
         <Link href="/relatorio-rebanho-por-pasto" className="font-medium text-brand-500 underline">
@@ -457,8 +457,8 @@ export default function ControlePastoPage() {
           <div className="rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
             {'A fazenda "' + fazendaSelecionada!.nome + '" ainda não teve o saldo inicial preenchido e confirmado.'}{' '}
             Isso precisa ser feito antes de lançar qualquer outra movimentação.{' '}
-            <a href="/saldo-inicial" className="font-medium underline">
-              Ir para saldo inicial
+            <a href="/fazendas" className="font-medium underline">
+              Ir para Fazendas
             </a>
           </div>
         )}

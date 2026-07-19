@@ -18,17 +18,30 @@ import {
 
 type Fazenda = { id: string; nome: string; area_ha: number | null }
 type TipoUsoArea = { id: string; nome: string }
+type SubtipoUsoArea = { id: string; tipo_uso_id: string; nome: string; ativo: boolean }
 
 type MovimentacaoArea = {
   id: string
   data: string
   tipo_uso_origem_id: string | null
   tipo_uso_destino_id: string
+  subtipo_uso_origem_id: string | null
+  subtipo_uso_destino_id: string
   area_ha: number
-  cultura: string | null
   observacao: string | null
   tipo_uso_origem: { nome: string } | null
   tipo_uso_destino: { nome: string } | null
+  subtipo_uso_origem: { nome: string } | null
+  subtipo_uso_destino: { nome: string } | null
+}
+
+const NOVO_SUBTIPO = '__novo__'
+const TIPOS_COM_SUBTIPO = ['Pecuária', 'Agricultura']
+
+function labelTipoUso(tipoNome: string | undefined, subtipoNome: string | undefined) {
+  if (!tipoNome) return '—'
+  if (!subtipoNome || subtipoNome === 'Geral') return tipoNome
+  return `${tipoNome} (${subtipoNome})`
 }
 
 type ChecagemEdicaoArea = {
@@ -79,6 +92,8 @@ export default function GestaoAreasPage() {
   const [fazendaId, setFazendaId] = useState('')
   const [fazendaSelecionada, setFazendaSelecionada] = useState<Fazenda | null>(null)
   const [tiposUso, setTiposUso] = useState<TipoUsoArea[]>([])
+  const [subtiposUso, setSubtiposUso] = useState<SubtipoUsoArea[]>([])
+  const [controlaSubtipoArea, setControlaSubtipoArea] = useState(false)
   const [loading, setLoading] = useState(false)
 
   // distribuição de área
@@ -98,7 +113,10 @@ export default function GestaoAreasPage() {
   const [tipoUsoOrigemId, setTipoUsoOrigemId] = useState('')
   const [tipoUsoDestinoId, setTipoUsoDestinoId] = useState('')
   const [areaHa, setAreaHa] = useState('')
-  const [cultura, setCultura] = useState('')
+  const [subtipoUsoOrigemId, setSubtipoUsoOrigemId] = useState('')
+  const [subtipoUsoDestinoId, setSubtipoUsoDestinoId] = useState('')
+  const [novoSubtipoOrigemNome, setNovoSubtipoOrigemNome] = useState('')
+  const [novoSubtipoDestinoNome, setNovoSubtipoDestinoNome] = useState('')
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
 
@@ -115,8 +133,23 @@ export default function GestaoAreasPage() {
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
 
+  const tipoOrigemSelecionado = tiposUso.find((t) => t.id === tipoUsoOrigemId)
   const tipoDestinoSelecionado = tiposUso.find((t) => t.id === tipoUsoDestinoId)
-  const precisaCultura = tipoDestinoSelecionado?.nome === 'Agricultura'
+
+  function subtiposDoTipo(tipoUsoId: string) {
+    return subtiposUso.filter((s) => s.tipo_uso_id === tipoUsoId && s.ativo)
+  }
+
+  const mostrarSubtipoOrigem =
+    controlaSubtipoArea &&
+    !!tipoOrigemSelecionado &&
+    TIPOS_COM_SUBTIPO.includes(tipoOrigemSelecionado.nome) &&
+    subtiposDoTipo(tipoUsoOrigemId).length > 1
+  const mostrarSubtipoDestino =
+    controlaSubtipoArea &&
+    !!tipoDestinoSelecionado &&
+    TIPOS_COM_SUBTIPO.includes(tipoDestinoSelecionado.nome) &&
+    subtiposDoTipo(tipoUsoDestinoId).length > 1
 
   const safra = periodoSafra(safraAnoInicio)
   const anoCalendario = periodoAno(anoCalendarioSelecionado)
@@ -153,6 +186,16 @@ export default function GestaoAreasPage() {
       .select('id, nome')
       .order('ordem')
       .then(({ data }) => setTiposUso(data || []))
+    supabase
+      .from('subtipos_uso_area')
+      .select('id, tipo_uso_id, nome, ativo')
+      .order('ordem')
+      .then(({ data }) => setSubtiposUso(data || []))
+    supabase
+      .from('configuracoes')
+      .select('controla_subtipo_area')
+      .single()
+      .then(({ data }) => setControlaSubtipoArea(data?.controla_subtipo_area ?? false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -163,7 +206,7 @@ export default function GestaoAreasPage() {
       supabase
         .from('movimentacoes_area')
         .select(
-          'id, data, tipo_uso_origem_id, tipo_uso_destino_id, area_ha, cultura, observacao, tipo_uso_origem:tipos_uso_area!tipo_uso_origem_id(nome), tipo_uso_destino:tipos_uso_area!tipo_uso_destino_id(nome)'
+          'id, data, tipo_uso_origem_id, tipo_uso_destino_id, subtipo_uso_origem_id, subtipo_uso_destino_id, area_ha, observacao, tipo_uso_origem:tipos_uso_area!tipo_uso_origem_id(nome), tipo_uso_destino:tipos_uso_area!tipo_uso_destino_id(nome), subtipo_uso_origem:subtipos_uso_area!subtipo_uso_origem_id(nome), subtipo_uso_destino:subtipos_uso_area!subtipo_uso_destino_id(nome)'
         )
         .eq('fazenda_id', fId)
         .eq('tipo', 'MUDANCA_USO')
@@ -239,28 +282,90 @@ export default function GestaoAreasPage() {
     }
     let cancelado = false
     setCarregandoAreaDisponivel(true)
-    supabase
-      .rpc('fn_area_por_uso', { p_fazenda_id: fazendaId, p_tipo_uso_id: tipoUsoOrigemId, p_data: data })
-      .then(({ data: saldo, error }) => {
-        if (cancelado) return
-        setAreaDisponivelOrigem(error ? null : saldo)
-        setCarregandoAreaDisponivel(false)
-      })
+    const usarSubtipo = subtipoUsoOrigemId && subtipoUsoOrigemId !== NOVO_SUBTIPO
+    const chamada = usarSubtipo
+      ? supabase.rpc('fn_area_por_subtipo_uso', {
+          p_fazenda_id: fazendaId,
+          p_tipo_uso_id: tipoUsoOrigemId,
+          p_subtipo_uso_id: subtipoUsoOrigemId,
+          p_data: data,
+        })
+      : supabase.rpc('fn_area_por_uso', { p_fazenda_id: fazendaId, p_tipo_uso_id: tipoUsoOrigemId, p_data: data })
+    chamada.then(({ data: saldo, error }) => {
+      if (cancelado) return
+      setAreaDisponivelOrigem(error ? null : saldo)
+      setCarregandoAreaDisponivel(false)
+    })
     return () => {
       cancelado = true
     }
-  }, [fazendaId, tipoUsoOrigemId, data])
+  }, [fazendaId, tipoUsoOrigemId, data, subtipoUsoOrigemId])
+
+  // subtipo: some pro "Geral" sozinho quando o seletor está escondido
+  // (controla_subtipo_area desligado, tipo de uso fora de Pecuária/
+  // Agricultura, ou só um subtipo ativo) — mesmo princípio já usado
+  // pro pasto em Movimentações e Controle de Pasto
+  useEffect(() => {
+    if (!tipoUsoOrigemId) {
+      setSubtipoUsoOrigemId('')
+      return
+    }
+    if (!mostrarSubtipoOrigem) {
+      const geral = subtiposDoTipo(tipoUsoOrigemId).find((s) => s.nome === 'Geral') || subtiposDoTipo(tipoUsoOrigemId)[0]
+      setSubtipoUsoOrigemId(geral ? geral.id : '')
+    } else if (!subtiposDoTipo(tipoUsoOrigemId).some((s) => s.id === subtipoUsoOrigemId)) {
+      setSubtipoUsoOrigemId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipoUsoOrigemId, mostrarSubtipoOrigem, subtiposUso])
 
   useEffect(() => {
-    if (!precisaCultura) setCultura('')
-  }, [precisaCultura])
+    if (!tipoUsoDestinoId) {
+      setSubtipoUsoDestinoId('')
+      return
+    }
+    if (!mostrarSubtipoDestino) {
+      const geral = subtiposDoTipo(tipoUsoDestinoId).find((s) => s.nome === 'Geral') || subtiposDoTipo(tipoUsoDestinoId)[0]
+      setSubtipoUsoDestinoId(geral ? geral.id : '')
+    } else if (!subtiposDoTipo(tipoUsoDestinoId).some((s) => s.id === subtipoUsoDestinoId)) {
+      setSubtipoUsoDestinoId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipoUsoDestinoId, mostrarSubtipoDestino, subtiposUso])
+
+  async function resolverSubtipoId(
+    tipoUsoId: string,
+    subtipoId: string,
+    novoNome: string,
+    mostrando: boolean
+  ): Promise<string | null> {
+    if (!mostrando) return subtipoId || null
+    if (subtipoId === NOVO_SUBTIPO) {
+      if (!novoNome.trim()) return null
+      const { data: novoSubtipo, error } = await supabase
+        .from('subtipos_uso_area')
+        .insert({ tipo_uso_id: tipoUsoId, nome: novoNome.trim() })
+        .select('id, tipo_uso_id, nome, ativo')
+        .single()
+      if (error) {
+        alert('Erro ao cadastrar subtipo: ' + error.message)
+        return null
+      }
+      setSubtiposUso((prev) => [...prev, novoSubtipo])
+      return novoSubtipo.id
+    }
+    return subtipoId || null
+  }
 
   function limparFormulario() {
     setData('')
     setTipoUsoOrigemId('')
     setTipoUsoDestinoId('')
     setAreaHa('')
-    setCultura('')
+    setSubtipoUsoOrigemId('')
+    setSubtipoUsoDestinoId('')
+    setNovoSubtipoOrigemNome('')
+    setNovoSubtipoDestinoNome('')
     setObservacao('')
   }
 
@@ -270,7 +375,8 @@ export default function GestaoAreasPage() {
     setTipoUsoOrigemId(m.tipo_uso_origem_id || '')
     setTipoUsoDestinoId(m.tipo_uso_destino_id)
     setAreaHa(String(m.area_ha))
-    setCultura(m.cultura || '')
+    setSubtipoUsoOrigemId(m.subtipo_uso_origem_id || '')
+    setSubtipoUsoDestinoId(m.subtipo_uso_destino_id)
     setObservacao(m.observacao || '')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -303,8 +409,12 @@ export default function GestaoAreasPage() {
       alert('Selecione tipos de uso de origem e destino diferentes.')
       return
     }
-    if (precisaCultura && !cultura.trim()) {
-      alert('Informe a cultura.')
+    if (mostrarSubtipoOrigem && subtipoUsoOrigemId === NOVO_SUBTIPO && !novoSubtipoOrigemNome.trim()) {
+      alert('Informe o nome do novo subtipo de origem.')
+      return
+    }
+    if (mostrarSubtipoDestino && subtipoUsoDestinoId === NOVO_SUBTIPO && !novoSubtipoDestinoNome.trim()) {
+      alert('Informe o nome do novo subtipo de destino.')
       return
     }
 
@@ -314,14 +424,20 @@ export default function GestaoAreasPage() {
       return
     }
 
+    const subtipoOrigemFinal = await resolverSubtipoId(tipoUsoOrigemId, subtipoUsoOrigemId, novoSubtipoOrigemNome, mostrarSubtipoOrigem)
+    if (mostrarSubtipoOrigem && !subtipoOrigemFinal) return
+    const subtipoDestinoFinal = await resolverSubtipoId(tipoUsoDestinoId, subtipoUsoDestinoId, novoSubtipoDestinoNome, mostrarSubtipoDestino)
+    if (mostrarSubtipoDestino && !subtipoDestinoFinal) return
+
     const payload: Record<string, unknown> = {
       fazenda_id: fazendaId,
       tipo: 'MUDANCA_USO',
       data,
       tipo_uso_origem_id: tipoUsoOrigemId,
       tipo_uso_destino_id: tipoUsoDestinoId,
+      subtipo_uso_origem_id: subtipoOrigemFinal,
+      subtipo_uso_destino_id: subtipoDestinoFinal,
       area_ha: areaNum,
-      cultura: precisaCultura ? cultura.trim() : null,
       observacao: observacao.trim() || null,
     }
 
@@ -427,7 +543,7 @@ export default function GestaoAreasPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Gestão de áreas</h1>
+      <h1 className="text-2xl font-extrabold text-text-primary">Gestão de Áreas</h1>
       <p className="mt-1 text-sm text-text-secondary">
         Distribuição de área e mudanças de uso do solo por fazenda. A área inicial de cada fazenda é declarada em
         "Fazendas".
@@ -751,19 +867,64 @@ export default function GestaoAreasPage() {
                     ))}
                   </select>
                 </div>
-                {precisaCultura && (
+                {mostrarSubtipoOrigem && (
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                      Cultura
+                      Subtipo de origem
                       <Required />
                     </label>
-                    <input
+                    <select
                       className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                      value={cultura}
-                      onChange={(e) => setCultura(e.target.value)}
-                      placeholder="Ex.: Soja, Milho"
+                      value={subtipoUsoOrigemId}
+                      onChange={(e) => setSubtipoUsoOrigemId(e.target.value)}
                       required
-                    />
+                    >
+                      <option value="">Selecione...</option>
+                      {subtiposDoTipo(tipoUsoOrigemId).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nome}
+                        </option>
+                      ))}
+                      <option value={NOVO_SUBTIPO}>+ Novo subtipo...</option>
+                    </select>
+                    {subtipoUsoOrigemId === NOVO_SUBTIPO && (
+                      <input
+                        className="mt-1.5 w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                        value={novoSubtipoOrigemNome}
+                        onChange={(e) => setNovoSubtipoOrigemNome(e.target.value)}
+                        placeholder="Nome do novo subtipo"
+                      />
+                    )}
+                  </div>
+                )}
+                {mostrarSubtipoDestino && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                      Subtipo de destino
+                      <Required />
+                    </label>
+                    <select
+                      className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                      value={subtipoUsoDestinoId}
+                      onChange={(e) => setSubtipoUsoDestinoId(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione...</option>
+                      {subtiposDoTipo(tipoUsoDestinoId).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nome}
+                        </option>
+                      ))}
+                      <option value={NOVO_SUBTIPO}>+ Novo subtipo...</option>
+                    </select>
+                    {subtipoUsoDestinoId === NOVO_SUBTIPO && (
+                      <input
+                        className="mt-1.5 w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                        value={novoSubtipoDestinoNome}
+                        onChange={(e) => setNovoSubtipoDestinoNome(e.target.value)}
+                        placeholder="Nome do novo subtipo"
+                      />
+                    )}
                   </div>
                 )}
                 <div>
@@ -842,7 +1003,8 @@ export default function GestaoAreasPage() {
                   <div key={m.id} className="rounded-card border border-border bg-surface p-4">
                     <div className="flex items-start justify-between gap-3">
                       <strong className="text-sm text-text-primary">
-                        {m.tipo_uso_origem?.nome ?? '—'} → {m.tipo_uso_destino?.nome ?? '—'}
+                        {labelTipoUso(m.tipo_uso_origem?.nome, m.subtipo_uso_origem?.nome)} →{' '}
+                        {labelTipoUso(m.tipo_uso_destino?.nome, m.subtipo_uso_destino?.nome)}
                       </strong>
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-text-secondary">{m.data}</span>
@@ -855,9 +1017,7 @@ export default function GestaoAreasPage() {
                         </button>
                       </div>
                     </div>
-                    <div className="text-sm text-text-secondary">
-                      {formatArea(m.area_ha)} ha{m.cultura ? ` · ${m.cultura}` : ''}
-                    </div>
+                    <div className="text-sm text-text-secondary">{formatArea(m.area_ha)} ha</div>
                     {m.observacao && <div className="text-sm text-text-muted italic">{m.observacao}</div>}
                   </div>
                 ))}

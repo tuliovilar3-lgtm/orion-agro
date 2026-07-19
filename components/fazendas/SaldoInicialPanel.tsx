@@ -1,7 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
 import { safraSugeridaParaData, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
@@ -23,9 +22,6 @@ type LinhaSaldo = {
   existingId: string | null
   quantidade: string
   pesoMedio: string
-  // lote de nascimento (safra) — só se aplica quando a categoria é
-  // bezerro. Sugerida a partir da data de referência (regra
-  // julho-junho), sempre editável.
   safraNascimento: string
 }
 
@@ -37,20 +33,7 @@ function round2(n: number) {
   return Math.round(n * 100) / 100
 }
 
-export default function SaldoInicialPage() {
-  return (
-    <Suspense fallback={<div className="p-8">Carregando...</div>}>
-      <SaldoInicialContent />
-    </Suspense>
-  )
-}
-
-function SaldoInicialContent() {
-  const searchParams = useSearchParams()
-  const fazendaIdParam = searchParams.get('fazenda')
-
-  const [fazendas, setFazendas] = useState<Fazenda[]>([])
-  const [fazendaId, setFazendaId] = useState('')
+export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) {
   const [fazendaSelecionada, setFazendaSelecionada] = useState<Fazenda | null>(null)
   const [data, setData] = useState(() => new Date().toISOString().slice(0, 10))
   const [linhas, setLinhas] = useState<LinhaSaldo[]>([])
@@ -84,17 +67,6 @@ function SaldoInicialContent() {
 
   useEffect(() => {
     supabase
-      .from('fazendas')
-      .select('id, nome, saldo_inicial_confirmado, saldo_inicial_confirmado_em')
-      .eq('ativo', true)
-      .order('nome')
-      .then(({ data }) => {
-        setFazendas(data || [])
-        if (fazendaIdParam && (data || []).some((f) => f.id === fazendaIdParam)) {
-          setFazendaId(fazendaIdParam)
-        }
-      })
-    supabase
       .from('grupos_categoria_papel')
       .select('id, nome, sexo')
       .order('ordem')
@@ -122,10 +94,6 @@ function SaldoInicialContent() {
   // (grupo sem controla_pasto, ou só um pasto ativo) — mesmo princípio
   // já usado em Movimentações e Controle de Pasto
   useEffect(() => {
-    if (!fazendaId) {
-      setPastoId('')
-      return
-    }
     if (!mostrarSeletorPasto) {
       const geral = pastosDisponiveis.find((p) => p.nome === 'Geral') || pastosDisponiveis[0]
       setPastoId(geral ? geral.id : '')
@@ -133,7 +101,7 @@ function SaldoInicialContent() {
       setPastoId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaId, mostrarSeletorPasto, pastos])
+  }, [mostrarSeletorPasto, pastos])
 
   async function handleCriarCategoria(e: React.FormEvent) {
     e.preventDefault()
@@ -159,12 +127,12 @@ function SaldoInicialContent() {
       setNovaCategoriaSexo('')
       setNovaCategoriaEra('')
       setNovaCategoriaPesoReferencia('')
-      if (fazendaId) await carregarLinhas(fazendaId)
+      await carregarLinhas()
     }
     setSalvandoCategoria(false)
   }
 
-  async function carregarLinhas(fId: string) {
+  async function carregarLinhas() {
     setLoading(true)
     const [{ data: categorias }, { data: existentes }, { data: fazenda }] = await Promise.all([
       supabase
@@ -176,12 +144,12 @@ function SaldoInicialContent() {
       supabase
         .from('movimentacoes_rebanho')
         .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, data, safra_nascimento_ano_inicio')
-        .eq('fazenda_id', fId)
+        .eq('fazenda_id', fazendaId)
         .eq('tipo', 'SALDO_INICIAL'),
       supabase
         .from('fazendas')
         .select('id, nome, saldo_inicial_confirmado, saldo_inicial_confirmado_em')
-        .eq('id', fId)
+        .eq('id', fazendaId)
         .single(),
     ])
 
@@ -212,12 +180,7 @@ function SaldoInicialContent() {
   }
 
   useEffect(() => {
-    if (fazendaId) {
-      carregarLinhas(fazendaId)
-    } else {
-      setLinhas([])
-      setFazendaSelecionada(null)
-    }
+    carregarLinhas()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 
@@ -226,8 +189,6 @@ function SaldoInicialContent() {
   }
 
   function handleSalvarClick() {
-    if (!fazendaId) return
-
     const incompletas = linhas.filter((l) => (!!l.quantidade) !== (!!l.pesoMedio))
     if (incompletas.length > 0) {
       alert(
@@ -251,8 +212,6 @@ function SaldoInicialContent() {
   }
 
   async function executarSalvar() {
-    if (!fazendaId) return
-
     setMostrarAvisoEdicao(false)
     setSalvando(true)
 
@@ -299,12 +258,11 @@ function SaldoInicialContent() {
       }
     }
 
-    await carregarLinhas(fazendaId)
+    await carregarLinhas()
     setSalvando(false)
   }
 
   async function handleConfirmar() {
-    if (!fazendaId) return
     setSalvando(true)
     const { error } = await supabase
       .from('fazendas')
@@ -314,7 +272,7 @@ function SaldoInicialContent() {
     if (error) {
       alert('Erro ao confirmar: ' + error.message)
     } else {
-      await carregarLinhas(fazendaId)
+      await carregarLinhas()
     }
     setMostrarConfirmacao(false)
     setSalvando(false)
@@ -330,62 +288,29 @@ function SaldoInicialContent() {
   const pesoMedioPonderado = totalCabecas > 0 ? round2(totalPesoKg / totalCabecas) : null
   const existeCategoriaBezerro = linhas.some((l) => l.categoriaEhBezerro)
 
+  const inputClass =
+    'rounded-control border border-border bg-surface px-2 py-1 text-sm text-text-primary outline-none focus:border-brand-500'
+
   return (
-    <div className="p-8 max-w-3xl">
-      <h1 className="text-2xl font-bold mb-6">Saldo inicial</h1>
-
-      {fazendaIdParam && fazendaId === fazendaIdParam && (
-        <div className="border border-blue-400 bg-blue-50 rounded p-3 text-sm text-blue-800 mb-4">
-          Fazenda cadastrada com sucesso. Antes de lançar qualquer movimentação, preencha e confirme o saldo
-          inicial dela abaixo.
-        </div>
-      )}
-
-      <p className="text-sm text-gray-600 mb-6">
+    <div>
+      <p className="text-sm text-text-secondary">
         Cadastre a quantidade de animais e o peso médio de cada categoria no momento em que a fazenda começou a
         usar o sistema. Depois de confirmado, o saldo inicial ainda pode ser corrigido se necessário, mas cada
         alteração pede uma confirmação extra — e nunca é permitido deixar o estoque negativo em nenhum momento.
       </p>
 
-      <div className="flex flex-wrap gap-4 mb-6 border p-4 rounded">
+      <div className="mt-4 flex flex-wrap gap-4">
         <div>
-          <label className="block text-sm mb-1">
-            Fazenda
-            <Required />
-          </label>
-          <select
-            className="border rounded px-3 py-2"
-            value={fazendaId}
-            onChange={(e) => setFazendaId(e.target.value)}
-          >
-            <option value="">Selecione...</option>
-            {fazendas.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.nome}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Data de referência</label>
-          <input
-            type="date"
-            className="border rounded px-3 py-2"
-            value={data}
-            onChange={(e) => setData(e.target.value)}
-          />
+          <label className="mb-1.5 block text-sm font-medium text-text-secondary">Data de referência</label>
+          <input type="date" className={inputClass} value={data} onChange={(e) => setData(e.target.value)} />
         </div>
         {mostrarSeletorPasto && (
           <div>
-            <label className="block text-sm mb-1">
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">
               Pasto
               <Required />
             </label>
-            <select
-              className="border rounded px-3 py-2"
-              value={pastoId}
-              onChange={(e) => setPastoId(e.target.value)}
-            >
+            <select className={inputClass} value={pastoId} onChange={(e) => setPastoId(e.target.value)}>
               <option value="">Selecione...</option>
               {pastosDisponiveis.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -397,14 +322,12 @@ function SaldoInicialContent() {
         )}
       </div>
 
-      {!fazendaId ? (
-        <p className="text-gray-500">Selecione uma fazenda.</p>
-      ) : loading ? (
-        <p>Carregando...</p>
+      {loading ? (
+        <p className="mt-4 text-sm text-text-secondary">Carregando...</p>
       ) : (
         <>
           {confirmado && (
-            <div className="border border-green-400 bg-green-50 rounded p-3 text-sm text-green-800 mb-4">
+            <div className="mt-4 rounded-control border border-success bg-success-bg px-4 py-3 text-sm text-text-primary">
               Saldo inicial confirmado em{' '}
               {fazendaSelecionada?.saldo_inicial_confirmado_em
                 ? new Date(fazendaSelecionada.saldo_inicial_confirmado_em).toLocaleString('pt-BR')
@@ -413,115 +336,123 @@ function SaldoInicialContent() {
             </div>
           )}
 
-          <div className="flex justify-end mb-2">
+          <div className="mt-4 flex justify-end">
             <button
               type="button"
-              className="text-sm text-blue-600 underline"
+              className="text-sm font-medium text-brand-500 underline"
               onClick={() => setModalCategoriaAberto(true)}
             >
               + Nova categoria
             </button>
           </div>
 
-          <table className="text-sm border-collapse w-full mb-4">
-            <thead>
-              <tr>
-                <th className="border p-2 text-left">Categoria</th>
-                <th className="border p-2 text-right">Quantidade</th>
-                <th className="border p-2 text-right">Peso médio (kg)</th>
-                <th className="border p-2 text-right">Peso total (kg)</th>
-                {existeCategoriaBezerro && <th className="border p-2 text-left">Safra do bezerro</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {linhas.map((l) => {
-                const qtd = parseInt(l.quantidade, 10) || 0
-                const peso = parseFloat(l.pesoMedio) || 0
-                const pesoTotal = qtd && peso ? round2(qtd * peso) : null
-                return (
-                  <tr key={l.categoriaId}>
-                    <td className="border p-2">{l.categoriaNome}</td>
-                    <td className="border p-2 text-right">
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        className="border rounded px-2 py-1 w-24 text-right"
-                        value={l.quantidade}
-                        onChange={(e) => atualizarLinha(l.categoriaId, 'quantidade', e.target.value)}
-                      />
-                    </td>
-                    <td className="border p-2 text-right">
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        className="border rounded px-2 py-1 w-24 text-right"
-                        value={l.pesoMedio}
-                        onChange={(e) => atualizarLinha(l.categoriaId, 'pesoMedio', e.target.value)}
-                      />
-                    </td>
-                    <td className="border p-2 text-right text-gray-500">
-                      {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
-                    </td>
-                    {existeCategoriaBezerro && (
-                      <td className="border p-2">
-                        {l.categoriaEhBezerro && (
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            className="border rounded px-2 py-1 w-24"
-                            value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                            onChange={(e) => atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))}
-                            onFocus={(e) => e.target.select()}
-                          />
-                        )}
+          <div className="mt-2 overflow-x-auto rounded-card border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-text-secondary">
+                  <th className="p-2.5 font-medium">Categoria</th>
+                  <th className="p-2.5 text-right font-medium">Quantidade</th>
+                  <th className="p-2.5 text-right font-medium">Peso médio (kg)</th>
+                  <th className="p-2.5 text-right font-medium">Peso total (kg)</th>
+                  {existeCategoriaBezerro && <th className="p-2.5 text-left font-medium">Safra do bezerro</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((l) => {
+                  const qtd = parseInt(l.quantidade, 10) || 0
+                  const peso = parseFloat(l.pesoMedio) || 0
+                  const pesoTotal = qtd && peso ? round2(qtd * peso) : null
+                  return (
+                    <tr key={l.categoriaId} className="border-b border-border last:border-0">
+                      <td className="p-2.5 text-text-primary">{l.categoriaNome}</td>
+                      <td className="p-2.5 text-right">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className={`w-24 text-right ${inputClass}`}
+                          value={l.quantidade}
+                          onChange={(e) => atualizarLinha(l.categoriaId, 'quantidade', e.target.value)}
+                        />
                       </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="font-semibold">
-                <td className="border p-2">Total</td>
-                <td className="border p-2 text-right">{formatQuantidade(totalCabecas)}</td>
-                <td className="border p-2 text-right">
-                  {pesoMedioPonderado != null ? formatPeso(pesoMedioPonderado) : '—'}
-                </td>
-                <td className="border p-2 text-right">
-                  {totalCabecas > 0 ? formatPeso(round2(totalPesoKg)) : '—'}
-                </td>
-                {existeCategoriaBezerro && <td className="border p-2"></td>}
-              </tr>
-            </tfoot>
-          </table>
+                      <td className="p-2.5 text-right">
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          className={`w-24 text-right ${inputClass}`}
+                          value={l.pesoMedio}
+                          onChange={(e) => atualizarLinha(l.categoriaId, 'pesoMedio', e.target.value)}
+                        />
+                      </td>
+                      <td className="p-2.5 text-right tabular-nums text-text-secondary">
+                        {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
+                      </td>
+                      {existeCategoriaBezerro && (
+                        <td className="p-2.5">
+                          {l.categoriaEhBezerro && (
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              className={`w-24 ${inputClass}`}
+                              value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                              onChange={(e) =>
+                                atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
+                              }
+                              onFocus={(e) => e.target.select()}
+                            />
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="font-semibold">
+                  <td className="p-2.5 text-text-primary">Total</td>
+                  <td className="p-2.5 text-right tabular-nums text-text-primary">{formatQuantidade(totalCabecas)}</td>
+                  <td className="p-2.5 text-right tabular-nums text-text-primary">
+                    {pesoMedioPonderado != null ? formatPeso(pesoMedioPonderado) : '—'}
+                  </td>
+                  <td className="p-2.5 text-right tabular-nums text-text-primary">
+                    {totalCabecas > 0 ? formatPeso(round2(totalPesoKg)) : '—'}
+                  </td>
+                  {existeCategoriaBezerro && <td className="p-2.5"></td>}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
 
-          <div className="space-y-3">
+          <div className="mt-4 space-y-3">
             {!mostrarAvisoEdicao ? (
               <button
                 type="button"
                 disabled={salvando}
                 onClick={handleSalvarClick}
-                className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
               >
                 {salvando ? 'Salvando...' : 'Salvar'}
               </button>
             ) : (
-              <div className="border border-amber-400 bg-amber-50 rounded p-3 text-sm">
-                <p className="text-amber-800 mb-2">
+              <div className="rounded-control border border-warning bg-warning-bg p-3 text-sm">
+                <p className="mb-2 text-text-primary">
                   O saldo inicial desta fazenda já foi confirmado. Alterar esses valores agora pode impactar
                   relatórios e apurações que já usaram esses números. O sistema não vai deixar o estoque ficar
                   negativo em nenhum momento, mas confirme que você realmente quer fazer esse ajuste.
                 </p>
                 <div className="flex gap-2">
-                  <button type="button" className="px-4 py-2 rounded border" onClick={() => setMostrarAvisoEdicao(false)}>
+                  <button
+                    type="button"
+                    className="rounded-control border border-border px-4 py-2 text-text-primary"
+                    onClick={() => setMostrarAvisoEdicao(false)}
+                  >
                     Cancelar
                   </button>
                   <button
                     type="button"
                     disabled={salvando}
-                    className="bg-amber-600 text-white px-4 py-2 rounded disabled:opacity-50"
+                    className="rounded-control bg-warning px-4 py-2 font-semibold text-white disabled:opacity-50"
                     onClick={executarSalvar}
                   >
                     Sim, ajustar saldo inicial
@@ -535,22 +466,22 @@ function SaldoInicialContent() {
                 <div>
                   <button
                     type="button"
-                    className="text-sm text-gray-600 underline"
+                    className="text-sm text-text-secondary underline"
                     onClick={() => setMostrarConfirmacao(true)}
                   >
                     Confirmar saldo inicial
                   </button>
                 </div>
               ) : (
-                <div className="border border-gray-400 bg-gray-50 rounded p-3 text-sm">
-                  <p className="text-gray-800 mb-2">
+                <div className="rounded-control border border-border bg-bg p-3 text-sm">
+                  <p className="mb-2 text-text-primary">
                     Confirma que esse é o saldo inicial correto desta fazenda? Você ainda poderá corrigi-lo depois,
                     mas cada alteração passará a pedir essa mesma confirmação.
                   </p>
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      className="px-4 py-2 rounded border"
+                      className="rounded-control border border-border px-4 py-2 text-text-primary"
                       onClick={() => setMostrarConfirmacao(false)}
                     >
                       Cancelar
@@ -558,7 +489,7 @@ function SaldoInicialContent() {
                     <button
                       type="button"
                       disabled={salvando}
-                      className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                      className="rounded-control bg-brand-500 px-4 py-2 font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
                       onClick={handleConfirmar}
                     >
                       Sim, confirmar saldo inicial
@@ -571,20 +502,20 @@ function SaldoInicialContent() {
       )}
 
       {modalCategoriaAberto && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <form
             onSubmit={handleCriarCategoria}
             onKeyDown={bloquearEnvioPorEnter}
-            className="bg-white p-4 rounded w-full max-w-sm space-y-3"
+            className="w-full max-w-sm space-y-3 rounded-card border border-border bg-surface p-5"
           >
-            <h2 className="font-semibold">Nova categoria</h2>
+            <h2 className="text-sm font-semibold text-text-primary">Nova categoria</h2>
             <div>
-              <label className="block text-sm mb-1">
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">
                 Nome
                 <Required />
               </label>
               <input
-                className="border rounded px-3 py-2 w-full"
+                className={`w-full ${inputClass}`}
                 value={novaCategoriaNome}
                 onChange={(e) => setNovaCategoriaNome(e.target.value)}
                 required
@@ -592,12 +523,12 @@ function SaldoInicialContent() {
               />
             </div>
             <div>
-              <label className="block text-sm mb-1">
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">
                 Grupo Categoria
                 <Required />
               </label>
               <select
-                className="border rounded px-3 py-2 w-full"
+                className={`w-full ${inputClass}`}
                 value={novaCategoriaPapelId}
                 onChange={(e) => setNovaCategoriaPapelId(e.target.value)}
                 required
@@ -614,12 +545,12 @@ function SaldoInicialContent() {
 
             {sexoEhLivre && (
               <div>
-                <label className="block text-sm mb-1">
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
                   Sexo
                   <Required />
                 </label>
                 <select
-                  className="border rounded px-3 py-2 w-full"
+                  className={`w-full ${inputClass}`}
                   value={novaCategoriaSexo}
                   onChange={(e) => setNovaCategoriaSexo(e.target.value as Sexo)}
                   required
@@ -633,17 +564,17 @@ function SaldoInicialContent() {
 
             {novaCategoriaPapelId && (
               <div>
-                <label className="block text-sm mb-1">
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
                   Era
                   {!isBezerroPapel && <Required />}
                 </label>
                 {isBezerroPapel ? (
-                  <p className="text-sm text-gray-600 border rounded px-3 py-2 bg-gray-50">
+                  <p className="rounded-control border border-border bg-bg px-3 py-2 text-sm text-text-secondary">
                     00-08 (fixo para Bezerros/Bezerras Mamando)
                   </p>
                 ) : (
                   <select
-                    className="border rounded px-3 py-2 w-full"
+                    className={`w-full ${inputClass}`}
                     value={novaCategoriaEra}
                     onChange={(e) => setNovaCategoriaEra(e.target.value as Era)}
                     required
@@ -657,7 +588,7 @@ function SaldoInicialContent() {
                   </select>
                 )}
                 {eraEfetiva && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="mt-1 text-xs text-text-muted">
                     Grupo Faixa Etária: {GRUPO_FAIXA_ETARIA_POR_ERA[eraEfetiva]}
                     {FAIXA_ETARIA_GRUPO[GRUPO_FAIXA_ETARIA_POR_ERA[eraEfetiva]]
                       ? ` (${FAIXA_ETARIA_GRUPO[GRUPO_FAIXA_ETARIA_POR_ERA[eraEfetiva]]})`
@@ -668,19 +599,19 @@ function SaldoInicialContent() {
             )}
 
             <div>
-              <label className="block text-sm mb-1">Peso de referência (kg)</label>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">Peso de referência (kg)</label>
               <input
                 type="number"
                 step="0.01"
-                className="border rounded px-3 py-2 w-full"
+                className={`w-full ${inputClass}`}
                 value={novaCategoriaPesoReferencia}
                 onChange={(e) => setNovaCategoriaPesoReferencia(e.target.value)}
               />
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
-                className="px-4 py-2 rounded border"
+                className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
                 onClick={() => setModalCategoriaAberto(false)}
               >
                 Cancelar
@@ -688,7 +619,7 @@ function SaldoInicialContent() {
               <button
                 type="submit"
                 disabled={salvandoCategoria}
-                className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
               >
                 {salvandoCategoria ? 'Salvando...' : 'Salvar'}
               </button>
