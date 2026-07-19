@@ -18,6 +18,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 import { corCategorica } from '@/lib/relatorio-cores'
 import KpiCard from '@/components/relatorios/KpiCard'
 import { agruparPorChave, formatarDataBr, mediaPonderada } from '@/components/relatorios/tipos'
+import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components/FluxoRebanho'
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
@@ -34,57 +35,8 @@ type ResumoLinha = {
   peso_medio_kg: number | null
 }
 
-type MovimentacaoFeed = {
-  id: string
-  data: string
-  tipo: string
-  quantidade: number
-  fazenda: { nome: string } | null
-  fazenda_origem: { nome: string } | null
-  fazenda_destino: { nome: string } | null
-  categoria: { nome: string } | null
-  categoria_destino: { nome: string } | null
-}
-
 const NOMES_GRUPO: Record<string, string> = { BEZERRO: 'Bezerro', JOVEM: 'Jovem', ADULTO: 'Adulto' }
 const ORDEM_GRUPO = ['BEZERRO', 'JOVEM', 'ADULTO']
-
-const TIPOS_FEED = [
-  'NASCIMENTO',
-  'DESMAME',
-  'COMPRA',
-  'VENDA_PE',
-  'VENDA_ABATE',
-  'MORTE',
-  'CONSUMO_DOACAO',
-  'TRANSFERENCIA',
-] as const
-
-const LABELS_TIPO: Record<string, string> = {
-  NASCIMENTO: 'Nascimento',
-  DESMAME: 'Desmame',
-  COMPRA: 'Compra',
-  VENDA_PE: 'Venda em Pé',
-  VENDA_ABATE: 'Venda Abate',
-  MORTE: 'Mortalidade',
-  CONSUMO_DOACAO: 'Consumo/Doação',
-  TRANSFERENCIA: 'Transferência',
-}
-
-const SELECT_MOVIMENTACAO_FEED = `
-  id, data, tipo, quantidade,
-  fazenda:fazendas!fazenda_id(nome),
-  fazenda_origem:fazendas!fazenda_origem_id(nome),
-  fazenda_destino:fazendas!fazenda_destino_id(nome),
-  categoria:categorias_animal!categoria_id(nome),
-  categoria_destino:categorias_animal!categoria_destino_id(nome)
-`
-
-function nomeFazendaLinha(m: MovimentacaoFeed) {
-  if (m.fazenda?.nome) return m.fazenda.nome
-  if (m.fazenda_origem?.nome && m.fazenda_destino?.nome) return `${m.fazenda_origem.nome} → ${m.fazenda_destino.nome}`
-  return '—'
-}
 
 export default function PainelPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
@@ -102,8 +54,8 @@ export default function PainelPage() {
   const [dataInicioCustom, setDataInicioCustom] = useState(() => `${new Date().toISOString().slice(0, 7)}-01`)
   const [dataFimCustom, setDataFimCustom] = useState(() => new Date().toISOString().slice(0, 10))
 
-  const [movimentacoes, setMovimentacoes] = useState<MovimentacaoFeed[]>([])
-  const [loadingMovimentacoes, setLoadingMovimentacoes] = useState(true)
+  const [fluxoLinhas, setFluxoLinhas] = useState<LinhaFluxoRebanho[]>([])
+  const [loadingFluxo, setLoadingFluxo] = useState(true)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -188,24 +140,18 @@ export default function PainelPage() {
 
   useEffect(() => {
     if (fazendaIds.length === 0 || periodoInvalido) {
-      setMovimentacoes([])
-      setLoadingMovimentacoes(false)
+      setFluxoLinhas([])
+      setLoadingFluxo(false)
       return
     }
     let cancelado = false
-    setLoadingMovimentacoes(true)
+    setLoadingFluxo(true)
     supabase
-      .from('movimentacoes_rebanho')
-      .select(SELECT_MOVIMENTACAO_FEED)
-      .in('tipo', TIPOS_FEED)
-      .gte('data', dataInicio)
-      .lte('data', dataFim)
-      .or(`fazenda_id.in.(${fazendaIds.join(',')}),fazenda_origem_id.in.(${fazendaIds.join(',')}),fazenda_destino_id.in.(${fazendaIds.join(',')})`)
-      .order('data', { ascending: false })
+      .rpc('fn_relatorio_movimentacao_rebanho', { p_fazenda_ids: fazendaIds, p_data_inicio: dataInicio, p_data_fim: dataFim })
       .then(({ data, error }) => {
         if (cancelado) return
-        if (!error) setMovimentacoes((data as unknown as MovimentacaoFeed[]) || [])
-        setLoadingMovimentacoes(false)
+        if (!error) setFluxoLinhas(data || [])
+        setLoadingFluxo(false)
       })
     return () => {
       cancelado = true
@@ -238,21 +184,6 @@ export default function PainelPage() {
       pesoMedio: mediaPonderada(rs.map((r) => ({ valor: r.peso_medio_kg, peso: r.quantidade }))),
     }))
     .sort((a, b) => b.quantidade - a.quantidade)
-
-  const contagemPorTipo = TIPOS_FEED.map((tipo) => ({
-    tipo,
-    label: LABELS_TIPO[tipo],
-    total: movimentacoes.filter((m) => m.tipo === tipo).length,
-  })).filter((t) => t.total > 0)
-
-  const rotuloPeriodo =
-    modoFiltro === 'safra'
-      ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1}`
-      : modoFiltro === 'ano'
-        ? `Ano ${anoCalendarioSelecionado}`
-        : modoFiltro === 'mes'
-          ? new Date(`${mes}-01T00:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
-          : `${formatarDataBr(dataInicio)} até ${formatarDataBr(dataFim)}`
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
@@ -445,46 +376,16 @@ export default function PainelPage() {
 
         {periodoInvalido ? (
           <p className="mt-4 text-sm text-error">Corrija o período antes de continuar.</p>
-        ) : loadingMovimentacoes ? (
-          <div className="mt-4 h-32 animate-pulse rounded-control bg-border" />
-        ) : movimentacoes.length === 0 ? (
-          <p className="mt-4 text-sm text-text-secondary">Nenhuma movimentação em {rotuloPeriodo.toLowerCase()}.</p>
+        ) : loadingFluxo ? (
+          <div className="mt-4 h-24 animate-pulse rounded-control bg-border" />
         ) : (
-          <>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {contagemPorTipo.map((t) => (
-                <span
-                  key={t.tipo}
-                  className="rounded-control border border-border bg-bg px-3 py-1.5 text-xs font-medium text-text-secondary"
-                >
-                  <span className="font-semibold text-text-primary">{t.total}</span> {t.label.toLowerCase()}
-                </span>
-              ))}
-            </div>
-
-            <div className="mt-4 divide-y divide-border">
-              {movimentacoes.slice(0, 15).map((m) => (
-                <div key={m.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-28 shrink-0 text-xs font-medium text-text-secondary">{LABELS_TIPO[m.tipo]}</span>
-                    <span className="text-text-primary">
-                      {m.categoria?.nome ?? m.categoria_destino?.nome ?? '—'}
-                      <span className="text-text-muted"> · {nomeFazendaLinha(m)}</span>
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <span className="tabular-nums text-text-secondary">{formatQuantidade(m.quantidade)}</span>
-                    <span className="text-xs text-text-muted">{formatarDataBr(m.data)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {movimentacoes.length > 15 && (
-              <p className="mt-3 text-xs text-text-muted">
-                Mostrando 15 de {formatQuantidade(movimentacoes.length)} lançamentos em {rotuloPeriodo.toLowerCase()}.
-              </p>
-            )}
-          </>
+          <div className="mt-4 rounded-card border border-border bg-bg p-4">
+            <FluxoRebanho
+              {...somarFluxoRebanho(fluxoLinhas)}
+              labelInicial={`Estoque Inicial (${formatarDataBr(dataInicio)})`}
+              labelFinal={`Estoque Final (${formatarDataBr(dataFim)})`}
+            />
+          </div>
         )}
       </div>
     </div>

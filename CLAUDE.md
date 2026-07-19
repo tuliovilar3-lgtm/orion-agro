@@ -858,10 +858,37 @@ sem chamada adicional ao banco.
 **Movimentações do período**: ao contrário do resto do painel (que é sempre "hoje"), essa seção usa
 o mesmo filtro de período Mês/Ano Safra/Ano Calendário/Personalizado já padronizado no resto do
 sistema (`lib/periodo.ts`) — mas aqui **pré-selecionado em "Ano Safra" (safra atual)** por decisão
-explícita do usuário, diferente do padrão "Mês" usado em Gestão de Áreas/Relatórios. A consulta
-inclui só os 8 tipos "de atividade real" do rebanho (mesma lista de `app/relatorios/page.tsx`) —
-exclui `SALDO_INICIAL` (não é uma movimentação do dia a dia) e `MUDANCA_CATEGORIA`/`MUDANCA_PASTO`
-(reclassificação/relocação interna, não ganho ou perda de rebanho). Mostra dois níveis: **chips de
-contagem por tipo** no período inteiro (ex.: "3 nascimento · 1 desmame") e um **feed dos 15
-lançamentos mais recentes** dentro do período, com link "Ver relatórios completos" pra
-`/relatorios` quando o usuário quiser o detalhe completo sem paginação aqui.
+explícita do usuário, diferente do padrão "Mês" usado em Gestão de Áreas/Relatórios. Mostra só o
+componente `FluxoRebanho` (ver seção abaixo) com o saldo agregado do período — decisão do usuário
+de não duplicar o feed de lançamentos individuais aqui (isso já existe em `/relatorios`, com link
+"Ver relatórios completos" pro detalhe completo); o painel foca só no resumo de alto nível.
+
+## FluxoRebanho (Estoque Inicial → entradas/saídas → Estoque Final)
+
+`components/FluxoRebanho.tsx` é um componente compartilhado que visualiza a reconciliação do
+rebanho num período — inspirado num modelo que o usuário já usava em planilha (uma "esteira" com
+Estoque Inicial numa ponta, Estoque Final na outra, e os tipos de movimentação encadeados no meio).
+Layout escolhido entre duas opções propostas (cascata/waterfall vs. cartões conectados): **cartões
+conectados**, por ficar mais parecido com o modelo original do usuário e mais fácil de ler rápido —
+caixa de Estoque Inicial à esquerda, chips de entrada em cima/chips de saída embaixo no meio, caixa
+de Estoque Final à direita, ligados por uma linha fina. Empilha em coluna no mobile
+(`flex-col sm:flex-row`).
+
+**Cor dos chips é neutra (`bg-brand-100`/`text-brand-700`), igual pra entrada e saída** — decisão
+explícita do usuário após ver a primeira versão com `success`/`error` (verde/vermelho): saída em
+vermelho passava a impressão de algo ruim, o que não é verdade em casos como venda/abate (o
+propósito comercial do rebanho). Direção (entrada vs. saída) é comunicada só pelo sinal (+/-) e pela
+posição (cima/baixo), nunca por cor — reforça a regra já existente de que `success`/`error` são
+reservados pra confirmação/bloqueio, não pra codificar polaridade de evento de negócio.
+
+`somarFluxoRebanho(linhas)` recebe o retorno cru de `fn_relatorio_movimentacao_rebanho` (uma linha
+por categoria) e soma em totais do rebanho inteiro. **Desmame e Mudança de Categoria ficam de fora
+de propósito**: são reclassificação interna (a saída de uma categoria = a entrada de outra), então
+somados em todas as categorias sempre se cancelam matematicamente — não representam animal entrando
+ou saindo do rebanho, só valor real no detalhe por categoria (que continua existindo na tabela
+completa). Chips com valor 0 não aparecem.
+
+Reaproveitado em dois lugares, cada um buscando `fn_relatorio_movimentacao_rebanho` com seus
+próprios filtros: `app/relatorio-movimentacao/page.tsx` (substituiu os cards antigos de
+Estoque/Entradas/Saídas em texto puro, mantendo a tabela detalhada por categoria abaixo) e o Painel
+(`app/page.tsx`, seção "Movimentações do período").

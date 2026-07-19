@@ -13,6 +13,7 @@ import {
   opcoesSafra,
   opcoesAno,
 } from '@/lib/periodo'
+import FluxoRebanho, { somarFluxoRebanho } from '@/components/FluxoRebanho'
 
 type Fazenda = { id: string; nome: string }
 
@@ -205,20 +206,6 @@ export default function RelatorioMovimentacaoPage() {
     }
   )
 
-  const totalEntradas =
-    totais.entrada_nascimento +
-    totais.entrada_compra +
-    totais.entrada_desmame +
-    totais.entrada_transferencia +
-    totais.entrada_mudanca_categoria
-  const totalSaidas =
-    totais.saida_morte +
-    totais.saida_venda +
-    totais.saida_desmame +
-    totais.saida_transferencia +
-    totais.saida_consumo_doacao +
-    totais.saida_mudanca_categoria
-
   const distribuicao = linhas
     .filter((l) => l.estoque_final > 0)
     .sort((a, b) => b.estoque_final - a.estoque_final)
@@ -387,52 +374,12 @@ export default function RelatorioMovimentacaoPage() {
             {fazendaIds.length} fazenda{fazendaIds.length > 1 ? 's' : ''} selecionada{fazendaIds.length > 1 ? 's' : ''}
           </p>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-            <div className="border rounded p-4">
-              <div className="text-xs text-gray-500 mb-1">Estoque inicial ({formatarData(dataInicio)})</div>
-              <div className="text-2xl font-semibold">{formatQuantidade(totais.estoque_inicial)}</div>
-            </div>
-            <div className="border rounded p-4">
-              <div className="text-xs text-gray-500 mb-1">Entradas</div>
-              <div className="text-2xl font-semibold">{formatQuantidade(totalEntradas)}</div>
-            </div>
-            <div className="border rounded p-4">
-              <div className="text-xs text-gray-500 mb-1">Saídas</div>
-              <div className="text-2xl font-semibold">{formatQuantidade(totalSaidas)}</div>
-            </div>
-            <div className="border rounded p-4">
-              <div className="text-xs text-gray-500 mb-1">Estoque final ({formatarData(dataFim)})</div>
-              <div className="text-2xl font-semibold">{formatQuantidade(totais.estoque_final)}</div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6 text-sm">
-            <div>
-              <div className="text-gray-500">Nascimentos</div>
-              <div className="font-medium">{formatQuantidade(totais.entrada_nascimento)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Compras</div>
-              <div className="font-medium">{formatQuantidade(totais.entrada_compra)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Vendas</div>
-              <div className="font-medium">{formatQuantidade(totais.saida_venda)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Mortes</div>
-              <div className="font-medium">{formatQuantidade(totais.saida_morte)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Consumo/doação</div>
-              <div className="font-medium">{formatQuantidade(totais.saida_consumo_doacao)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Transf. líquida</div>
-              <div className="font-medium">
-                {formatQuantidade(totais.entrada_transferencia - totais.saida_transferencia)}
-              </div>
-            </div>
+          <div className="mb-6 rounded-card border border-border bg-surface p-5">
+            <FluxoRebanho
+              {...somarFluxoRebanho(linhasVisiveis)}
+              labelInicial={`Estoque Inicial (${formatarData(dataInicio)})`}
+              labelFinal={`Estoque Final (${formatarData(dataFim)})`}
+            />
           </div>
 
           <div className="overflow-x-auto mb-8">
