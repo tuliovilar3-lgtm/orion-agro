@@ -2497,6 +2497,49 @@ left join saidas s on s.fazenda_id = f.id and s.categoria_id = c.id
 where c.ativa = true and f.ativo = true
 group by f.id, f.nome, c.id, c.nome;
 
+-- ---------------------------------------------------------------------
+-- fn_resumo_rebanho_atual (migração 033): alimenta o painel inicial —
+-- uma linha por (fazenda, categoria) com saldo atual > 0, peso médio
+-- resolvido pela pesagem mais recente da categoria naquela fazenda
+-- (qualquer pasto — o painel é uma visão agregada, não precisa da
+-- granularidade por pasto que os relatórios de pastagem usam), caindo
+-- pro peso de referência da categoria quando nunca foi pesada.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_resumo_rebanho_atual(p_fazenda_ids uuid[])
+returns table(
+  fazenda_id uuid,
+  categoria_id uuid,
+  categoria_nome text,
+  grupo_nome text,
+  quantidade integer,
+  peso_medio_kg numeric
+)
+language plpgsql
+stable
+as $$
+begin
+  return query
+  select
+    e.fazenda_id,
+    e.categoria_id,
+    e.categoria_nome,
+    g.nome as grupo_nome,
+    e.saldo_atual::int as quantidade,
+    coalesce(
+      (select p.peso_medio_kg from pesagens p
+       where p.fazenda_id = e.fazenda_id and p.categoria_id = e.categoria_id and p.data <= current_date
+       order by p.data desc limit 1),
+      c.peso_referencia_kg
+    ) as peso_medio_kg
+  from vw_estoque_rebanho e
+  join categorias_animal c on c.id = e.categoria_id
+  join grupos_categoria g on g.id = c.grupo_id
+  where e.saldo_atual > 0
+    and (p_fazenda_ids is null or e.fazenda_id = any(p_fazenda_ids));
+end;
+$$;
+
 -- =====================================================================
 -- 4b. RELATÓRIO DE MOVIMENTAÇÃO DE REBANHO — por fazenda e período,
 -- uma linha por categoria com estoque inicial/final e a movimentação

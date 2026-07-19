@@ -25,6 +25,14 @@ function Icon({ children }: { children: React.ReactNode }) {
 }
 
 const ICONS = {
+  painel: (
+    <Icon>
+      <rect x="3" y="3" width="8" height="8" rx="1.5" />
+      <rect x="13" y="3" width="8" height="5" rx="1.5" />
+      <rect x="13" y="10" width="8" height="11" rx="1.5" />
+      <rect x="3" y="13" width="8" height="8" rx="1.5" />
+    </Icon>
+  ),
   fazendas: (
     <Icon>
       <path d="M4 11.5 12 4l8 7.5" />
@@ -155,6 +163,8 @@ const GROUPS: NavGroup[] = [
   },
 ]
 
+const PAINEL: NavItem = { label: 'Painel', href: '/', icon: ICONS.painel }
+
 const PLACEHOLDERS: NavItem[] = [
   { label: 'Financeiro', href: '#', icon: ICONS.financeiro },
   { label: 'Configurações', href: '#', icon: ICONS.configuracoes },
@@ -163,6 +173,21 @@ const PLACEHOLDERS: NavItem[] = [
 function NavLinks({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
     <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4">
+      <div className="flex flex-col gap-0.5">
+        <Link
+          href={PAINEL.href}
+          onClick={onNavigate}
+          className={`flex items-center gap-2.5 rounded-r-control border-l-[3px] px-2.5 py-2 text-[13px] font-medium transition-colors ${
+            pathname === PAINEL.href
+              ? 'border-brand-500 bg-white/8 text-white font-semibold'
+              : 'border-transparent text-white/70 hover:bg-white/5 hover:text-white'
+          }`}
+        >
+          {PAINEL.icon}
+          {PAINEL.label}
+        </Link>
+      </div>
+
       {GROUPS.map((group) => (
         <div key={group.label}>
           <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">

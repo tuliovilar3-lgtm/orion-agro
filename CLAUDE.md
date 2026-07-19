@@ -824,3 +824,44 @@ o item de menu renomeado pra "Distribuição da Área", porque essa página tamb
 metade é o formulário de lançamento) seria menos preciso que manter o nome mais abrangente ali;
 "Distribuição da Área" descreve bem o que se acha *pelo menu*, mas não precisa ser também o título
 da página em si.
+
+## Painel inicial
+
+`app/page.tsx` deixou de redirecionar pra `/fazendas` e virou o painel inicial de verdade — link
+"Painel" próprio no topo da sidebar (fora de qualquer grupo, `components/Sidebar.tsx`), apontando
+pra `/`. Objetivo: dar uma visão geral do rebanho e das movimentações recentes assim que o usuário
+entra no sistema, sem precisar navegar pra nenhum relatório específico.
+
+**Distribuição atual do rebanho** vem de `fn_resumo_rebanho_atual(p_fazenda_ids)` (migração 033) —
+uma linha por (fazenda, categoria) com saldo atual > 0, reaproveitando a `vw_estoque_rebanho` já
+existente (mais eficiente que chamar `fn_saldo_categoria` fazenda×categoria por fazenda
+selecionada). O peso médio de cada linha é resolvido pela pesagem mais recente da categoria naquela
+fazenda **em qualquer pasto** — diferente da regra "sem fallback cruzado entre pastos" usada nos
+relatórios de pastagem (`fn_relatorio_rebanho_por_pasto`), decisão deliberada aqui porque o painel é
+uma visão agregada da fazenda inteira, não um relatório por pasto; a granularidade por pasto não faz
+sentido nesse contexto. Cai pro `peso_referencia_kg` da categoria quando nunca foi pesada.
+
+**KPIs**: Total de cabeças e Peso médio geral (ponderado pela quantidade, mesma regra de sempre) vêm
+direto da soma/média do resumo. **Lotação atual (UA/ha)** é a única métrica genuinamente nova no
+sistema — `formatLotacao` já existia reservado pra isso desde a criação de `lib/format.ts`, sem uso
+até agora. Convenção adotada (confirmada com o usuário): **1 UA = 450 kg de peso vivo** — padrão
+usual da pecuária brasileira. Lotação = (peso vivo total do rebanho / 450) / hectares em uso
+"Pecuária" (`fn_area_por_uso`, somado sobre as fazendas selecionadas) — usa o tipo de uso inteiro,
+não filtra por subtipo (Corte vs. Leite), já que lotação é sobre área de pastagem em geral,
+independente de qual subtipo. Mostra "—" quando não há área de Pecuária declarada (sem teto pra
+dividir).
+
+**Distribuição por Grupo Faixa Etária** (Bezerro/Jovem/Adulto) vira um gráfico de pizza; **Cabeças
+por categoria** é uma tabela ordenada por quantidade decrescente — ambos derivados do mesmo resumo,
+sem chamada adicional ao banco.
+
+**Movimentações do período**: ao contrário do resto do painel (que é sempre "hoje"), essa seção usa
+o mesmo filtro de período Mês/Ano Safra/Ano Calendário/Personalizado já padronizado no resto do
+sistema (`lib/periodo.ts`) — mas aqui **pré-selecionado em "Ano Safra" (safra atual)** por decisão
+explícita do usuário, diferente do padrão "Mês" usado em Gestão de Áreas/Relatórios. A consulta
+inclui só os 8 tipos "de atividade real" do rebanho (mesma lista de `app/relatorios/page.tsx`) —
+exclui `SALDO_INICIAL` (não é uma movimentação do dia a dia) e `MUDANCA_CATEGORIA`/`MUDANCA_PASTO`
+(reclassificação/relocação interna, não ganho ou perda de rebanho). Mostra dois níveis: **chips de
+contagem por tipo** no período inteiro (ex.: "3 nascimento · 1 desmame") e um **feed dos 15
+lançamentos mais recentes** dentro do período, com link "Ver relatórios completos" pra
+`/relatorios` quando o usuário quiser o detalhe completo sem paginação aqui.
