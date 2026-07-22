@@ -835,7 +835,16 @@ entra no sistema, sem precisar navegar pra nenhum relatório específico.
 **Distribuição atual do rebanho** vem de `fn_resumo_rebanho_atual(p_fazenda_ids)` (migração 033) —
 uma linha por (fazenda, categoria) com saldo atual > 0, reaproveitando a `vw_estoque_rebanho` já
 existente (mais eficiente que chamar `fn_saldo_categoria` fazenda×categoria por fazenda
-selecionada). O peso médio de cada linha é resolvido pela pesagem mais recente da categoria naquela
+selecionada). **Bug corrigido na migração 034**: `vw_estoque_rebanho` (existente desde a migração
+004, nunca usada pra exibir número nenhum ao usuário até esta) juntava os CTEs `entradas`/`saidas`
+direto por `fazenda_id+categoria_id` sem agregação prévia — categoria com N lançamentos de entrada e
+M de saída gerava um produto cartesiano de N×M linhas no join, inflando os dois `sum(quantidade)` por
+um fator multiplicativo (fan-out clássico de SQL). Só aparecia em categorias com vários lançamentos
+dos dois lados (por isso o Total de cabeças do painel divergia bem mais do que o Estoque Final do
+`fn_relatorio_movimentacao_rebanho` — este nunca teve o problema, cada tipo é uma subquery escalar
+isolada). Corrigido agregando `entradas`/`saidas` cada uma com seu próprio `group by`
+(`entradas_agg`/`saidas_agg`) antes de juntar com fazenda/categoria, tornando o join 1:1. O peso
+médio de cada linha é resolvido pela pesagem mais recente da categoria naquela
 fazenda **em qualquer pasto** — diferente da regra "sem fallback cruzado entre pastos" usada nos
 relatórios de pastagem (`fn_relatorio_rebanho_por_pasto`), decisão deliberada aqui porque o painel é
 uma visão agregada da fazenda inteira, não um relatório por pasto; a granularidade por pasto não faz

@@ -2457,45 +2457,59 @@ create table regras_rateio (
 -- (substitui a digitação manual da aba "ESTOQUE PECUÁRIO")
 -- =====================================================================
 
+-- entradas/saidas são agregadas (group by) cada uma separadamente ANTES
+-- de juntar com fazenda/categoria — join direto sem agregação prévia
+-- gera produto cartesiano (fan-out) quando uma categoria tem múltiplos
+-- lançamentos dos dois lados, inflando sum(quantidade) por um fator
+-- multiplicativo (bug real, corrigido na migração 034).
 create view vw_estoque_rebanho as
 with entradas as (
-  select fazenda_id, categoria_id, data, quantidade
+  select fazenda_id, categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL')
   union all
-  select fazenda_destino_id as fazenda_id, categoria_id, data, quantidade
+  select fazenda_destino_id as fazenda_id, categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo = 'TRANSFERENCIA'
   union all
-  select fazenda_id, categoria_destino_id as categoria_id, data, quantidade
+  select fazenda_id, categoria_destino_id as categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo in ('MUDANCA_CATEGORIA', 'DESMAME')
 ),
 saidas as (
-  select fazenda_id, categoria_id, data, quantidade
+  select fazenda_id, categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME')
   union all
-  select fazenda_origem_id as fazenda_id, categoria_id, data, quantidade
+  select fazenda_origem_id as fazenda_id, categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo = 'TRANSFERENCIA'
   union all
-  select fazenda_id, categoria_id, data, quantidade
+  select fazenda_id, categoria_id, quantidade
   from movimentacoes_rebanho
   where tipo = 'MUDANCA_CATEGORIA'
+),
+entradas_agg as (
+  select fazenda_id, categoria_id, sum(quantidade) as total
+  from entradas
+  group by fazenda_id, categoria_id
+),
+saidas_agg as (
+  select fazenda_id, categoria_id, sum(quantidade) as total
+  from saidas
+  group by fazenda_id, categoria_id
 )
 select
   f.id as fazenda_id,
   f.nome as fazenda_nome,
   c.id as categoria_id,
   c.nome as categoria_nome,
-  coalesce(sum(e.quantidade), 0) - coalesce(sum(s.quantidade), 0) as saldo_atual
+  coalesce(e.total, 0) - coalesce(s.total, 0) as saldo_atual
 from fazendas f
 cross join categorias_animal c
-left join entradas e on e.fazenda_id = f.id and e.categoria_id = c.id
-left join saidas s on s.fazenda_id = f.id and s.categoria_id = c.id
-where c.ativa = true and f.ativo = true
-group by f.id, f.nome, c.id, c.nome;
+left join entradas_agg e on e.fazenda_id = f.id and e.categoria_id = c.id
+left join saidas_agg s on s.fazenda_id = f.id and s.categoria_id = c.id
+where c.ativa = true and f.ativo = true;
 
 -- ---------------------------------------------------------------------
 -- fn_resumo_rebanho_atual (migração 033): alimenta o painel inicial —
