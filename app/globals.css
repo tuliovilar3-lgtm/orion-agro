@@ -45,3 +45,11 @@ body {
   color: var(--color-text-primary);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
+
+/* recharts marca elementos internos (svg, grupos de barra/linha) como
+   focáveis por acessibilidade — sem isso o navegador desenha um contorno
+   preto de foco padrão ao clicar em qualquer barra/linha/ponto */
+.recharts-wrapper :focus,
+.recharts-wrapper svg:focus {
+  outline: none;
+}

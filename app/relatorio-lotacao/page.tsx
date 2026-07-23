@@ -13,7 +13,6 @@ import {
   opcoesSafra,
   opcoesAno,
 } from '@/lib/periodo'
-import { nomeMes } from '@/components/relatorios/tipos'
 import KpiCard from '@/components/relatorios/KpiCard'
 import { corCategorica } from '@/lib/relatorio-cores'
 import {
@@ -64,10 +63,41 @@ type PastoLotacao = {
 
 const SERIES = [
   { key: 'rebanho_medio', label: 'Rebanho Médio (cab.)', tipo: 'bar' as const, cor: corCategorica(0), casas: 0 },
-  { key: 'lotacao', label: 'Lotação (UA/ha)', tipo: 'linha' as const, cor: corCategorica(1), casas: 2 },
-  { key: 'peso_medio', label: 'Peso Médio (kg)', tipo: 'linha' as const, cor: corCategorica(2), casas: 1 },
-  { key: 'area_media', label: 'Área (ha)', tipo: 'linha' as const, cor: corCategorica(7), casas: 0 },
+  {
+    key: 'lotacao',
+    label: 'Lotação (UA/ha)',
+    tipo: 'linha' as const,
+    cor: corCategorica(1),
+    casas: 2,
+    labelPos: 'top' as const,
+    labelOffset: 8,
+  },
+  {
+    key: 'peso_medio',
+    label: 'Peso Médio (kg)',
+    tipo: 'linha' as const,
+    cor: corCategorica(2),
+    casas: 1,
+    labelPos: 'bottom' as const,
+    labelOffset: 8,
+  },
+  {
+    key: 'area_media',
+    label: 'Área (ha)',
+    tipo: 'linha' as const,
+    cor: corCategorica(7),
+    casas: 0,
+    labelPos: 'top' as const,
+    labelOffset: 24,
+  },
 ] as const
+
+// subconjunto tipado das séries em linha (com labelPos/labelOffset) —
+// SERIES.filter(s => s.tipo === 'linha') não preserva esse refinamento de
+// tipo pro TS (filter não é um type guard), por isso a lista separada
+const LINHAS_SERIE = SERIES.filter(
+  (s): s is Extract<(typeof SERIES)[number], { tipo: 'linha' }> => s.tipo === 'linha'
+)
 
 type SerieKey = (typeof SERIES)[number]['key']
 
@@ -83,6 +113,13 @@ function dominioLinha(valores: (number | null)[]) {
   const max = Math.max(...validos)
   const span = max - min || Math.max(Math.abs(max), 1)
   return [min - span * 0.15, max + span * 0.15]
+}
+
+// "jan/26" — formato definido junto com o usuário na prévia, mais
+// compacto que o nomeMes() (que dá "jan. de 26") usado em Relatórios
+function mesCurto(ano: number, mes: number) {
+  const nome = new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
+  return `${nome}/${String(ano).slice(2)}`
 }
 
 function formatarValor(valor: number | null, casas: number) {
@@ -268,7 +305,7 @@ export default function RelatorioLotacaoPage() {
     const lotacao =
       l.peso_medio != null && l.area_media > 0 ? (l.rebanho_medio * l.peso_medio) / KG_POR_UA / l.area_media : null
     return {
-      mesLabel: nomeMes(`${l.ano}-${String(l.mes).padStart(2, '0')}`),
+      mesLabel: mesCurto(l.ano, l.mes),
       rebanho_medio: l.rebanho_medio,
       peso_medio: l.peso_medio,
       area_media: l.area_media,
@@ -521,7 +558,7 @@ export default function RelatorioLotacaoPage() {
                       </Bar>
                     )}
 
-                    {SERIES.filter((s) => s.tipo === 'linha' && visiveis.has(s.key)).map((s) => (
+                    {LINHAS_SERIE.filter((s) => visiveis.has(s.key)).map((s) => (
                       <Line
                         key={s.key}
                         type="monotone"
@@ -539,7 +576,8 @@ export default function RelatorioLotacaoPage() {
                       >
                         <LabelList
                           dataKey={s.key}
-                          position="top"
+                          position={s.labelPos}
+                          offset={s.labelOffset}
                           formatter={(v: any) => formatarValor(v, s.casas)}
                           fill={s.cor}
                           fontSize={9.5}
