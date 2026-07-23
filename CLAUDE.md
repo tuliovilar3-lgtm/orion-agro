@@ -956,7 +956,12 @@ os dois relatórios respondem perguntas diferentes de propósito.
 
 **Resumo do período** (4 KPI cards acima do gráfico, sem o rótulo "média ponderada" — decisão
 explícita do usuário, redundante ali) é inteiramente derivado das linhas mensais no frontend, sem
-chamada adicional ao banco — mesma lógica de ponderação por dias do parágrafo acima.
+chamada adicional ao banco — mesma lógica de ponderação por dias do parágrafo acima. Cada card ganha
+`corDestaque` (`components/relatorios/KpiCard.tsx`, prop nova e opcional) ligando visualmente o
+indicador à cor da sua série no gráfico logo abaixo — borda esquerda de 3px + bolinha ao lado do
+rótulo, nunca tingindo o card inteiro nem o número (que continua `text-primary`, mesma hierarquia
+dos outros KPI cards do sistema). Sem `corDestaque`, o card renderiza exatamente como antes (Painel,
+Relatórios) — mudança aditiva, não quebra nenhum uso existente.
 
 **Gráfico combinado** (Rebanho Médio em barra + Lotação/Peso Médio/Área em linha, `recharts`
 `ComposedChart`) — pedido do usuário inspirado num modelo de dashboard genérico que ele encontrou.

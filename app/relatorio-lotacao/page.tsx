@@ -489,10 +489,26 @@ export default function RelatorioLotacaoPage() {
           <>
             {/* resumo do período */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <KpiCard label="Rebanho Médio" value={`${formatQuantidade(rebanhoMedioPeriodo)} cab.`} />
-              <KpiCard label="Peso Médio" value={`${formatPeso(pesoMedioPeriodo)} kg`} />
-              <KpiCard label="Área Média" value={`${formatArea(areaMediaPeriodo)} ha`} />
-              <KpiCard label="Lotação" value={`${formatLotacao(lotacaoPeriodo)} UA/ha`} />
+              <KpiCard
+                label="Rebanho Médio"
+                value={`${formatQuantidade(rebanhoMedioPeriodo)} cab.`}
+                corDestaque={SERIES[0].cor}
+              />
+              <KpiCard
+                label="Peso Médio"
+                value={`${formatPeso(pesoMedioPeriodo)} kg`}
+                corDestaque={SERIES.find((s) => s.key === 'peso_medio')!.cor}
+              />
+              <KpiCard
+                label="Área Média"
+                value={`${formatArea(areaMediaPeriodo)} ha`}
+                corDestaque={SERIES.find((s) => s.key === 'area_media')!.cor}
+              />
+              <KpiCard
+                label="Lotação"
+                value={`${formatLotacao(lotacaoPeriodo)} UA/ha`}
+                corDestaque={SERIES.find((s) => s.key === 'lotacao')!.cor}
+              />
             </div>
 
             {/* gráfico combinado */}
