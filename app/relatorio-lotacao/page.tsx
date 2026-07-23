@@ -495,16 +495,18 @@ export default function RelatorioLotacaoPage() {
                     <YAxis yAxisId="lotacao" hide domain={dominioLinha(dadosGrafico.map((d) => d.lotacao))} />
                     <YAxis yAxisId="peso_medio" hide domain={dominioLinha(dadosGrafico.map((d) => d.peso_medio))} />
                     <YAxis yAxisId="area_media" hide domain={dominioLinha(dadosGrafico.map((d) => d.area_media))} />
-                    <Tooltip content={<TooltipMensal series={SERIES} visiveis={visiveis} />} />
+                    <Tooltip cursor={false} content={<TooltipMensal series={SERIES} visiveis={visiveis} />} />
 
                     {visiveis.has('rebanho_medio') && (
                       <Bar
                         yAxisId="rebanho_medio"
                         dataKey="rebanho_medio"
-                        fill={SERIES[0].cor}
-                        fillOpacity={destaque && destaque !== 'rebanho_medio' ? 0.15 : 1}
+                        fill="#E4F3F0"
+                        fillOpacity={destaque && destaque !== 'rebanho_medio' ? 0.4 : 1}
+                        maxBarSize={40}
                         radius={[3, 3, 0, 0]}
                         isAnimationActive={false}
+                        activeBar={{ stroke: 'none' }}
                         onMouseEnter={() => setDestaque('rebanho_medio')}
                         onClick={() => setDestaque('rebanho_medio')}
                       >
@@ -522,13 +524,14 @@ export default function RelatorioLotacaoPage() {
                     {SERIES.filter((s) => s.tipo === 'linha' && visiveis.has(s.key)).map((s) => (
                       <Line
                         key={s.key}
+                        type="monotone"
                         yAxisId={s.key}
                         dataKey={s.key}
                         stroke={s.cor}
                         strokeWidth={destaque === s.key ? 3.5 : 2.5}
                         strokeOpacity={destaque && destaque !== s.key ? 0.15 : 1}
                         dot={{ r: destaque === s.key ? 5 : 4, fill: '#fff', stroke: s.cor, strokeWidth: 2 }}
-                        activeDot={{ r: 5 }}
+                        activeDot={{ r: 5, fill: s.cor, stroke: '#fff', strokeWidth: 2 }}
                         isAnimationActive={false}
                         connectNulls
                         onMouseEnter={() => setDestaque(s.key)}
