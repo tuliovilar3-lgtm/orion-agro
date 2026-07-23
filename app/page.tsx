@@ -14,8 +14,8 @@ import {
   opcoesSafra,
   opcoesAno,
 } from '@/lib/periodo'
-import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { corCategorica } from '@/lib/relatorio-cores'
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
+import { corCategorica, CORES_BINARIAS } from '@/lib/relatorio-cores'
 import KpiCard from '@/components/relatorios/KpiCard'
 import { agruparPorChave, formatarDataBr, mediaPonderada } from '@/components/relatorios/tipos'
 import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components/FluxoRebanho'
@@ -31,12 +31,25 @@ type ResumoLinha = {
   categoria_id: string
   categoria_nome: string
   grupo_nome: string
+  sexo: 'MACHO' | 'FEMEA'
   quantidade: number
   peso_medio_kg: number | null
 }
 
-const NOMES_GRUPO: Record<string, string> = { BEZERRO: 'Bezerro', JOVEM: 'Jovem', ADULTO: 'Adulto' }
-const ORDEM_GRUPO = ['BEZERRO', 'JOVEM', 'ADULTO']
+function formaSetor(props: any) {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, isActive } = props
+  return (
+    <Sector
+      cx={cx}
+      cy={cy}
+      innerRadius={innerRadius}
+      outerRadius={isActive ? outerRadius + 6 : outerRadius}
+      startAngle={startAngle}
+      endAngle={endAngle}
+      fill={fill}
+    />
+  )
+}
 
 export default function PainelPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
@@ -46,6 +59,9 @@ export default function PainelPage() {
   const [resumo, setResumo] = useState<ResumoLinha[]>([])
   const [loadingResumo, setLoadingResumo] = useState(true)
   const [areaPecuaria, setAreaPecuaria] = useState<number | null>(null)
+
+  const [hoverSexoIndex, setHoverSexoIndex] = useState<number | null>(null)
+  const [hoverCategoriaIndex, setHoverCategoriaIndex] = useState<number | null>(null)
 
   const [modoFiltro, setModoFiltro] = useState<'mes' | 'safra' | 'ano' | 'periodo'>('safra')
   const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
@@ -172,18 +188,40 @@ export default function PainelPage() {
   const pesoVivoTotal = resumo.reduce((s, r) => s + (r.peso_medio_kg != null ? r.peso_medio_kg * r.quantidade : 0), 0)
   const lotacaoAtual = areaPecuaria != null && areaPecuaria > 0 ? pesoVivoTotal / KG_POR_UA / areaPecuaria : null
 
-  const porGrupo = ORDEM_GRUPO.map((grupo) => ({
-    grupo: NOMES_GRUPO[grupo],
-    quantidade: resumo.filter((r) => r.grupo_nome === grupo).reduce((s, r) => s + r.quantidade, 0),
-  })).filter((g) => g.quantidade > 0)
-
   const porCategoria = [...agruparPorChave(resumo, (r) => r.categoria_nome).entries()]
     .map(([nome, rs]) => ({
       nome,
+      sexo: rs[0].sexo,
       quantidade: rs.reduce((s, r) => s + r.quantidade, 0),
       pesoMedio: mediaPonderada(rs.map((r) => ({ valor: r.peso_medio_kg, peso: r.quantidade }))),
     }))
     .sort((a, b) => b.quantidade - a.quantidade)
+
+  // agrupada por sexo (fêmeas contíguas, depois machos) pro anel externo
+  // da rosca ficar visualmente alinhado com o anel interno de sexo
+  const porCategoriaPorSexo = [...porCategoria].sort((a, b) =>
+    a.sexo === b.sexo ? b.quantidade - a.quantidade : a.sexo === 'FEMEA' ? -1 : 1
+  )
+
+  const porSexo = (['MACHO', 'FEMEA'] as const)
+    .map((sx) => {
+      const rs = porCategoria.filter((c) => c.sexo === sx)
+      return {
+        sexo: sx,
+        label: sx === 'MACHO' ? 'Machos' : 'Fêmeas',
+        quantidade: rs.reduce((s, c) => s + c.quantidade, 0),
+        pesoMedio: mediaPonderada(rs.map((c) => ({ valor: c.pesoMedio, peso: c.quantidade }))),
+      }
+    })
+    .filter((s) => s.quantidade > 0)
+
+  const infoCategoria = hoverCategoriaIndex != null ? porCategoriaPorSexo[hoverCategoriaIndex] : null
+  const infoSexo = hoverSexoIndex != null ? porSexo[hoverSexoIndex] : null
+  const infoCentral = infoCategoria
+    ? { nome: infoCategoria.nome, quantidade: infoCategoria.quantidade, pesoMedio: infoCategoria.pesoMedio }
+    : infoSexo
+      ? { nome: infoSexo.label, quantidade: infoSexo.quantidade, pesoMedio: infoSexo.pesoMedio }
+      : { nome: 'Total', quantidade: totalCabecas, pesoMedio: pesoMedioGeral }
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
@@ -253,41 +291,125 @@ export default function PainelPage() {
           ) : (
             <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="rounded-card border border-border bg-surface p-5">
-                <h3 className="mb-3 text-sm font-semibold text-text-primary">Distribuição por grupo faixa etária</h3>
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie data={porGrupo} dataKey="quantidade" nameKey="grupo" outerRadius={80} label>
-                      {porGrupo.map((_, i) => (
-                        <Cell key={i} fill={corCategorica(i)} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => formatQuantidade(v)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <h3 className="mb-3 text-sm font-semibold text-text-primary">Distribuição do rebanho atual</h3>
+                <div className="space-y-2.5">
+                  {porCategoria.map((c) => {
+                    const pct = totalCabecas ? (c.quantidade / totalCabecas) * 100 : 0
+                    return (
+                      <div key={c.nome}>
+                        <div className="mb-1 flex justify-between text-xs">
+                          <span className="text-text-primary">{c.nome}</span>
+                          <span className="tabular-nums text-text-secondary">
+                            {formatQuantidade(c.quantidade)} cab. ·{' '}
+                            {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'} ·{' '}
+                            {pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-brand-100">
+                          <div className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="mt-3 flex items-baseline justify-between border-t border-border pt-3">
+                  <span className="text-sm font-bold text-text-primary">Total</span>
+                  <span className="tabular-nums text-sm font-bold text-text-primary">
+                    {formatQuantidade(totalCabecas)} cab. · {formatPeso(pesoMedioGeral)} kg
+                  </span>
+                </div>
               </div>
 
-              <div className="overflow-x-auto rounded-card border border-border bg-surface p-5">
-                <h3 className="mb-3 text-sm font-semibold text-text-primary">Cabeças por categoria</h3>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-text-secondary">
-                      <th className="py-1.5 font-medium">Categoria</th>
-                      <th className="py-1.5 text-right font-medium">Qtde.</th>
-                      <th className="py-1.5 text-right font-medium">Peso médio</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {porCategoria.map((c) => (
-                      <tr key={c.nome} className="border-b border-border last:border-0">
-                        <td className="py-1.5 text-text-primary">{c.nome}</td>
-                        <td className="py-1.5 text-right tabular-nums text-text-primary">{formatQuantidade(c.quantidade)}</td>
-                        <td className="py-1.5 text-right tabular-nums text-text-secondary">
-                          {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="rounded-card border border-border bg-surface p-5">
+                <h3 className="mb-1 text-sm font-semibold text-text-primary">Distribuição sexo × categoria</h3>
+                <p className="mb-2 text-xs text-text-muted">Anel interno: sexo · Anel externo: categoria</p>
+                <div className="relative">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <PieChart>
+                      <Pie
+                        id="anel-sexo"
+                        data={porSexo}
+                        dataKey="quantidade"
+                        nameKey="label"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={42}
+                        outerRadius={62}
+                        isAnimationActive={false}
+                        shape={formaSetor}
+                        onMouseEnter={(_: any, i: number) => setHoverSexoIndex(i)}
+                        onMouseLeave={() => setHoverSexoIndex(null)}
+                        onClick={(_: any, i: number) => setHoverSexoIndex(i)}
+                      >
+                        {porSexo.map((s) => (
+                          <Cell
+                            key={s.sexo}
+                            fill={CORES_BINARIAS[s.sexo === 'MACHO' ? 0 : 1]}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        ))}
+                      </Pie>
+                      <Pie
+                        id="anel-categoria"
+                        data={porCategoriaPorSexo}
+                        dataKey="quantidade"
+                        nameKey="nome"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={68}
+                        outerRadius={88}
+                        isAnimationActive={false}
+                        shape={formaSetor}
+                        onMouseEnter={(_: any, i: number) => setHoverCategoriaIndex(i)}
+                        onMouseLeave={() => setHoverCategoriaIndex(null)}
+                        onClick={(_: any, i: number) => setHoverCategoriaIndex(i)}
+                      >
+                        {porCategoriaPorSexo.map((c, i) => (
+                          <Cell
+                            key={c.nome}
+                            fill={corCategorica(i)}
+                            stroke="#fff"
+                            strokeWidth={1}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-sm font-extrabold tabular-nums text-text-primary">
+                      {formatQuantidade(infoCentral.quantidade)}
+                    </span>
+                    <span className="max-w-[90px] truncate text-[10px] font-medium text-text-secondary">
+                      {infoCentral.nome}
+                    </span>
+                    <span className="text-[10px] tabular-nums text-text-muted">
+                      {infoCentral.pesoMedio != null ? `${formatPeso(infoCentral.pesoMedio)} kg` : '—'}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  {porCategoriaPorSexo.map((c, i) => {
+                    const pct = totalCabecas ? (c.quantidade / totalCabecas) * 100 : 0
+                    return (
+                      <div
+                        key={c.nome}
+                        onMouseEnter={() => setHoverCategoriaIndex(i)}
+                        onMouseLeave={() => setHoverCategoriaIndex(null)}
+                        onClick={() => setHoverCategoriaIndex(i)}
+                        className="flex cursor-pointer items-center gap-1.5"
+                      >
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-sm"
+                          style={{ background: corCategorica(i) }}
+                        />
+                        <span className="truncate text-text-secondary">
+                          {c.nome} <b className="text-text-primary">{pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</b>
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           )}

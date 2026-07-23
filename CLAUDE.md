@@ -860,9 +860,29 @@ não filtra por subtipo (Corte vs. Leite), já que lotação é sobre área de p
 independente de qual subtipo. Mostra "—" quando não há área de Pecuária declarada (sem teto pra
 dividir).
 
-**Distribuição por Grupo Faixa Etária** (Bezerro/Jovem/Adulto) vira um gráfico de pizza; **Cabeças
-por categoria** é uma tabela ordenada por quantidade decrescente — ambos derivados do mesmo resumo,
-sem chamada adicional ao banco.
+**Distribuição do rebanho atual** substituiu a antiga tabela "Cabeças por categoria" (e o pie chart
+"Distribuição por Grupo Faixa Etária", removido) — lista de barras horizontais (categoria + peso
+médio + participação %), mesmo padrão visual já usado em "Distribuição do rebanho final"
+(`app/relatorio-movimentacao/page.tsx`), mas com `bg-brand-500` em vez do preto/cinza legado daquela
+tela (nunca copiado 1:1) e com peso médio por categoria adicionado. Linha de rodapé "Total" soma
+cabeças e mostra peso médio ponderado, sem o rótulo "média ponderada" (redundante ali, diferente do
+KPI card "Peso médio geral" que mantém o rótulo).
+
+**Distribuição sexo × categoria** é uma rosca aninhada (anel interno: Fêmeas/Machos com
+`CORES_BINARIAS`; anel externo: categoria com `corCategorica`, fatias agrupadas contíguas por sexo
+via `porCategoriaPorSexo`) — pedido do usuário inspirado num modelo de dashboard genérico que ele
+encontrou, adaptado às paletas já estabelecidas do sistema em vez de copiar as cores do exemplo.
+Requer o campo `sexo` em `fn_resumo_rebanho_atual` (migração 035 — precisou `drop function` antes do
+`create`, já que Postgres não permite mudar as colunas de um `returns table` existente via `create or
+replace`). Interativo: passar o mouse ou clicar em qualquer fatia (dos dois anéis) ou item da legenda
+destaca a fatia (`shape` customizado com `Sector` + `isActive`, não o `activeShape`/`activeIndex`
+antigo do recharts v2 — removido na v3) e atualiza um texto centralizado na rosca com
+quantidade/peso médio daquele sexo ou categoria; sem hover, mostra o total geral. As duas `<Pie>`
+precisam de `id` únicos (`anel-sexo`/`anel-categoria`) — recomendação do recharts pra múltiplos Pies
+no mesmo chart. `isAnimationActive={false}` nas duas: a animação de entrada padrão do recharts v3
+depende de `requestAnimationFrame`, que pode nunca resolver em abas em segundo plano/sem foco real
+(foi assim que a rosca apareceu vazia — zero `<path>` no DOM — ao testar via automação de navegador;
+o mesmo risco existe em qualquer gráfico de pizza já existente no app, ver nota abaixo).
 
 **Movimentações do período**: ao contrário do resto do painel (que é sempre "hoje"), essa seção usa
 o mesmo filtro de período Mês/Ano Safra/Ano Calendário/Personalizado já padronizado no resto do

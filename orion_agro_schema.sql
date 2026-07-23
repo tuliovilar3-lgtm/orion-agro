@@ -2526,6 +2526,7 @@ returns table(
   categoria_id uuid,
   categoria_nome text,
   grupo_nome text,
+  sexo sexo_categoria,
   quantidade integer,
   peso_medio_kg numeric
 )
@@ -2539,6 +2540,7 @@ begin
     e.categoria_id,
     e.categoria_nome,
     g.nome as grupo_nome,
+    c.sexo,
     e.saldo_atual::int as quantidade,
     coalesce(
       (select p.peso_medio_kg from pesagens p
