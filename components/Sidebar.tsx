@@ -74,6 +74,13 @@ const ICONS = {
       <rect x="14" y="12" width="7" height="9" rx="1" />
     </Icon>
   ),
+  lotacao: (
+    <Icon>
+      <path d="M4 18a8 8 0 0 1 16 0" />
+      <path d="M12 18 15.5 11" />
+      <path d="M12 18h.01" />
+    </Icon>
+  ),
   areas: (
     <Icon>
       <path d="M4 4h16v16H4z" />
@@ -148,6 +155,7 @@ const GROUPS: NavGroup[] = [
       { label: 'Pesagens', href: '/pesagens', icon: ICONS.pesagens },
       { label: 'Resumo de Movimentação de Rebanho', href: '/relatorio-movimentacao', icon: ICONS.relatorio },
       { label: 'Relatórios de Movimentações', href: '/relatorios', icon: ICONS.relatorios },
+      { label: 'Relatório de Lotação', href: '/relatorio-lotacao', icon: ICONS.lotacao },
     ],
   },
   {

@@ -921,3 +921,73 @@ Reaproveitado em dois lugares, cada um buscando `fn_relatorio_movimentacao_reban
 próprios filtros: `app/relatorio-movimentacao/page.tsx` (substituiu os cards antigos de
 Estoque/Entradas/Saídas em texto puro, mantendo a tabela detalhada por categoria abaixo) e o Painel
 (`app/page.tsx`, seção "Movimentações do período").
+
+## Relatório de Lotação
+
+`app/relatorio-lotacao/page.tsx` — evolução mensal do rebanho médio, peso médio, área média e
+lotação, considerando a área em Pecuária. Mesmo padrão de filtro (fazendas multi-select + período
+Mês/Ano Safra/Ano Calendário/Personalizado, `lib/periodo.ts`) já usado em `app/relatorios/page.tsx`,
+com o mesmo capping em "hoje" já usado pro rebanho (não existe previsão aqui — diferente de
+`app/gestao-areas/page.tsx`, cuja "Ano Safra"/"Ano Calendário" atual vai até o fim do mês corrente
+como projeção). Essa escolha é deliberada: como o relatório pareia área com rebanho médio (que não
+tem previsão possível), deixar a área projetar pro futuro enquanto o rebanho para em "hoje" geraria
+uma Lotação sem sentido — por isso os números de "Área Média" aqui podem divergir dos mostrados em
+Gestão de Áreas pro mesmo Ano Safra/Ano Calendário quando o período ainda não terminou; não é bug,
+os dois relatórios respondem perguntas diferentes de propósito.
+
+**Cálculo mensal** (migração 036, três funções novas):
+- `fn_estoque_rebanho_na_data(fazendas[], data)`: mesma lógica corrigida de `vw_estoque_rebanho`
+  (migração 034 — entradas/saidas agregadas antes do join, sem fan-out), só que parametrizada por
+  data (em vez de só "hoje") e somando direto as fazendas selecionadas.
+- `fn_indicadores_rebanho_dia(fazendas[], data)`: cabeças totais e peso vivo total (quantidade ×
+  peso resolvido por categoria, mesma resolução de pesagem mais recente já usada em
+  `fn_resumo_rebanho_atual`) das fazendas selecionadas numa data — o "valor do dia".
+- `fn_relatorio_lotacao_mensal(fazendas[], data_inicio, data_fim)`: uma linha por mês, integrando
+  `fn_indicadores_rebanho_dia` dia a dia (mesmo princípio de `fn_area_media_ponderada`, só que pra
+  rebanho/peso em vez de área) — **Rebanho Médio** = média diária de cabeças (não só o saldo final,
+  reflete entradas/saídas no meio do mês); **Peso Médio** = ponderado pela cabeça de cada dia (não
+  só a última pesagem do mês — pedido explícito do usuário, pra ficar coerente com o resumo do
+  período); **Área Média** reaproveita `fn_area_media_ponderada` somada por fazenda. Retorna também
+  `dias_no_mes`, pro frontend derivar o resumo do período inteiro ponderando pelos dias de cada mês
+  (`soma(valor_mês × dias_mês) / soma(dias_mês)` — mesmo princípio já usado em
+  `fn_relatorio_distribuicao_area`, sem precisar reconsultar o banco). **Lotação** não é uma coluna
+  própria — é sempre derivada no frontend como `(Rebanho Médio × Peso Médio) / 450 / Área Média`,
+  igual a "Lotação atual" do Painel, só que por mês/período em vez de só hoje.
+
+**Resumo do período** (4 KPI cards acima do gráfico, sem o rótulo "média ponderada" — decisão
+explícita do usuário, redundante ali) é inteiramente derivado das linhas mensais no frontend, sem
+chamada adicional ao banco — mesma lógica de ponderação por dias do parágrafo acima.
+
+**Gráfico combinado** (Rebanho Médio em barra + Lotação/Peso Médio/Área em linha, `recharts`
+`ComposedChart`) — pedido do usuário inspirado num modelo de dashboard genérico que ele encontrou.
+Cada série tem seu próprio eixo Y escondido (`hide`, domínio calculado em JS a partir dos dados, não
+via string mágica do recharts) — decisão deliberada: as 4 séries têm grandezas muito diferentes
+(cabeças ~900, UA/ha ~0,4, kg ~300, ha ~1500), então compartilhar um eixo faria a maioria virar uma
+linha reta. O eixo da barra (Rebanho Médio) começa em 0 sempre (`dominioBar`) — nunca com folga
+embaixo como as linhas (`dominioLinha`), porque uma barra representa magnitude a partir de zero;
+recortar a base distorceria a altura visualmente. `isAnimationActive={false}` em todas as
+séries — mesmo motivo já documentado na seção do Painel (a animação de entrada do recharts v3
+depende de `requestAnimationFrame`, que pode não resolver em certas condições).
+
+Interatividade: **rótulo de valor sempre visível** em cada barra/ponto (`LabelList`, pedido explícito
+do usuário — antes só aparecia no hover); **destaque por série** ao passar o mouse ou clicar numa
+linha, barra, ou item da legenda (opacidade reduzida nas outras, traço mais grosso na destacada) —
+sem interação nenhuma, todas ficam com opacidade normal (não começam apagadas); **legenda clicável**
+esconde/mostra a série (`visiveis`, um `Set` de chaves); tooltip por mês no hover sobre a área do
+gráfico (`Tooltip` customizado, mostra só as séries visíveis). O estado de destaque (`destaque`) é só
+hover/clique momentâneo, nunca "trava" — sair do gráfico sempre limpa (`onMouseLeave` no wrapper como
+rede de segurança), decisão explícita do usuário depois de testar uma versão com toggle que travava.
+
+**Lotação atual por pasto** só aparece com `configuracoes.controla_pasto` ligado — é uma **fotografia
+de hoje** (não do período filtrado), mesmo princípio de `fn_relatorio_rebanho_por_pasto` (que já é
+"onde o rebanho está agora", não uma agregação por intervalo). Chamada uma vez por fazenda
+selecionada (a função já existente é de fazenda única) e agregada no frontend por `pasto_id`
+(globalmente único, sem risco de colisão entre fazendas). Lotação por pasto = `(peso vivo total do
+pasto / 450) / pastos.area_ha` — `null` (exibido como "—") quando o pasto não tem `area_ha`
+declarada (ex.: pasto "Geral", que nunca teve área própria atribuída). Escolha deliberada de não
+fazer isso como série histórica mensal por pasto: rastrear fazenda×categoria×pasto×mês seria
+complexidade desproporcional ao ganho — a pergunta que esse bloco responde é "que pasto está
+sobrecarregado agora", não uma tendência.
+
+Link "Relatório de Lotação" no grupo "Rebanho" da sidebar, com ícone próprio (`ICONS.lotacao`, um
+medidor/gauge).
