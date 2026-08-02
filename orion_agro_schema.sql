@@ -65,6 +65,10 @@ create table fazendas (
   -- fazenda ficam travados (ver fn_bloquear_saldo_inicial_confirmado)
   saldo_inicial_confirmado    boolean not null default false,
   saldo_inicial_confirmado_em timestamptz,
+  -- contorno da propriedade (GeoJSON, WGS84) — importado de KML, só
+  -- referência visual de fundo pra desenhar os pastos por cima; nunca
+  -- obrigatório
+  geometria       jsonb,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
@@ -970,6 +974,10 @@ create table pastos (
   -- pasto "Geral" auto-criado — mesma proteção de sistema do módulo
   -- acima (ver fn_validar_delete_pasto)
   sistema         boolean not null default false,
+  -- contorno do pasto/talhão (GeoJSON, WGS84) — desenhado no mapa ou
+  -- importado de KML casando pelo nome; quando presente, alimenta o
+  -- cálculo automático de area_ha, mas nunca é obrigatório
+  geometria       jsonb,
   created_at      timestamptz not null default now(),
   constraint uq_pasto_nome_modulo unique (modulo_id, nome)
 );

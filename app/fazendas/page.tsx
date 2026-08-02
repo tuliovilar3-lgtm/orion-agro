@@ -7,6 +7,7 @@ import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatArea } from '@/lib/format'
 import SaldoInicialPanel from '@/components/fazendas/SaldoInicialPanel'
 import DistribuicaoAreaPanel from '@/components/fazendas/DistribuicaoAreaPanel'
+import ModulosPastosPanel from '@/components/fazendas/ModulosPastosPanel'
 
 type Fazenda = {
   id: string
@@ -31,25 +32,6 @@ type ChecagemEdicaoArea = {
   data_saldo_negativo: string | null
   tipo_uso_saldo_negativo: string | null
   saldo_minimo: number | null
-}
-
-type Modulo = {
-  id: string
-  fazenda_id: string
-  nome: string
-  ativo: boolean
-  ordem: number
-  sistema: boolean
-}
-
-type Pasto = {
-  id: string
-  modulo_id: string
-  nome: string
-  area_ha: number | null
-  ativo: boolean
-  ordem: number
-  sistema: boolean
 }
 
 type Aba = 'saldo' | 'area' | 'distribuicao' | 'pastos'
@@ -102,18 +84,6 @@ export default function FazendasPage() {
   const [loadingArea, setLoadingArea] = useState(false)
   const [salvandoArea, setSalvandoArea] = useState(false)
   const [avisoEdicaoAreaFutura, setAvisoEdicaoAreaFutura] = useState(false)
-
-  const [modulos, setModulos] = useState<Modulo[]>([])
-  const [pastos, setPastos] = useState<Pasto[]>([])
-  const [loadingPastos, setLoadingPastos] = useState(false)
-  const [processandoPastoId, setProcessandoPastoId] = useState<string | null>(null)
-  const [novoModuloNome, setNovoModuloNome] = useState('')
-  const [criandoModulo, setCriandoModulo] = useState(false)
-  const [novoPastoNomePorModulo, setNovoPastoNomePorModulo] = useState<Record<string, string>>({})
-  const [novoPastoAreaPorModulo, setNovoPastoAreaPorModulo] = useState<Record<string, string>>({})
-  const [criandoPastoModuloId, setCriandoPastoModuloId] = useState<string | null>(null)
-  const [confirmandoExclusaoModuloId, setConfirmandoExclusaoModuloId] = useState<string | null>(null)
-  const [confirmandoExclusaoPastoId, setConfirmandoExclusaoPastoId] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -258,13 +228,6 @@ export default function FazendasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaSelecionadaId, abaSelecionada])
 
-  useEffect(() => {
-    if (fazendaSelecionadaId && abaSelecionada === 'pastos') {
-      carregarModulosPastos(fazendaSelecionadaId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaSelecionadaId, abaSelecionada])
-
   function atualizarLinhaArea(tipoUsoId: string, valor: string) {
     setLinhasArea((prev) => prev.map((l) => (l.tipoUsoId === tipoUsoId ? { ...l, areaHa: valor } : l)))
   }
@@ -390,149 +353,6 @@ export default function FazendasPage() {
       alert('Erro ao atualizar: ' + error.message)
       setControlaSubtipoArea(!novoValor)
     }
-  }
-
-  async function carregarModulosPastos(fId: string) {
-    setLoadingPastos(true)
-    const { data: mods } = await supabase
-      .from('modulos')
-      .select('id, fazenda_id, nome, ativo, ordem, sistema')
-      .eq('fazenda_id', fId)
-      .order('ordem')
-    const modIds = (mods || []).map((m) => m.id)
-    const { data: pas } = modIds.length
-      ? await supabase
-          .from('pastos')
-          .select('id, modulo_id, nome, area_ha, ativo, ordem, sistema')
-          .in('modulo_id', modIds)
-          .order('ordem')
-      : { data: [] as Pasto[] }
-    setModulos(mods || [])
-    setPastos(pas || [])
-    setLoadingPastos(false)
-  }
-
-  async function handleCriarModulo(fId: string) {
-    if (!novoModuloNome.trim()) return
-    setCriandoModulo(true)
-    const proximaOrdem = modulos.length ? Math.max(...modulos.map((m) => m.ordem)) + 1 : 0
-    const { error } = await supabase.from('modulos').insert({
-      fazenda_id: fId,
-      nome: novoModuloNome.trim(),
-      tipo_utilizacao: 'PECUARIA',
-      ordem: proximaOrdem,
-    })
-    if (error) {
-      alert('Erro ao criar módulo: ' + error.message)
-    } else {
-      setNovoModuloNome('')
-      await carregarModulosPastos(fId)
-    }
-    setCriandoModulo(false)
-  }
-
-  async function handleRenomearModulo(m: Modulo, novoNome: string) {
-    if (!novoNome.trim() || novoNome.trim() === m.nome) return
-    const { error } = await supabase.from('modulos').update({ nome: novoNome.trim() }).eq('id', m.id)
-    if (error) {
-      alert('Erro ao renomear: ' + error.message)
-    } else {
-      setModulos((prev) => prev.map((x) => (x.id === m.id ? { ...x, nome: novoNome.trim() } : x)))
-    }
-  }
-
-  async function handleAlternarAtivoModulo(m: Modulo) {
-    const ativosNaFazenda = modulos.filter((x) => x.ativo)
-    if (m.ativo && ativosNaFazenda.length <= 1) return
-    setProcessandoPastoId(m.id)
-    const { error } = await supabase.from('modulos').update({ ativo: !m.ativo }).eq('id', m.id)
-    if (error) {
-      alert('Erro: ' + error.message)
-    } else {
-      setModulos((prev) => prev.map((x) => (x.id === m.id ? { ...x, ativo: !x.ativo } : x)))
-    }
-    setProcessandoPastoId(null)
-  }
-
-  async function handleCriarPasto(moduloId: string) {
-    const nome = (novoPastoNomePorModulo[moduloId] || '').trim()
-    if (!nome) return
-    const areaStr = novoPastoAreaPorModulo[moduloId] || ''
-    setCriandoPastoModuloId(moduloId)
-    const pastosDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
-    const proximaOrdem = pastosDoModulo.length ? Math.max(...pastosDoModulo.map((p) => p.ordem)) + 1 : 0
-    const { error } = await supabase.from('pastos').insert({
-      modulo_id: moduloId,
-      nome,
-      area_ha: areaStr ? parseFloat(areaStr) : null,
-      ordem: proximaOrdem,
-    })
-    if (error) {
-      alert('Erro ao criar pasto: ' + error.message)
-    } else {
-      setNovoPastoNomePorModulo((prev) => ({ ...prev, [moduloId]: '' }))
-      setNovoPastoAreaPorModulo((prev) => ({ ...prev, [moduloId]: '' }))
-      if (fazendaSelecionadaId) await carregarModulosPastos(fazendaSelecionadaId)
-    }
-    setCriandoPastoModuloId(null)
-  }
-
-  async function handleRenomearPasto(p: Pasto, novoNome: string) {
-    if (!novoNome.trim() || novoNome.trim() === p.nome) return
-    const { error } = await supabase.from('pastos').update({ nome: novoNome.trim() }).eq('id', p.id)
-    if (error) {
-      alert('Erro ao renomear: ' + error.message)
-    } else {
-      setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, nome: novoNome.trim() } : x)))
-    }
-  }
-
-  async function handleAtualizarAreaPasto(p: Pasto, novaAreaStr: string) {
-    const novaArea = novaAreaStr ? parseFloat(novaAreaStr) : null
-    if (novaArea === p.area_ha) return
-    const { error } = await supabase.from('pastos').update({ area_ha: novaArea }).eq('id', p.id)
-    if (error) {
-      alert('Erro: ' + error.message)
-    } else {
-      setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, area_ha: novaArea } : x)))
-    }
-  }
-
-  async function handleAlternarAtivoPasto(p: Pasto) {
-    const ativosDoModulo = pastos.filter((x) => x.modulo_id === p.modulo_id && x.ativo)
-    if (p.ativo && ativosDoModulo.length <= 1) return
-    setProcessandoPastoId(p.id)
-    const { error } = await supabase.from('pastos').update({ ativo: !p.ativo }).eq('id', p.id)
-    if (error) {
-      alert('Erro: ' + error.message)
-    } else {
-      setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, ativo: !x.ativo } : x)))
-    }
-    setProcessandoPastoId(null)
-  }
-
-  async function handleExcluirModulo(m: Modulo) {
-    setProcessandoPastoId(m.id)
-    const { error } = await supabase.from('modulos').delete().eq('id', m.id)
-    if (error) {
-      alert('Erro ao excluir: ' + error.message)
-    } else if (fazendaSelecionadaId) {
-      await carregarModulosPastos(fazendaSelecionadaId)
-    }
-    setConfirmandoExclusaoModuloId(null)
-    setProcessandoPastoId(null)
-  }
-
-  async function handleExcluirPasto(p: Pasto) {
-    setProcessandoPastoId(p.id)
-    const { error } = await supabase.from('pastos').delete().eq('id', p.id)
-    if (error) {
-      alert('Erro ao excluir: ' + error.message)
-    } else {
-      setPastos((prev) => prev.filter((x) => x.id !== p.id))
-    }
-    setConfirmandoExclusaoPastoId(null)
-    setProcessandoPastoId(null)
   }
 
   return (
@@ -887,209 +707,7 @@ export default function FazendasPage() {
 
             {abaSelecionada === 'distribuicao' && <DistribuicaoAreaPanel fazendaId={fazendaSelecionadaId} />}
 
-            {abaSelecionada === 'pastos' &&
-              controlaPasto &&
-              (loadingPastos ? (
-                <p className="mt-4 text-sm text-text-secondary">Carregando...</p>
-              ) : (
-                <div className="mt-4">
-                  <p className="text-sm text-text-secondary">
-                    Cada módulo roda o pastejo rotacionado entre seus pastos/talhões. A soma das áreas dos pastos
-                    não pode ultrapassar a área alocada em "Pecuária" na fazenda.
-                  </p>
-
-                  <div className="mt-4 space-y-4">
-                    {modulos.map((m) => {
-                      const pastosDoModulo = pastos.filter((p) => p.modulo_id === m.id).sort((a, b) => a.ordem - b.ordem)
-                      const ativosDoModulo = pastosDoModulo.filter((p) => p.ativo)
-                      const ativosNaFazenda = modulos.filter((x) => x.ativo)
-                      return (
-                        <div key={m.id} className={`rounded-control border border-border p-4 ${!m.ativo ? 'opacity-60' : ''}`}>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <input
-                              className={`w-48 font-semibold ${inputClass}`}
-                              defaultValue={m.nome}
-                              onBlur={(e) => handleRenomearModulo(m, e.target.value)}
-                            />
-                            {confirmandoExclusaoModuloId === m.id ? (
-                              <div className="flex flex-wrap items-center gap-2 text-xs">
-                                <span className="text-error">Excluir módulo "{m.nome}"?</span>
-                                <button
-                                  type="button"
-                                  disabled={processandoPastoId === m.id}
-                                  className="rounded-control bg-error px-2 py-1 font-semibold text-white disabled:opacity-50"
-                                  onClick={() => handleExcluirModulo(m)}
-                                >
-                                  {processandoPastoId === m.id ? 'Excluindo...' : 'Sim, excluir'}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="text-text-secondary underline"
-                                  onClick={() => setConfirmandoExclusaoModuloId(null)}
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-3">
-                                <button
-                                  type="button"
-                                  disabled={processandoPastoId === m.id || (m.ativo && ativosNaFazenda.length <= 1)}
-                                  title={m.ativo && ativosNaFazenda.length <= 1 ? 'Precisa haver ao menos um módulo ativo.' : undefined}
-                                  className="text-xs text-brand-500 underline disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline"
-                                  onClick={() => handleAlternarAtivoModulo(m)}
-                                >
-                                  {m.ativo ? 'Inativar módulo' : 'Ativar módulo'}
-                                </button>
-                                {!m.sistema && (
-                                  <button
-                                    type="button"
-                                    className="text-xs text-error underline"
-                                    onClick={() => setConfirmandoExclusaoModuloId(m.id)}
-                                  >
-                                    Excluir módulo
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          <table className="mt-3 w-full border-collapse text-sm">
-                            <thead>
-                              <tr>
-                                <th className="border border-border p-2 text-left text-text-secondary">Pasto/talhão</th>
-                                <th className="border border-border p-2 text-right text-text-secondary">Área (ha)</th>
-                                <th className="border border-border p-2 text-right text-text-secondary">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pastosDoModulo.map((p) => (
-                                <tr key={p.id} className={!p.ativo ? 'opacity-60' : ''}>
-                                  <td className="border border-border p-2">
-                                    <input
-                                      className={`w-full ${inputClass}`}
-                                      defaultValue={p.nome}
-                                      onBlur={(e) => handleRenomearPasto(p, e.target.value)}
-                                    />
-                                  </td>
-                                  <td className="border border-border p-2 text-right">
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
-                                      className={`w-28 text-right ${inputClass}`}
-                                      defaultValue={p.area_ha ?? ''}
-                                      onBlur={(e) => handleAtualizarAreaPasto(p, e.target.value)}
-                                    />
-                                  </td>
-                                  <td className="border border-border p-2 text-right">
-                                    {confirmandoExclusaoPastoId === p.id ? (
-                                      <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
-                                        <span className="text-error">Excluir?</span>
-                                        <button
-                                          type="button"
-                                          disabled={processandoPastoId === p.id}
-                                          className="rounded-control bg-error px-2 py-1 font-semibold text-white disabled:opacity-50"
-                                          onClick={() => handleExcluirPasto(p)}
-                                        >
-                                          {processandoPastoId === p.id ? '...' : 'Sim, excluir'}
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className="text-text-secondary underline"
-                                          onClick={() => setConfirmandoExclusaoPastoId(null)}
-                                        >
-                                          Cancelar
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center justify-end gap-3">
-                                        <button
-                                          type="button"
-                                          disabled={processandoPastoId === p.id || (p.ativo && ativosDoModulo.length <= 1)}
-                                          title={
-                                            p.ativo && ativosDoModulo.length <= 1
-                                              ? 'Precisa haver ao menos um pasto ativo no módulo.'
-                                              : undefined
-                                          }
-                                          className="text-xs text-brand-500 underline disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline"
-                                          onClick={() => handleAlternarAtivoPasto(p)}
-                                        >
-                                          {p.ativo ? 'Inativar' : 'Ativar'}
-                                        </button>
-                                        {!p.sistema && (
-                                          <button
-                                            type="button"
-                                            className="text-xs text-error underline"
-                                            onClick={() => setConfirmandoExclusaoPastoId(p.id)}
-                                          >
-                                            Excluir
-                                          </button>
-                                        )}
-                                      </div>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-
-                          <div className="mt-3 flex flex-wrap items-end gap-2">
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-text-secondary">
-                                Novo pasto/talhão
-                                <Required />
-                              </label>
-                              <input
-                                className={inputClass}
-                                value={novoPastoNomePorModulo[m.id] || ''}
-                                onChange={(e) => setNovoPastoNomePorModulo((prev) => ({ ...prev, [m.id]: e.target.value }))}
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-text-secondary">Área (ha)</label>
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                className={`w-24 ${inputClass}`}
-                                value={novoPastoAreaPorModulo[m.id] || ''}
-                                onChange={(e) => setNovoPastoAreaPorModulo((prev) => ({ ...prev, [m.id]: e.target.value }))}
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              disabled={criandoPastoModuloId === m.id}
-                              onClick={() => handleCriarPasto(m.id)}
-                              className="rounded-control border border-border px-3 py-1.5 text-sm text-text-primary disabled:opacity-50"
-                            >
-                              Adicionar pasto
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap items-end gap-2 border-t border-border pt-4">
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-text-secondary">
-                        Novo módulo
-                        <Required />
-                      </label>
-                      <input className={inputClass} value={novoModuloNome} onChange={(e) => setNovoModuloNome(e.target.value)} />
-                    </div>
-                    <button
-                      type="button"
-                      disabled={criandoModulo}
-                      onClick={() => handleCriarModulo(fazendaSelecionadaId)}
-                      className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
-                    >
-                      {criandoModulo ? 'Salvando...' : 'Adicionar módulo'}
-                    </button>
-                  </div>
-                </div>
-              ))}
+            {abaSelecionada === 'pastos' && controlaPasto && <ModulosPastosPanel fazendaId={fazendaSelecionadaId} />}
           </div>
         </>
       )}

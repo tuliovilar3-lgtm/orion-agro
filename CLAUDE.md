@@ -1019,3 +1019,83 @@ sobrecarregado agora", não uma tendência.
 
 Link "Relatório de Lotação" no grupo "Rebanho" da sidebar, com ícone próprio (`ICONS.lotacao`, um
 medidor/gauge).
+
+## Mapa de fazenda — Fase 1 (fundação: contorno + desenho/import de pastos)
+
+Primeira fase de um recurso maior de mapeamento geoespacial (inspirado em ferramentas como o
+Agrohub): desenhar/importar o contorno de cada pasto num mapa real, com área calculada
+automaticamente. Decisões estruturais (antes de qualquer código): **sem rota nova nem item de menu
+novo** — o mapa vive como um toggle **Lista | Mapa dentro da aba "Módulos e Pastos" já existente**
+em Fazendas (mesma fazenda selecionada no card acima, sem seletor próprio). Fase 2 (futura,
+não implementada) reaproveitará os mesmos polígonos num toggle Lista | Mapa **somente leitura** no
+relatório "Rebanho por pasto", com badges de categoria/quantidade sobre cada pasto (nunca ícones
+ilustrativos de animal — fora do alcance de gerar arte própria) e clique/hover mostrando UA e
+lotação do pasto. Fase 3 (futura) cobriria tempo de pastejo/descanso, derivado do histórico de
+`MUDANCA_PASTO` — ainda sem desenho algum. Talhões de agricultura ficam de fora desta rodada
+inteira, tratados como iniciativa separada.
+
+**Sem PostGIS** — decisão deliberada pela escala do projeto. `fazendas.geometria` e
+`pastos.geometria` (migração 037) são `jsonb` nullable guardando GeoJSON `Polygon`/`MultiPolygon` em
+WGS84 puro, sem tipo geométrico nativo do Postgres nem índice espacial — não há necessidade de
+consulta espacial (nenhum "quais pastos estão dentro de X"), só armazenar e desenhar. Nenhuma das
+duas colunas é obrigatória em momento algum: `pastos.area_ha` continua podendo ser digitado à mão
+sem nunca desenhar nada (mesmo com o mapa ligado), e `fazendas.geometria` é puramente decorativo
+(camada de fundo tracejada, `interactive={false}`, nunca entra em cálculo nenhum).
+
+**Stack**: `leaflet` + `react-leaflet` v5 (tiles do OpenStreetMap, sem chave de API — cobre a escala
+do projeto sem custo) + `leaflet-draw` (toolbar de desenho, sem wrapper React oficial pra v5 — wireado
+imperativamente via `useMap()`) + `@turf/area` (cálculo de área a partir do GeoJSON desenhado/
+importado) + `@tmcw/togeojson` (parse de KML → GeoJSON no navegador via `DOMParser`, sem round-trip
+ao servidor). `lib/kml.ts` centraliza `calcularAreaHa()` (m² → ha, 2 casas, mesma regra de
+`formatArea`) e `parseKml()` (extrai só features `Polygon`/`MultiPolygon`, ignora pontos/linhas que
+às vezes vêm juntos num KML exportado de ferramenta de desenho, e o nome do placemark pra casamento
+por nome).
+
+**`components/fazendas/MapaPastos.tsx`** é um componente "burro" (recebe `fazendaGeometria`,
+`pastos: PastoMapa[]` já resolvidos com cor, e dois callbacks — `onDesenhado`/`onClicarPasto` — sem
+acesso a Supabase) carregado via `next/dynamic({ ssr: false })` no componente pai, porque Leaflet
+acessa `window`/`document` na importação e quebraria a renderização no servidor do Next.js. Só a
+ferramenta de **desenhar polígono** é habilitada na toolbar do leaflet-draw (`edit: false`) — decisão
+deliberada pra evitar o conflito entre o `FeatureGroup` que a edição nativa do leaflet-draw exige
+(as camadas editáveis precisam pertencer a esse grupo específico, gerenciado imperativamente) e as
+camadas `<GeoJSON>` declarativas do react-leaflet usadas pra renderizar os pastos já salvos. Nesta
+fase, "editar" um contorno é **desenhar de novo e escolher a quem atribuir** (ver
+"Fluxo de desenho" abaixo) — cobre o caso de uso sem a complexidade de edição de vértice nativa;
+pode virar Fase 1.5 se algum dia for pedido. `AjustarZoom` centraliza o mapa (`fitBounds`) sempre que
+o conjunto de geometrias (contorno + pastos) muda — importante porque sem nenhuma geometria ainda o
+mapa abre num zoom de mundo inteiro (centro genérico no Brasil), e cada import/desenho novo precisa
+recentralizar sozinho, sem exigir zoom manual do usuário.
+
+**`components/fazendas/ModulosPastosPanel.tsx`** é a extração de todo o CRUD de módulos/pastos que
+antes vivia inline em `app/fazendas/page.tsx` (mesmo padrão de `SaldoInicialPanel`/
+`DistribuicaoAreaPanel` — recebe só `fazendaId`, carrega seus próprios dados) — necessário pra caber
+o toggle Lista | Mapa e toda a lógica nova sem inchar ainda mais a página de Fazendas. O modo
+**Lista** é pixel-idêntico ao CRUD antigo (nada mudou de comportamento). O modo **Mapa** tem três
+blocos: upload de KML do contorno da fazenda (substitui livremente, é só referência visual), upload
+de KML de pastos (ver "Importação em lote" abaixo) e o `MapaPastos` em si.
+
+**Fluxo de desenho → atribuição**: ao terminar um polígono no mapa, `onDesenhado` sobe a geometria +
+área calculada (turf) pro painel, que abre um cartão de confirmação (nunca salva direto) com duas
+opções mutuamente exclusivas: **"Novo pasto"** (nome + seletor de módulo, pré-preenchido com o
+primeiro módulo da lista) ou **"Substituir pasto existente"** (seletor entre os pastos já
+cadastrados — grava a geometria+área por cima do pasto escolhido). As duas opções passam pela mesma
+validação de banco já existente (`fn_validar_area_pasto` — soma dos pastos não pode ultrapassar a
+área alocada em "Pecuária"), sem nenhuma exceção pra geometria desenhada: um contorno grande demais
+(ex.: desenhado com o mapa em zoom de mundo por engano) é rejeitado com o mesmo erro que apareceria
+digitando a área à mão, confirmando que a reconciliação de área já documentada acima vale igual pros
+dois jeitos de declarar `area_ha`.
+
+**Importação em lote de KML de pastos**: sobe um KML com vários placemarks (cada um um polígono) e
+tenta casar cada um com um pasto existente **pelo nome** (normalizado — `trim` + minúsculas), listando
+tudo numa tela de revisão antes de gravar qualquer coisa — nenhum polígono é salvo sem essa
+confirmação explícita. Cada linha da revisão mostra o nome do placemark, a área calculada, e um
+`<select>` com todos os pastos da fazenda (auto-selecionado se o nome casou, "Ignorar" por padrão se
+não achou correspondência) — o usuário pode corrigir manualmente qualquer casamento errado ou
+escolher ignorar antes de confirmar. Confirmar grava geometria + área em lote (um `update` por linha
+com pasto selecionado); linhas deixadas em "Ignorar" não tocam em nada.
+
+Verificado no navegador: import de contorno de fazenda (grava `fazendas.geometria`, mapa recentraliza
+sozinho via `AjustarZoom`), desenho de um pasto novo com área calculada corretamente e exibida via
+`formatArea`, rejeição correta pela trigger de reconciliação de área ao tentar salvar um contorno
+maior que a área de Pecuária disponível (mesmo comportamento de digitar a área à mão), e salvamento
+bem-sucedido de um pasto novo dentro do limite de área disponível.
