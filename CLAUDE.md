@@ -209,10 +209,11 @@ dias) — os dois princípios devem ser lembrados juntos ao criar qualquer relat
 por período.
 
 `fn_relatorio_distribuicao_area` retorna uma linha por (mês, tipo de uso) dentro do período
-filtrado. **A distribuição de área vive dentro de `app/gestao-areas/page.tsx`** (não numa página de
-relatório separada) — a mesma fazenda selecionada no topo alimenta tanto essa seção quanto a de
-"Lançar mudança de uso" logo abaixo, decisão explícita pra não repetir o seletor de fazenda em duas
-telas. O frontend pivota o resultado num gráfico de barras empilhadas (uma barra por mês, cor por
+filtrado. **A distribuição de área vive na aba "Distribuição da Área" dentro de Fazendas**
+(`components/fazendas/DistribuicaoAreaPanel.tsx`, recebe `fazendaId` como prop — ver "Reorganização
+de Fazendas" mais abaixo pra história completa dessa migração) — a fazenda já selecionada no card
+da página Fazendas alimenta tanto essa aba quanto a de "Lançar mudança de uso" logo abaixo, sem
+seletor de fazenda próprio. O frontend pivota o resultado num gráfico de barras empilhadas (uma barra por mês, cor por
 tipo de uso via `corTipoUsoArea`) e numa **tabela com tipo de uso nas linhas e mês nas colunas**
 (invertida em relação ao gráfico, que continua com mês no eixo horizontal) — cada linha termina em
 duas colunas: "Área média" (ponderada pelos dias, não a média mensal simples) e, por último, "Área
@@ -232,15 +233,14 @@ zerado (soma de todos os tipos de uso = 0) só pode significar que ainda não ha
 naquela data. Esses meses são filtrados fora da tabela/gráfico **e** da conta da área média (senão
 dias sem nenhum dado puxariam a média pra baixo indevidamente).
 
-**Área inicial por tipo de uso é cadastrada em `app/fazendas/page.tsx`** (seção expansível por
-fazenda, mostrada automaticamente ao cadastrar uma fazenda nova), não em Gestão de Áreas —
-`app/gestao-areas/page.tsx` só mostra a distribuição e lança/edita `MUDANCA_USO` (mudanças de uso ao
-longo do tempo). Ao cadastrar uma fazenda nova, o fluxo é: declarar área inicial (inline, na própria
-página Fazendas) → link manual "Continuar para o saldo inicial do rebanho" → `/saldo-inicial`.
+**Área inicial por tipo de uso é cadastrada na aba "Área Inicial" de Fazendas**, diferente da aba
+"Distribuição da Área" — que só mostra a distribuição já consolidada e lança/edita `MUDANCA_USO`
+(mudanças de uso ao longo do tempo). As duas ficam lado a lado como abas do mesmo painel por
+fazenda (ver "Reorganização de Fazendas" mais abaixo).
 
 ## Filtros de período (Mês / Ano Safra / Ano Calendário / Período personalizado)
 
-Todo relatório com filtro de período (`app/gestao-areas/page.tsx` e
+Todo relatório com filtro de período (`components/fazendas/DistribuicaoAreaPanel.tsx` e
 `app/relatorio-movimentacao/page.tsx` — o "Rebanho por pasto" é uma foto de um dia só, não se
 aplica) oferece 4 opções, não só mês e período personalizado. "Ano Safra" (1º de julho a 30 de
 junho — se estamos entre janeiro e junho, a safra vigente começou em julho do ano anterior) e "Ano
@@ -746,7 +746,7 @@ já confirmada não mostrava nenhum aviso, e o erro do banco (se a trigger bloqu
 mudança de uso posterior dependente) era descartado silenciosamente (`await
 supabase...update(...)` sem checar `{ error }` — bug real, não só uma lacuna de UX). Agora
 `handleSalvarAreaInicialClick` roda `fn_checar_edicao_area` (mesma função RPC que
-`app/gestao-areas/page.tsx` já usa pra editar `MUDANCA_USO`) pra cada linha com `existingId`, e:
+`DistribuicaoAreaPanel.tsx` já usa pra editar `MUDANCA_USO`) pra cada linha com `existingId`, e:
 bloqueia com alerta se a edição faria o saldo de algum tipo de uso ficar negativo; mostra um aviso
 de confirmação (`avisoEdicaoAreaFutura`) se existem mudanças de uso posteriores desses tipos de uso;
 senão salva direto. Optou-se por reaproveitar esse mecanismo (mais preciso, já testado) em vez de
@@ -796,7 +796,7 @@ Agricultura, obrigatório nesse caso) — a migração faz backfill dos valores 
 histórico como catálogo estruturado. `cultura` continua na tabela só como histórico bruto — não é
 mais lido nem escrito pelo frontend a partir de agora.
 
-Em `app/gestao-areas/page.tsx`, o formulário de "Lançar mudança de uso" ganha dois seletores de
+Em `DistribuicaoAreaPanel.tsx`, o formulário de "Lançar mudança de uso" ganha dois seletores de
 subtipo (origem e destino), cada um só aparece quando `controla_subtipo_area` está ligado **e** o
 tipo de uso daquele lado é Pecuária ou Agricultura **e** há 2+ subtipos ativos pra escolher (mesmo
 critério tríplice já usado pro seletor de pasto em Movimentações) — do contrário o subtipo "Geral"
@@ -808,6 +808,29 @@ parênteses junto ao tipo de uso (`labelTipoUso`, ex.: "Pecuária (Corte) → Ag
 omitindo o sufixo quando o subtipo é "Geral" pra não poluir a maioria dos lançamentos que não usam
 esse detalhamento.
 
+## Distribuição da Área absorvida por Fazendas
+
+`app/gestao-areas/page.tsx` (rota própria, com seletor de fazenda independente) foi removida —
+mesmo padrão já usado quando `/saldo-inicial` virou aba (ver "Reorganização de Fazendas" acima).
+Todo o conteúdo (filtro de período, gráfico empilhado, tabela cruzada, formulário "Lançar mudança de
+uso", "Últimas mudanças de uso") foi portado pra `components/fazendas/DistribuicaoAreaPanel.tsx`,
+recebendo `fazendaId` como prop — mesmo molde de `SaldoInicialPanel.tsx`. O painel de Fazendas ganha
+uma 4ª aba: **Saldo Inicial | Área Inicial | Distribuição da Área | Módulos e Pastos** (essa última
+continua condicional a `controla_pasto`). O item "Distribuição da Área" e o grupo "Gestão de Áreas"
+saem da sidebar — nenhum item de menu novo, a fazenda já selecionada no card acima alimenta a aba
+diretamente, sem seletor de fazenda duplicado.
+
+**Conferência com pastos**: quando `controla_pasto` está ligado, a aba mostra um card extra
+comparando a soma da área de todos os pastos ativos da fazenda (buscados via `modulos(pastos(...))`,
+sem depender de a aba "Módulos e Pastos" já ter sido visitada) com a área alocada em "Pecuária" hoje
+(`fn_area_por_uso`). É só uma conferência visual — decisão deliberada de **não** criar um vínculo
+estrutural entre pasto e subtipo de uso (ex.: pasto apontando pra um `subtipo_uso_area_id`
+específico) nesta rodada, porque `controla_pasto` e `controla_subtipo_area` são dois opt-ins
+independentes hoje, e um vínculo estrutural só faria sentido pleno com os dois ligados ao mesmo
+tempo — complexidade desproporcional ao ganho por enquanto. Pasto continua sem nenhuma coluna de
+subtipo; se um dia fizer sentido decompor a distribuição por subtipo cruzando com pastos específicos,
+essa extensão fica pra depois.
+
 ## Renomeações de navegação
 
 Ajuste puramente de rótulo/organização, sem mudança de rota nem de comportamento (exceto onde
@@ -818,12 +841,12 @@ Rebanho"; "Relatórios por tipo" (`/relatorios`) → "Relatórios de Movimentaç
 removido (absorvido pela fazenda, ver acima); "Controle de Pasto" (`/controle-pasto`) → "Mudança de
 Pasto"; "Gestão de áreas" (`/gestao-areas`) → "Distribuição da Área". O `<h1>` de cada página
 renomeada foi atualizado junto pro mesmo texto do novo rótulo do item (convenção já seguida antes),
-com uma exceção deliberada: `app/gestao-areas/page.tsx` mantém o `<h1>` "Gestão de Áreas" mesmo com
-o item de menu renomeado pra "Distribuição da Área", porque essa página também é onde se lança
-`MUDANCA_USO` — chamar o `<h1>` de "Distribuição da Área" (só metade do conteúdo da página, a outra
-metade é o formulário de lançamento) seria menos preciso que manter o nome mais abrangente ali;
-"Distribuição da Área" descreve bem o que se acha *pelo menu*, mas não precisa ser também o título
-da página em si.
+com uma exceção deliberada, hoje já superada: `app/gestao-areas/page.tsx` mantinha o `<h1>` "Gestão
+de Áreas" mesmo com o item de menu renomeado pra "Distribuição da Área" (a página também era onde
+se lançava `MUDANCA_USO`, então "Distribuição da Área" sozinho descreveria só metade do conteúdo).
+Essa página inteira foi depois absorvida por Fazendas como aba (ver "Distribuição da Área absorvida
+por Fazendas" mais abaixo) — a exceção não existe mais porque não há mais `<h1>` próprio pra essa
+tela, só o título da aba dentro do painel de Fazendas.
 
 ## Painel inicial
 
@@ -927,13 +950,13 @@ Estoque/Entradas/Saídas em texto puro, mantendo a tabela detalhada por categori
 `app/relatorio-lotacao/page.tsx` — evolução mensal do rebanho médio, peso médio, área média e
 lotação, considerando a área em Pecuária. Mesmo padrão de filtro (fazendas multi-select + período
 Mês/Ano Safra/Ano Calendário/Personalizado, `lib/periodo.ts`) já usado em `app/relatorios/page.tsx`,
-com o mesmo capping em "hoje" já usado pro rebanho (não existe previsão aqui — diferente de
-`app/gestao-areas/page.tsx`, cuja "Ano Safra"/"Ano Calendário" atual vai até o fim do mês corrente
-como projeção). Essa escolha é deliberada: como o relatório pareia área com rebanho médio (que não
-tem previsão possível), deixar a área projetar pro futuro enquanto o rebanho para em "hoje" geraria
-uma Lotação sem sentido — por isso os números de "Área Média" aqui podem divergir dos mostrados em
-Gestão de Áreas pro mesmo Ano Safra/Ano Calendário quando o período ainda não terminou; não é bug,
-os dois relatórios respondem perguntas diferentes de propósito.
+com o mesmo capping em "hoje" já usado pro rebanho (não existe previsão aqui — diferente da aba
+"Distribuição da Área" em Fazendas, cuja "Ano Safra"/"Ano Calendário" atual vai até o fim do mês
+corrente como projeção). Essa escolha é deliberada: como o relatório pareia área com rebanho médio
+(que não tem previsão possível), deixar a área projetar pro futuro enquanto o rebanho para em "hoje"
+geraria uma Lotação sem sentido — por isso os números de "Área Média" aqui podem divergir dos
+mostrados na aba "Distribuição da Área" pro mesmo Ano Safra/Ano Calendário quando o período ainda
+não terminou; não é bug, os dois relatórios respondem perguntas diferentes de propósito.
 
 **Cálculo mensal** (migração 036, três funções novas):
 - `fn_estoque_rebanho_na_data(fazendas[], data)`: mesma lógica corrigida de `vw_estoque_rebanho`

@@ -81,13 +81,6 @@ const ICONS = {
       <path d="M12 18h.01" />
     </Icon>
   ),
-  areas: (
-    <Icon>
-      <path d="M4 4h16v16H4z" />
-      <path d="M4 12h16" />
-      <path d="M12 4v8" />
-    </Icon>
-  ),
   pesagens: (
     <Icon>
       <path d="M12 3v3" />
@@ -164,10 +157,6 @@ const GROUPS: NavGroup[] = [
       { label: 'Mudança de Pasto', href: '/controle-pasto', icon: ICONS.controlePasto },
       { label: 'Rebanho por pasto', href: '/relatorio-rebanho-por-pasto', icon: ICONS.rebanhoPorPasto },
     ],
-  },
-  {
-    label: 'Gestão de Áreas',
-    items: [{ label: 'Distribuição da Área', href: '/gestao-areas', icon: ICONS.areas }],
   },
 ]
 

@@ -6,6 +6,7 @@ import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatArea } from '@/lib/format'
 import SaldoInicialPanel from '@/components/fazendas/SaldoInicialPanel'
+import DistribuicaoAreaPanel from '@/components/fazendas/DistribuicaoAreaPanel'
 
 type Fazenda = {
   id: string
@@ -51,7 +52,7 @@ type Pasto = {
   sistema: boolean
 }
 
-type Aba = 'saldo' | 'area' | 'pastos'
+type Aba = 'saldo' | 'area' | 'distribuicao' | 'pastos'
 
 function round2(n: number) {
   return Math.round(n * 100) / 100
@@ -745,6 +746,17 @@ export default function FazendasPage() {
             >
               Área Inicial
             </button>
+            <button
+              type="button"
+              onClick={() => setAbaSelecionada('distribuicao')}
+              className={`rounded-t-control border-b-2 px-3.5 py-2 text-sm font-medium transition-colors ${
+                abaSelecionada === 'distribuicao'
+                  ? 'border-brand-500 font-semibold text-brand-500'
+                  : 'border-transparent text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              Distribuição da Área
+            </button>
             {controlaPasto && (
               <button
                 type="button"
@@ -872,6 +884,8 @@ export default function FazendasPage() {
                   )}
                 </div>
               ))}
+
+            {abaSelecionada === 'distribuicao' && <DistribuicaoAreaPanel fazendaId={fazendaSelecionadaId} />}
 
             {abaSelecionada === 'pastos' &&
               controlaPasto &&
