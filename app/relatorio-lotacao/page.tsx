@@ -181,7 +181,6 @@ export default function RelatorioLotacaoPage() {
     supabase
       .from('fazendas')
       .select('id, nome')
-      .eq('ativo', true)
       .order('nome')
       .then(({ data }) => {
         setFazendas(data || [])

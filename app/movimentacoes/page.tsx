@@ -21,6 +21,7 @@ type TipoMovimentacao =
 
 type SubtipoConsumoDoacao = 'CONSUMO_INTERNO' | 'DOACAO'
 type TipoClienteFornecedor = 'CLIENTE' | 'FORNECEDOR' | 'AMBOS'
+type PapelPessoa = 'CLIENTE' | 'FORNECEDOR'
 type TipoAjuste = 'DESCONTO' | 'ACRESCIMO'
 
 const NOVO_ITEM_AJUSTE = '__novo__'
@@ -680,7 +681,7 @@ export default function MovimentacoesPage() {
           .select('id, modulo_id, nome, ativo, modulo:modulos!modulo_id(fazenda_id)')
           .eq('ativo', true)
           .order('nome'),
-        supabase.from('clientes_fornecedores').select('id, nome').eq('ativo', true).order('nome'),
+        supabase.from('pessoas').select('id, nome').eq('ativo', true).order('nome'),
         supabase.from('configuracoes').select('controla_pasto').single(),
         supabase.from('itens_ajuste_financeiro').select('id, nome, tipo').order('nome'),
         // sem filtro de ativo/ativa — o filtro da listagem precisa achar
@@ -719,7 +720,7 @@ export default function MovimentacoesPage() {
         categoria_destino:categorias_animal!categoria_destino_id(nome),
         pasto:pastos!pasto_id(nome),
         pasto_destino:pastos!pasto_destino_id(nome),
-        cliente:clientes_fornecedores!cliente_fornecedor_id(nome),
+        cliente:pessoas!cliente_fornecedor_id(nome),
         movimentacao_ajustes(item_id, valor, item:itens_ajuste_financeiro!item_id(nome, tipo))
       `
       )
@@ -1644,10 +1645,9 @@ export default function MovimentacoesPage() {
 
     setSalvandoCliente(true)
     const { data: novoCliente, error } = await supabase
-      .from('clientes_fornecedores')
+      .from('pessoas')
       .insert({
         nome: novoClienteNome.trim(),
-        tipo: novoClienteTipo,
         documento: novoClienteDocumento.trim() || null,
       })
       .select('id, nome')
@@ -1655,6 +1655,17 @@ export default function MovimentacoesPage() {
 
     if (error) {
       alert('Erro ao salvar: ' + error.message)
+      setSalvandoCliente(false)
+      return
+    }
+
+    const papeis: PapelPessoa[] = novoClienteTipo === 'AMBOS' ? ['CLIENTE', 'FORNECEDOR'] : [novoClienteTipo]
+    const { error: errorPapeis } = await supabase
+      .from('pessoa_papeis')
+      .insert(papeis.map((papel) => ({ pessoa_id: novoCliente.id, papel })))
+
+    if (errorPapeis) {
+      alert('Erro ao salvar papel: ' + errorPapeis.message)
     } else {
       setClientesFornecedores((prev) => [...prev, novoCliente].sort((a, b) => a.nome.localeCompare(b.nome)))
       setClienteFornecedorId(novoCliente.id)

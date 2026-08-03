@@ -38,7 +38,15 @@ create type tipo_movimentacao as enum (
 
 create type sexo_categoria as enum ('MACHO', 'FEMEA', 'MISTO');
 
-create type tipo_cliente_fornecedor as enum ('CLIENTE', 'FORNECEDOR', 'AMBOS');
+-- papéis que uma pessoa/empresa pode ter (múltiplos ao mesmo tempo —
+-- ver tabela pessoa_papeis; ex.: alguém pode ser Proprietário de uma
+-- fazenda e também Cliente numa venda)
+create type papel_pessoa as enum ('CLIENTE', 'FORNECEDOR', 'PROPRIETARIO', 'FUNCIONARIO');
+
+create type tipo_natureza_pessoa as enum ('FISICA', 'JURIDICA');
+
+create type sistema_produtivo_fazenda as enum
+  ('CRIA', 'RECRIA', 'RECRIA_ENGORDA', 'CICLO_COMPLETO', 'AGRICULTURA');
 
 create type tipo_lancamento_financeiro as enum ('RECEITA', 'DESPESA');
 
@@ -69,6 +77,26 @@ create table fazendas (
   -- referência visual de fundo pra desenhar os pastos por cima; nunca
   -- obrigatório
   geometria       jsonb,
+  -- proprietario_id (references pessoas) é adicionado via alter table
+  -- mais abaixo, depois que a tabela pessoas existe (migração 038)
+  -- "Área Útil" do formulário de cadastro — número único, informativo;
+  -- o detalhamento por tipo de uso continua vivendo em movimentacoes_area
+  area_util_ha    numeric(12,2),
+  ie              text,
+  incra           text,
+  numero_itr      text,
+  caepf           text,
+  sistema_produtivo sistema_produtivo_fazenda,
+  pais            text,
+  cep             text,
+  endereco        text,
+  numero          text,
+  bairro          text,
+  cidade          text,
+  estado          text,
+  telefone        text,
+  latitude        numeric(10,7),
+  longitude       numeric(10,7),
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
@@ -311,13 +339,33 @@ as $$
   );
 $$;
 
-create table clientes_fornecedores (
-  id              uuid primary key default gen_random_uuid(),
-  nome            text not null,
-  tipo            tipo_cliente_fornecedor not null default 'AMBOS',
-  documento       text,   -- CPF/CNPJ
-  ativo           boolean not null default true,
-  created_at      timestamptz not null default now()
+-- generalização de clientes/fornecedores (migração 038): pessoa física
+-- ou jurídica que pode ter mais de um papel ao mesmo tempo (ex.:
+-- Proprietário de uma fazenda e também Cliente numa venda) — ver
+-- pessoa_papeis logo abaixo, em vez de um enum de tipo único
+create table pessoas (
+  id                    uuid primary key default gen_random_uuid(),
+  nome                  text not null,
+  documento             text,   -- CPF/CNPJ
+  ativo                 boolean not null default true,
+  tipo_pessoa           tipo_natureza_pessoa not null default 'FISICA',
+  rg                    text,
+  inscricao_estadual    text,
+  inscricao_municipal   text,
+  nome_contato          text,
+  nacionalidade         text default 'Brasil',
+  cep                   text,
+  endereco              text,
+  numero                text,
+  bairro                text,
+  cidade                text,
+  estado                text,
+  pais                  text default 'Brasil',
+  telefone              text,
+  celular               text,
+  email                 text,
+  observacoes           text,
+  created_at            timestamptz not null default now()
 );
 
 -- nome NÃO é unique aqui de propósito: duas pessoas/empresas diferentes
@@ -325,9 +373,46 @@ create table clientes_fornecedores (
 -- documento (CPF/CNPJ), então a proteção contra duplicidade vai nele.
 -- Índice parcial (ignora nulos) porque nem todo cadastro terá documento
 -- preenchido no momento do lançamento.
-create unique index uq_cliente_fornecedor_documento
-  on clientes_fornecedores (documento)
+create unique index uq_pessoa_documento
+  on pessoas (documento)
   where documento is not null;
+
+create table pessoa_papeis (
+  id          uuid primary key default gen_random_uuid(),
+  pessoa_id   uuid not null references pessoas(id),
+  papel       papel_pessoa not null,
+  constraint uq_pessoa_papel unique (pessoa_id, papel)
+);
+alter table pessoa_papeis disable row level security;
+
+-- Exclusão de pessoa: só permitida se não estiver referenciada em
+-- nenhuma movimentação (cliente/fornecedor) nem como proprietário de
+-- fazenda. Passando essa checagem, apaga os pessoa_papeis dela junto
+-- (mesmo princípio de cascata via trigger já usado em fn_validar_delete_fazenda).
+create or replace function fn_validar_delete_pessoa()
+returns trigger as $$
+begin
+  if exists (select 1 from movimentacoes_rebanho where cliente_fornecedor_id = old.id) then
+    raise exception 'Não é possível excluir: essa pessoa já está referenciada em movimentações. Inative-a em vez disso.';
+  end if;
+
+  if exists (select 1 from fazendas where proprietario_id = old.id) then
+    raise exception 'Não é possível excluir: essa pessoa é proprietária de uma fazenda. Inative-a em vez disso.';
+  end if;
+
+  delete from pessoa_papeis where pessoa_id = old.id;
+
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_pessoa
+before delete on pessoas
+for each row execute function fn_validar_delete_pessoa();
+
+-- só agora dá pra referenciar pessoas (Proprietário) a partir de
+-- fazendas, definida mais acima no arquivo
+alter table fazendas add column proprietario_id uuid references pessoas(id);
 
 create table centros_custo (
   id              uuid primary key default gen_random_uuid(),
@@ -942,9 +1027,27 @@ $$;
 
 create type tipo_utilizacao_modulo as enum ('PECUARIA', 'AGRICULTURA');
 
+-- Retiro (migração 038): nível organizacional novo entre fazenda e
+-- módulo — puramente uma camada de agrupamento/filtro (modulos.fazenda_id
+-- continua existindo direto, sem depender de retiro pra saldo/
+-- reconciliação de área/trajetória de edição).
+create table retiros (
+  id              uuid primary key default gen_random_uuid(),
+  fazenda_id      uuid not null references fazendas(id),
+  nome            text not null,
+  ativo           boolean not null default true,
+  ordem           int not null default 0,
+  -- retiro "Geral" auto-criado — mesma proteção de sistema de módulo/pasto
+  sistema         boolean not null default false,
+  created_at      timestamptz not null default now(),
+  constraint uq_retiro_nome_fazenda unique (fazenda_id, nome)
+);
+alter table retiros disable row level security;
+
 create table modulos (
   id              uuid primary key default gen_random_uuid(),
   fazenda_id      uuid not null references fazendas(id),
+  retiro_id       uuid not null references retiros(id),
   nome            text not null,
   tipo_utilizacao tipo_utilizacao_modulo not null default 'PECUARIA',
   ativo           boolean not null default true,
@@ -967,8 +1070,12 @@ create table pastos (
   -- livre (sem histórico por data, diferente de movimentacoes_area) —
   -- validado contra a área de Pecuária no momento do cadastro/edição,
   -- não reconciliado retroativamente se a área de Pecuária encolher
-  -- depois (ver fn_validar_area_pasto)
+  -- depois (ver fn_validar_area_pasto). "Área total" na interface.
   area_ha         numeric(12,2),
+  -- área realmente aproveitável pra pastagem (descontando brejo/pedra/
+  -- mata dentro do pasto) — usada como denominador da lotação (UA/ha)
+  -- no lugar da área total (migração 038)
+  area_produtiva_ha numeric(12,2),
   ativo           boolean not null default true,
   ordem           int not null default 0,
   -- pasto "Geral" auto-criado — mesma proteção de sistema do módulo
@@ -983,16 +1090,21 @@ create table pastos (
 );
 alter table pastos disable row level security;
 
--- toda fazenda nova já ganha módulo + pasto "Geral" automaticamente —
--- se o grupo não liga controla_pasto ninguém vê essa tela, mas todo
--- lançamento de rebanho sempre tem pra onde apontar
+-- toda fazenda nova já ganha retiro + módulo + pasto "Geral"
+-- automaticamente — se o grupo não liga controla_pasto ninguém vê essa
+-- tela, mas todo lançamento de rebanho sempre tem pra onde apontar
 create or replace function fn_criar_modulo_pasto_geral()
 returns trigger as $$
 declare
+  v_retiro_id uuid;
   v_modulo_id uuid;
 begin
-  insert into modulos (fazenda_id, nome, tipo_utilizacao, ordem, sistema)
-  values (new.id, 'Geral', 'PECUARIA', 0, true)
+  insert into retiros (fazenda_id, nome, ordem, sistema)
+  values (new.id, 'Geral', 0, true)
+  returning id into v_retiro_id;
+
+  insert into modulos (fazenda_id, retiro_id, nome, tipo_utilizacao, ordem, sistema)
+  values (new.id, v_retiro_id, 'Geral', 'PECUARIA', 0, true)
   returning id into v_modulo_id;
 
   insert into pastos (modulo_id, nome, ordem, sistema)
@@ -1007,6 +1119,33 @@ after insert on fazendas
 for each row execute function fn_criar_modulo_pasto_geral();
 
 -- ---------------------------------------------------------------------
+-- TRIGGER: retiro "Geral" nunca pode ser excluído. Retiro criado pelo
+-- usuário só pode ser excluído se já estiver sem nenhum módulo.
+-- A proteção de sistema=true é liberada quando a exclusão vem de uma
+-- cascata de exclusão de fazenda inteira (ver fn_validar_delete_fazenda
+-- mais abaixo, seção de fazendas).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_validar_delete_retiro()
+returns trigger as $$
+begin
+  if old.sistema and coalesce(current_setting('orion.excluindo_fazenda', true), 'false') <> 'true' then
+    raise exception 'O retiro "Geral" não pode ser excluído — inative-o em vez disso.';
+  end if;
+
+  if exists (select 1 from modulos where retiro_id = old.id) then
+    raise exception 'Não é possível excluir: existem módulos nesse retiro. Exclua-os primeiro.';
+  end if;
+
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_retiro
+before delete on retiros
+for each row execute function fn_validar_delete_retiro();
+
+-- ---------------------------------------------------------------------
 -- TRIGGER: pasto "Geral" nunca pode ser excluído. Pasto criado pelo
 -- usuário só pode ser excluído se não tiver nenhuma movimentação ou
 -- pesagem lançada (mesmo princípio de fn_validar_delete_categoria).
@@ -1015,7 +1154,7 @@ for each row execute function fn_criar_modulo_pasto_geral();
 create or replace function fn_validar_delete_pasto()
 returns trigger as $$
 begin
-  if old.sistema then
+  if old.sistema and coalesce(current_setting('orion.excluindo_fazenda', true), 'false') <> 'true' then
     raise exception 'O pasto "Geral" não pode ser excluído — inative-o em vez disso.';
   end if;
 
@@ -1048,7 +1187,7 @@ for each row execute function fn_validar_delete_pasto();
 create or replace function fn_validar_delete_modulo()
 returns trigger as $$
 begin
-  if old.sistema then
+  if old.sistema and coalesce(current_setting('orion.excluindo_fazenda', true), 'false') <> 'true' then
     raise exception 'O módulo "Geral" não pode ser excluído — inative-o em vez disso.';
   end if;
 
@@ -1063,6 +1202,46 @@ $$ language plpgsql;
 create trigger trg_validar_delete_modulo
 before delete on modulos
 for each row execute function fn_validar_delete_modulo();
+
+-- ---------------------------------------------------------------------
+-- TRIGGER: exclusão de fazenda (migração 038) — só permitida se não
+-- houver nenhuma movimentação (rebanho, área ou pesagem) referenciando
+-- a fazenda. Passando essa checagem, apaga em cascata retiro/módulo/
+-- pasto "Geral" (normalmente protegidos contra exclusão) via flag de
+-- sessão checado acima em fn_validar_delete_retiro/pasto/modulo.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_validar_delete_fazenda()
+returns trigger as $$
+begin
+  if exists (
+    select 1 from movimentacoes_rebanho
+    where fazenda_id = old.id or fazenda_origem_id = old.id or fazenda_destino_id = old.id
+  ) then
+    raise exception 'Não é possível excluir: essa fazenda já tem movimentações de rebanho lançadas. Inative-a em vez disso.';
+  end if;
+
+  if exists (select 1 from movimentacoes_area where fazenda_id = old.id) then
+    raise exception 'Não é possível excluir: essa fazenda já tem movimentações de área lançadas. Inative-a em vez disso.';
+  end if;
+
+  if exists (select 1 from pesagens where fazenda_id = old.id) then
+    raise exception 'Não é possível excluir: essa fazenda já tem pesagens registradas. Inative-a em vez disso.';
+  end if;
+
+  perform set_config('orion.excluindo_fazenda', 'true', true);
+  delete from pastos where modulo_id in (select id from modulos where fazenda_id = old.id);
+  delete from modulos where fazenda_id = old.id;
+  delete from retiros where fazenda_id = old.id;
+  perform set_config('orion.excluindo_fazenda', 'false', true);
+
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_fazenda
+before delete on fazendas
+for each row execute function fn_validar_delete_fazenda();
 
 -- soma das áreas de todos os pastos da fazenda não pode ultrapassar a
 -- área alocada em "Pecuária" (fn_area_por_uso na data de hoje — opção
@@ -1152,7 +1331,7 @@ create table movimentacoes_rebanho (
   valor_cabeca          numeric(10,2),   -- R$/CABEÇA
   valor_kg              numeric(10,2),   -- R$/KG
   valor_total           numeric(14,2),   -- R$ TOTAL
-  cliente_fornecedor_id uuid references clientes_fornecedores(id),
+  cliente_fornecedor_id uuid references pessoas(id),
 
   -- específicos de venda abate / consumo-doação
   -- mesmo princípio: preencha peso_morto_kg OU rendimento_carcaca_pct,

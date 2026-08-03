@@ -46,7 +46,7 @@ const ICONS = {
       <circle cx="15.5" cy="8.5" r="1.1" />
     </Icon>
   ),
-  clientes: (
+  pessoas: (
     <Icon>
       <circle cx="9" cy="8" r="3" />
       <path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
@@ -138,7 +138,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { label: 'Fazendas', href: '/fazendas', icon: ICONS.fazendas },
       { label: 'Categorias', href: '/categorias', icon: ICONS.categorias },
-      { label: 'Clientes/Fornecedores', href: '/clientes-fornecedores', icon: ICONS.clientes },
+      { label: 'Pessoas e Empresas', href: '/pessoas', icon: ICONS.pessoas },
     ],
   },
   {

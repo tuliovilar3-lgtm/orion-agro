@@ -1099,3 +1099,154 @@ sozinho via `AjustarZoom`), desenho de um pasto novo com área calculada correta
 `formatArea`, rejeição correta pela trigger de reconciliação de área ao tentar salvar um contorno
 maior que a área de Pecuária disponível (mesmo comportamento de digitar a área à mão), e salvamento
 bem-sucedido de um pasto novo dentro do limite de área disponível.
+
+## Reorganização de Fazendas, Áreas e Pessoas — Fase A/B/C (nível Retiro, Pessoas e Empresas,
+## cadastro completo de fazenda)
+
+Migração 038, primeira de uma leva maior (Fases D/E/F ainda pendentes) que reorganiza como fazenda,
+área e pessoas se relacionam, disparada por um sistema de referência que o usuário usa hoje
+(prints de "Gestão de Áreas" e "Cadastrar Fazenda" desse sistema, adaptados aos padrões do ORION).
+
+**Nível Retiro (Fazenda → Retiro → Módulo → Pasto) — existe no banco, mas fica oculto na UI por
+enquanto.** `retiros` (`fazenda_id`, `nome`, `ativo`, `ordem`, `sistema`) segue exatamente o mesmo
+padrão de auto-criação/proteção já usado em módulo/pasto: toda fazenda ganha um retiro **"Geral"**
+sozinho (`fn_criar_modulo_pasto_geral`, agora também cria o retiro antes do módulo), com
+`sistema = true` protegido contra exclusão (`fn_validar_delete_retiro`). `modulos.retiro_id`
+(NOT NULL, aponta pro "Geral" por padrão) foi adicionado **sem remover `modulos.fazenda_id`** —
+decisão deliberada pra não precisar reescrever toda a cadeia de triggers que já assume módulo→fazenda
+direto (saldo, reconciliação de área, trajetória de edição); retiro é só uma camada de
+organização/filtro por cima, ortogonal ao que já existe. Instrução explícita do usuário: **por
+enquanto Retiro não aparece em nenhum cadastro, relatório ou seletor** — sempre usa o "Geral" por
+baixo dos panos, sem UI nenhuma pra criar/escolher retiro. Existe no schema pronto pra quando fizer
+sentido expor (ex.: fazendas que realmente dividem operação por retiro), mas até lá é infraestrutura
+morta do ponto de vista do usuário — não confundir com Fase D do plano de reorganização, que
+originalmente planejava um CRUD de Retiro na Gestão de Áreas; essa parte foi superada por essa
+instrução e deve ser pulada quando a Fase D for implementada.
+
+**`pastos.area_produtiva_ha`**: coluna nova (numeric, nullable), paralela à `area_ha` já existente.
+`area_ha` passa a significar "área total" do pasto; `area_produtiva_ha` é a área realmente
+aproveitável pra pastagem (descontando brejo/pedra/mata dentro do pasto) — vai virar o denominador da
+lotação por pasto na Fase F (ainda não implementada; `app/relatorio-lotacao/page.tsx` continua usando
+`area_ha` até lá). Ainda sem campo no formulário de pasto (Fase D).
+
+**Pessoas e Empresas** (`app/pessoas/page.tsx`, substituindo `app/clientes-fornecedores/page.tsx`,
+removido): generaliza o antigo cadastro de Cliente/Fornecedor porque a fazenda agora referencia um
+"Proprietário", e uma mesma pessoa pode acumular papéis (ex.: Proprietário e também Cliente) — o
+enum antigo `tipo` (`CLIENTE`/`FORNECEDOR`/`AMBOS`) só suportava uma combinação fixa, sem
+Proprietário. `clientes_fornecedores` foi renomeada pra `pessoas`; a coluna `tipo` foi substituída por
+uma tabela de junção `pessoa_papeis` (`pessoa_id`, `papel` enum `CLIENTE`/`FORNECEDOR`/
+`PROPRIETARIO`, único por par). Migração de dados: `CLIENTE`→papel CLIENTE, `FORNECEDOR`→papel
+FORNECEDOR, `AMBOS`→os dois papéis pra mesma pessoa — histórico preservado, nenhum registro perdido.
+A tela nova usa checkbox múltiplo de papéis (em vez do select único de antes) e segue o padrão de
+sempre: `<Required />`, `bloquearEnvioPorEnter`, inativar (sem excluir — mesmo motivo de
+categoria/pasto: pessoa pode estar referenciada em movimentações históricas). Editar **apaga e
+reinsere** todos os `pessoa_papeis` da pessoa (mesmo princípio já usado em `movimentacao_ajustes` e
+nos lotes de movimentação) — mais simples que calcular um diff de quais papéis foram
+adicionados/removidos. Link na sidebar renomeado de "Clientes/Fornecedores" pra "Pessoas e Empresas".
+
+Os pontos que antes liam/escreviam em `clientes_fornecedores` foram todos varridos pra `pessoas`
+sem mudar de comportamento pro usuário: `app/movimentacoes/page.tsx` (select de
+cliente/fornecedor + o modal "+ Novo cliente/fornecedor" inline, que agora insere em `pessoas` e
+depois em `pessoa_papeis` — a opção "Ambos" da UI vira duas linhas de papel), `app/relatorios/page.tsx`
+(join `cliente:pessoas!cliente_fornecedor_id(nome)`). A coluna `cliente_fornecedor_id` em
+`movimentacoes_rebanho` manteve o nome (só a tabela referenciada mudou) — não valia a pena renomear a
+coluna só por causa do rename da tabela, teria espalhado a mudança por muito mais lugares sem ganho
+real.
+
+**Cadastro de Fazenda vira um formulário completo** (`components/fazendas/CadastrarFazendaModal.tsx`,
+modal reaproveitado tanto pra criar quanto editar via prop opcional `fazendaId`), substituindo o
+formulário mínimo (nome/localização/área) que existia inline em `app/fazendas/page.tsx`. Campos
+obrigatórios — únicos confirmados pelo usuário, mesmo o sistema de referência tendo mais campos
+obrigatórios: **Nome da Propriedade, Proprietário, Área Total (Ha), Área Útil (Ha)**. Proprietário é
+um select de `pessoas` com papel `PROPRIETARIO` (`pessoa_papeis` filtrado), com "+ Novo" inline
+(mesmo padrão de item de ajuste financeiro/subtipo de uso — sem modal separado teria sido inviável
+aqui já que abriria modal-sobre-modal, então esse "+ Novo" é a exceção que usa um segundo modal,
+`z-[60]` sobre o `z-50` do formulário principal, justamente pra empilhar). **Área Útil é um número
+único** (não dividida por Pecuária/Agricultura como no sistema de referência) — decisão do usuário
+pra simplificar; o detalhamento por tipo de uso continua sendo feito depois, na Distribuição da Área.
+Campos opcionais: IE, INCRA, Nº ITR, CAEPF, Sistema Produtivo (`CRIA`/`RECRIA`/`RECRIA_ENGORDA`/
+`CICLO_COMPLETO`/`AGRICULTURA`, confirmados verbatim pelo usuário) e um bloco de Endereço (país, CEP,
+endereço, número, bairro, cidade, estado, telefone, e latitude/longitude digitados em
+graus/minutos/segundos — formato que o usuário já usa pra essas coordenadas — convertidos pra decimal
+só no submit via `gmsParaDecimal`/`decimalParaGms`, únicos campos gravados no banco
+(`latitude`/`longitude` numeric(10,7)); a aba "Retiros" que originalmente fazia parte deste
+formulário (planejada na Fase A/C original) foi removida no meio da implementação por causa da
+instrução de manter Retiro oculto — não existe nenhum campo de retiro no formulário, a fazenda nova
+sempre fica só com o "Geral" auto-criado. A aba "Parâmetros" do sistema de referência ficou de fora
+do escopo por decisão explícita do usuário.
+
+**Lista de fazendas redesenhada** (`app/fazendas/page.tsx`): o grid de cards + formulário sempre
+visível virou uma fileira horizontal de chips (fazenda selecionada em `bg-brand-500 text-white`,
+inativa com `opacity-50` + sufixo "(inativa)") mais um botão **"+ Nova Fazenda"** que abre o modal.
+Clicar num chip seleciona a fazenda e abre o painel de abas já existente (Saldo Inicial | Área
+Inicial | Distribuição da Área | Módulos e Pastos) — inalterado nesta fase, só a forma de selecionar
+mudou. Dentro do painel da fazenda selecionada, o cabeçalho ganhou controles discretos em texto
+(Editar / Inativar-Ativar / Excluir) — em vez de aparecerem no card antes de selecionar, como era
+antes. **Excluir tenta a operação e mostra o erro do banco se bloqueada** (sem checagem prévia
+duplicada no frontend, mesmo padrão já usado pra excluir pasto/módulo) — `fn_validar_delete_fazenda`
+(trigger `before delete`) bloqueia se existir qualquer `movimentacoes_rebanho` (como `fazenda_id`,
+`fazenda_origem_id` ou `fazenda_destino_id`), `movimentacoes_area` ou `pesagens` referenciando a
+fazenda; passando essa checagem, apaga em cascata os `pastos`/`modulos`/`retiros` "Geral" (que
+normalmente são protegidos contra exclusão via `sistema = true`) usando um flag de sessão
+(`set_config('orion.excluindo_fazenda', 'true', true)`) que `fn_validar_delete_pasto`/
+`fn_validar_delete_modulo`/`fn_validar_delete_retiro` passam a checar antes de bloquear — liberando a
+cascata só nesse caminho específico, sem enfraquecer a proteção normal contra excluir o "Geral" à
+mão. **Inativar** é um toggle simples de `fazendas.ativo` (coluna que já existia no schema, só nunca
+tinha UI pra alterá-la).
+
+**Correção de filtro `ativo` indevido em relatórios**: `app/relatorios/page.tsx`,
+`app/relatorio-lotacao/page.tsx`, `app/relatorio-movimentacao/page.tsx` e `app/page.tsx` (Painel)
+tinham `.eq('ativo', true)` no select de fazendas usado pra popular o filtro — bug real, já que esses
+são relatórios/visões agregadas que precisam continuar mostrando fazendas inativas com histórico
+(mesmo princípio já usado pra categoria/pasto inativo: inativar tira do cadastro/lançamento, nunca do
+relatório). Removido dos quatro. **Mantido** em `app/relatorio-rebanho-por-pasto/page.tsx` (é uma
+fotografia de hoje, não histórico) e nos formulários de lançamento (movimentações, pesagens,
+controle de pasto) — esses continuam certos em só oferecer fazenda ativa pra lançar algo novo.
+
+## Pessoas e Empresas — cadastro completo (Física/Jurídica, papel Funcionário, endereço/contato)
+
+Migração 039, redesenho da tela criada na Fase B, disparado por um sistema de referência que o
+usuário usa hoje (prints de "Cadastro de Pessoas ou Empresas" e da listagem, adaptados aos padrões
+do ORION). **Só o Nome é obrigatório** — todos os demais campos abaixo são opcionais, mesmo em
+sistemas de referência que os exigem.
+
+`pessoas` ganha `tipo_pessoa` (enum `tipo_natureza_pessoa`: `FISICA`/`JURIDICA`, default `FISICA`) e
+um bloco de colunas novas, todas opcionais: `rg`, `inscricao_estadual`, `inscricao_municipal`,
+`nome_contato`, `nacionalidade` (default `'Brasil'`), `cep`/`endereco`/`numero`/`bairro`/`cidade`/
+`estado`/`pais` (default `'Brasil'`), `telefone`, `celular`, `email`, `observacoes`. `papel_pessoa`
+ganha um quarto valor, `FUNCIONARIO`, ao lado de `CLIENTE`/`FORNECEDOR`/`PROPRIETARIO` já existentes
+(múltiplos papéis continuam possíveis pra mesma pessoa, via `pessoa_papeis`). **Duas decisões de
+escopo deliberadas**, confirmadas com o usuário antes de implementar: não replicou a aba "Dados
+Bancários" do sistema de referência (usuário só pediu os campos de "Dados Básicos") nem o papel
+"Proprietário Financeiro" (usuário listou só Cliente/Fornecedor/Proprietário/Funcionário) — podem
+virar extensão futura se pedidos.
+
+`components/pessoas/CadastrarPessoaModal.tsx` (modal, mesmo padrão de `CadastrarFazendaModal.tsx`,
+prop opcional `pessoaId` pra editar) reúne tudo numa seção só "Dados Básicos" (sem abas, já que só
+existe esse bloco de campos) — radio Física/Jurídica, checkboxes de papel, Nome, CPF/CNPJ (rótulo do
+campo troca dinamicamente conforme o radio — mesma coluna `documento` armazena os dois, sem campo
+separado), RG (só aparece se Física) ou Insc. Estadual/Municipal (só aparece se Jurídica), Nome do
+Contato, Nacionalidade, e duas subseções sempre visíveis — Endereço (CEP/Endereço/Número/Bairro/
+Cidade/Estado/País) e Contato (Telefone/Celular/E-mail/Observações). Salvar sincroniza `pessoa_papeis`
+pelo mesmo padrão "apaga e reinsere" já usado em outros pontos do sistema.
+
+`app/pessoas/page.tsx` vira uma lista com filtro em vez do formulário-sempre-visível da Fase B: um
+card de filtro (Nome, Tipo — dropdown dos 4 papéis —, CPF/CNPJ, todos combináveis, com "Limpar
+filtros" que só aparece quando algum está ativo) acima de uma tabela (Nome+documento, Tipo=papéis
+concatenados, Contato, Telefone, Ações). Botão **"+ Nova Pessoa/Empresa"** no topo abre o modal (só
+entra na tela de cadastro por essa ação, nunca por padrão ao entrar na aba — pedido explícito do
+usuário). **Ações viram ícones** (editar/inativar-ativar/excluir, SVGs inline no mesmo estilo de
+traço da Sidebar — `viewBox 0 0 24 24`, `strokeWidth 1.75`) em vez dos links de texto da Fase B,
+com confirmação inline pra exclusão (mesmo padrão `error`/"Sim"/"Cancelar" já usado em módulo/pasto).
+
+**Exclusão trava se a pessoa estiver referenciada** — `fn_validar_delete_pessoa` (trigger `before
+delete`) bloqueia se existir `movimentacoes_rebanho.cliente_fornecedor_id` ou
+`fazendas.proprietario_id` apontando pra ela ("Inative-a em vez disso"); passando essa checagem,
+apaga os `pessoa_papeis` dela junto (mesmo princípio de cascata via trigger já usado em
+`fn_validar_delete_fazenda`). Sem checagem duplicada no frontend — mesmo padrão já usado pra excluir
+fazenda/pasto/módulo, o erro do banco é só repassado pro usuário.
+
+O fluxo de "+ Novo cliente/fornecedor" inline em `app/movimentacoes/page.tsx` (criado na Fase B)
+continua funcionando sem alteração — grava só `nome`/`documento` e o(s) papel(is), deixando todos os
+campos novos desta seção em branco; a pessoa criada por ali aparece completa em "Pessoas e Empresas"
+depois, pronta pra ser complementada com endereço/contato se o usuário quiser.

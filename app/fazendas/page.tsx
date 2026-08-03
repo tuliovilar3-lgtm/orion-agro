@@ -2,18 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import Required from '@/components/Required'
-import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatArea } from '@/lib/format'
 import SaldoInicialPanel from '@/components/fazendas/SaldoInicialPanel'
 import DistribuicaoAreaPanel from '@/components/fazendas/DistribuicaoAreaPanel'
 import ModulosPastosPanel from '@/components/fazendas/ModulosPastosPanel'
+import CadastrarFazendaModal from '@/components/fazendas/CadastrarFazendaModal'
 
 type Fazenda = {
   id: string
   nome: string
   localizacao: string | null
   area_ha: number | null
+  ativo: boolean
 }
 
 type TipoUsoArea = { id: string; nome: string }
@@ -57,11 +57,6 @@ export default function FazendasPage() {
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
-  const [nome, setNome] = useState('')
-  const [localizacao, setLocalizacao] = useState('')
-  const [areaHa, setAreaHa] = useState('')
-  const [salvando, setSalvando] = useState(false)
-
   const [configuracaoId, setConfiguracaoId] = useState<string | null>(null)
   const [controlaPasto, setControlaPasto] = useState(false)
   const [controlaSubtipoArea, setControlaSubtipoArea] = useState(false)
@@ -69,11 +64,10 @@ export default function FazendasPage() {
   const [tiposUso, setTiposUso] = useState<TipoUsoArea[]>([])
   const [subtiposUso, setSubtiposUso] = useState<SubtipoUsoArea[]>([])
 
-  const [editandoFazendaId, setEditandoFazendaId] = useState<string | null>(null)
-  const [editNome, setEditNome] = useState('')
-  const [editLocalizacao, setEditLocalizacao] = useState('')
-  const [editAreaHa, setEditAreaHa] = useState('')
-  const [salvandoEdicaoFazenda, setSalvandoEdicaoFazenda] = useState(false)
+  const [modalAberto, setModalAberto] = useState(false)
+  const [fazendaEditandoId, setFazendaEditandoId] = useState<string | null>(null)
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false)
+  const [excluindo, setExcluindo] = useState(false)
 
   const [fazendaSelecionadaId, setFazendaSelecionadaId] = useState<string | null>(null)
   const [abaSelecionada, setAbaSelecionada] = useState<Aba>('saldo')
@@ -126,59 +120,37 @@ export default function FazendasPage() {
 
   const subtipoGeralPorTipoUso = Object.fromEntries(subtiposUso.map((s) => [s.tipo_uso_id, s.id]))
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!nome.trim()) return
+  function handleFazendaSalva(novaId: string) {
+    setModalAberto(false)
+    const eraNova = fazendaEditandoId === null
+    setFazendaEditandoId(null)
+    carregarFazendas().then(() => {
+      if (eraNova) {
+        setFazendaRecemCriadaId(novaId)
+        setFazendaSelecionadaId(novaId)
+        setAbaSelecionada('area')
+      }
+    })
+  }
 
-    setSalvando(true)
-    const { data: novaFazenda, error } = await supabase
-      .from('fazendas')
-      .insert({
-        nome: nome.trim(),
-        localizacao: localizacao.trim() || null,
-        area_ha: areaHa ? parseFloat(areaHa) : null,
-      })
-      .select('id')
-      .single()
-
+  async function handleAlternarAtivoFazenda(f: Fazenda) {
+    const { error } = await supabase.from('fazendas').update({ ativo: !f.ativo }).eq('id', f.id)
     if (error) {
-      alert('Erro ao salvar: ' + error.message)
-      setSalvando(false)
+      alert('Erro: ' + error.message)
     } else {
-      setNome('')
-      setLocalizacao('')
-      setAreaHa('')
-      setFazendaRecemCriadaId(novaFazenda.id)
-      await carregarFazendas()
-      setFazendaSelecionadaId(novaFazenda.id)
-      setAbaSelecionada('area')
-      setSalvando(false)
+      setFazendas((prev) => prev.map((x) => (x.id === f.id ? { ...x, ativo: !x.ativo } : x)))
     }
   }
 
-  function iniciarEdicaoFazenda(f: Fazenda) {
-    setEditandoFazendaId(f.id)
-    setEditNome(f.nome)
-    setEditLocalizacao(f.localizacao || '')
-    setEditAreaHa(f.area_ha != null ? String(f.area_ha) : '')
-  }
-
-  async function handleSalvarEdicaoFazenda() {
-    if (!editandoFazendaId || !editNome.trim()) return
-    setSalvandoEdicaoFazenda(true)
-    const { error } = await supabase
-      .from('fazendas')
-      .update({
-        nome: editNome.trim(),
-        localizacao: editLocalizacao.trim() || null,
-        area_ha: editAreaHa ? parseFloat(editAreaHa) : null,
-      })
-      .eq('id', editandoFazendaId)
-    setSalvandoEdicaoFazenda(false)
+  async function handleExcluirFazenda(f: Fazenda) {
+    setExcluindo(true)
+    const { error } = await supabase.from('fazendas').delete().eq('id', f.id)
+    setExcluindo(false)
+    setConfirmandoExclusao(false)
     if (error) {
-      alert('Erro ao salvar: ' + error.message)
+      alert(error.message)
     } else {
-      setEditandoFazendaId(null)
+      setFazendaSelecionadaId(null)
       await carregarFazendas()
     }
   }
@@ -388,157 +360,56 @@ export default function FazendasPage() {
         </p>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        onKeyDown={bloquearEnvioPorEnter}
-        className="mt-6 space-y-4 rounded-card border border-border bg-surface p-6"
-      >
-        <h2 className="text-sm font-semibold text-text-primary">Nova fazenda</h2>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-              Nome
-              <Required />
-            </label>
-            <input className={`w-full ${inputClass}`} value={nome} onChange={(e) => setNome(e.target.value)} required />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Localização</label>
-            <input
-              className={`w-full ${inputClass}`}
-              value={localizacao}
-              onChange={(e) => setLocalizacao(e.target.value)}
-              placeholder="Cidade/UF"
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Área (ha)</label>
-            <input
-              type="number"
-              step="0.01"
-              className={`w-full ${inputClass}`}
-              value={areaHa}
-              onChange={(e) => setAreaHa(e.target.value)}
-            />
-          </div>
-        </div>
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        {loading ? (
+          <p className="text-sm text-text-secondary">Carregando...</p>
+        ) : erro ? (
+          <p className="text-sm text-error">Erro: {erro}</p>
+        ) : (
+          fazendas.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => selecionarFazenda(f.id)}
+              className={`rounded-control border px-4 py-2 text-sm font-medium transition-colors ${
+                fazendaSelecionadaId === f.id
+                  ? 'border-brand-500 bg-brand-500 text-white'
+                  : 'border-border bg-surface text-text-primary hover:border-brand-500/50'
+              } ${!f.ativo ? 'opacity-50' : ''}`}
+            >
+              {f.nome}
+              {!f.ativo ? ' (inativa)' : ''}
+            </button>
+          ))
+        )}
         <button
-          type="submit"
-          disabled={salvando}
-          className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
+          type="button"
+          onClick={() => {
+            setFazendaEditandoId(null)
+            setModalAberto(true)
+          }}
+          className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover"
         >
-          {salvando ? 'Salvando...' : 'Salvar fazenda'}
+          + Nova Fazenda
         </button>
-      </form>
+      </div>
 
-      <h2 className="mt-8 mb-3 text-sm font-semibold text-text-primary">Fazendas cadastradas</h2>
-      <p className="mb-3 text-sm text-text-secondary">
-        Clique numa fazenda pra ver e editar o saldo inicial, a área inicial e os módulos/pastos dela.
-      </p>
-
-      {loading ? (
-        <div className="space-y-3">
-          <CardSkeleton />
-          <CardSkeleton />
-        </div>
-      ) : erro ? (
-        <p className="text-sm text-error">Erro: {erro}</p>
-      ) : fazendas.length === 0 ? (
-        <div className="rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
+      {!loading && !erro && fazendas.length === 0 && (
+        <div className="mt-6 rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
           <p className="text-base font-semibold text-text-primary">Comece cadastrando sua primeira fazenda</p>
           <p className="mx-auto mt-1.5 max-w-sm text-sm text-text-secondary">
             Depois de criada, você vai declarar a área inicial por tipo de uso e o saldo inicial do rebanho dela
             antes de lançar movimentações.
           </p>
         </div>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {fazendas.map((f) => {
-            const emEdicao = editandoFazendaId === f.id
-            const selecionada = fazendaSelecionadaId === f.id
-            return (
-              <div
-                key={f.id}
-                onClick={() => !emEdicao && selecionarFazenda(f.id)}
-                className={`rounded-card border p-5 transition-colors ${
-                  emEdicao ? 'border-border bg-surface' : 'cursor-pointer'
-                } ${selecionada ? 'border-brand-500 bg-brand-100' : 'border-border bg-surface hover:border-brand-500/50'}`}
-              >
-                {emEdicao ? (
-                  <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-text-secondary">
-                        Nome
-                        <Required />
-                      </label>
-                      <input
-                        className={`w-full ${inputClass}`}
-                        value={editNome}
-                        onChange={(e) => setEditNome(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-text-secondary">Localização</label>
-                      <input
-                        className={`w-full ${inputClass}`}
-                        value={editLocalizacao}
-                        onChange={(e) => setEditLocalizacao(e.target.value)}
-                        placeholder="Cidade/UF"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-text-secondary">Área (ha)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className={`w-full ${inputClass}`}
-                        value={editAreaHa}
-                        onChange={(e) => setEditAreaHa(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={salvandoEdicaoFazenda}
-                        onClick={handleSalvarEdicaoFazenda}
-                        className="rounded-control bg-brand-500 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
-                      >
-                        {salvandoEdicaoFazenda ? 'Salvando...' : 'Salvar'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditandoFazendaId(null)}
-                        className="rounded-control border border-border px-3 py-1.5 text-sm text-text-primary"
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-semibold text-text-primary">{f.nome}</div>
-                      <button
-                        type="button"
-                        className="shrink-0 text-xs text-brand-500 underline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          iniciarEdicaoFazenda(f)
-                        }}
-                      >
-                        Editar
-                      </button>
-                    </div>
-                    <div className="mt-1 text-sm text-text-secondary">
-                      {f.localizacao || 'Localização não informada'}
-                      {f.area_ha ? ` · ${formatArea(f.area_ha)} ha` : ''}
-                    </div>
-                  </>
-                )}
-              </div>
-            )
-          })}
-        </div>
+      )}
+
+      {modalAberto && (
+        <CadastrarFazendaModal
+          fazendaId={fazendaEditandoId || undefined}
+          onClose={() => setModalAberto(false)}
+          onSaved={handleFazendaSalva}
+        />
       )}
 
       {fazendaSelecionadaId && fazendaSelecionada && (
@@ -593,7 +464,48 @@ export default function FazendasPage() {
           </div>
 
           <div className="mt-5 rounded-card border border-border bg-surface p-6">
-            <h2 className="text-sm font-semibold text-text-primary">{fazendaSelecionada.nome}</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-text-primary">{fazendaSelecionada.nome}</h2>
+              {confirmandoExclusao ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-error">Excluir "{fazendaSelecionada.nome}"?</span>
+                  <button
+                    type="button"
+                    disabled={excluindo}
+                    className="rounded-control bg-error px-2 py-1 font-semibold text-white disabled:opacity-50"
+                    onClick={() => handleExcluirFazenda(fazendaSelecionada)}
+                  >
+                    {excluindo ? 'Excluindo...' : 'Sim, excluir'}
+                  </button>
+                  <button type="button" className="text-text-secondary underline" onClick={() => setConfirmandoExclusao(false)}>
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    className="text-brand-500 underline"
+                    onClick={() => {
+                      setFazendaEditandoId(fazendaSelecionada.id)
+                      setModalAberto(true)
+                    }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="text-brand-500 underline"
+                    onClick={() => handleAlternarAtivoFazenda(fazendaSelecionada)}
+                  >
+                    {fazendaSelecionada.ativo ? 'Inativar' : 'Ativar'}
+                  </button>
+                  <button type="button" className="text-error underline" onClick={() => setConfirmandoExclusao(true)}>
+                    Excluir
+                  </button>
+                </div>
+              )}
+            </div>
 
             {fazendaRecemCriadaId === fazendaSelecionadaId && (
               <div className="mt-3 rounded-control border border-brand-500 bg-brand-100 px-4 py-3 text-sm text-text-primary">

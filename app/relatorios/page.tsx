@@ -48,7 +48,7 @@ const SELECT_MOVIMENTACAO = `
   fazenda_destino:fazendas!fazenda_destino_id(nome),
   categoria:categorias_animal!categoria_id(nome, sexo, grupo:grupos_categoria(nome)),
   categoria_destino:categorias_animal!categoria_destino_id(nome),
-  cliente:clientes_fornecedores!cliente_fornecedor_id(nome),
+  cliente:pessoas!cliente_fornecedor_id(nome),
   movimentacao_ajustes(valor, item:itens_ajuste_financeiro!item_id(tipo))
 `
 
@@ -106,7 +106,6 @@ export default function RelatoriosPage() {
     supabase
       .from('fazendas')
       .select('id, nome')
-      .eq('ativo', true)
       .order('nome')
       .then(({ data }) => {
         setFazendas(data || [])
