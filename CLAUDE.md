@@ -1407,3 +1407,68 @@ Preenchendo `area_produtiva_ha` temporariamente num pasto de teste (15 ha), a lo
 corretamente (1,39 UA/ha pra 33 cabeças a ~285 kg — confere: 33×285/450/15 = 1,39) e a área exibida
 passou a mostrar os 15 ha da área produtiva, não os 50 ha de área total do mesmo pasto. Valor de
 teste revertido pra `null` depois da verificação.
+
+## Gestão de Áreas — revisão pós-uso: largura, campo de área único, lista plana, satélite
+
+Depois de usar a tela na prática (fazendo desenhos reais de pastos), o usuário reportou três
+problemas concretos que motivaram essa revisão — nenhum deles fazia parte do plano original de
+Fase D, mas todos afetam a mesma tela:
+
+**Largura da página**: `app/fazendas/page.tsx` usava `max-w-4xl` (herdado de quando a página só
+tinha um formulário simples de nome/localização) — com a grade lista+mapa da Fase D, isso apertava
+as duas colunas numa faixa de ~430px cada, fazendo a tabela de pastos (4 colunas) e o mapa parecerem
+sobrepostos por falta de espaço, não por um bug de posicionamento real. Trocado pra `max-w-6xl`
+(mesma largura já usada no Painel) — resolve o aperto sem exigir um container dedicado só pra essa
+aba, já que as outras abas de Fazendas (Saldo Inicial, Distribuição da Área) também ganham mais
+respiro sem quebrar layout.
+
+**Área total vs. área produtiva revertido pra um campo só**: a distinção de dois campos (introduzida
+na Fase D, com a Lotação por pasto passando a dividir por área produtiva na Fase F) foi simplificada
+de volta pra um único campo **"Área (ha)"**, editando `pastos.area_ha` — decisão do usuário
+confirmada explicitamente, priorizando simplicidade sobre a distinção total/produtiva por enquanto.
+Como consequência direta, `app/relatorio-lotacao/page.tsx` **reverteu a Fase F**: "Lotação atual por
+pasto" volta a dividir por `area_ha`, não mais por `area_produtiva_ha` (que fica sem nenhuma UI pra
+preencher — teria deixado a lotação por pasto sempre "—" se a mudança não fosse revertida junto).
+A coluna `pastos.area_produtiva_ha` continua existindo no banco (migração 038), só sem uso agora —
+mesmo padrão de "campo reservado pro futuro" já usado em outros pontos do sistema (`formatLotacao`/
+`formatGmd` em `lib/format.ts` ficaram anos sem uso antes de `fn_relatorio_lotacao_mensal` existir).
+
+**Lista de módulos/pastos vira uma tabela só, não mais um card por módulo**: a Fase D organizava
+cada módulo num card separado com sua própria mini-tabela de pastos — inspirado num pedido do
+usuário pra parecer mais com a listagem de referência (sistema "Metryx"), isso virou **uma única
+tabela pra fazenda inteira**, coluna "Módulo / Pasto" (linha de módulo em negrito/fundo `bg-bg`,
+linhas de pasto indentadas com `pl-6` logo abaixo), "Área (ha)" e "Ações". A linha de "+ Pasto"
+(nome + área + botão) e a linha final de "+ Módulo" viraram linhas da própria tabela em vez de um
+bloco de formulário separado abaixo de cada card — mesmo padrão de "adicionar" inline já usado em
+outras listas do sistema, só que dentro da tabela agora. Tecnicamente, cada bloco de módulo (linha
+de módulo + suas linhas de pasto + sua linha de "+ Pasto") é agrupado num `<Fragment key={m.id}>` —
+`<>` (a forma curta de Fragment) não aceita `key`, então iterar `modulos.map()` retornando fragmentos
+curtos gera um warning do React e quebra a reconciliação da lista; precisa do `Fragment` nomeado
+importado de `react`.
+
+**Grade lista+mapa vira proporção assimétrica**: trocado de `md:grid-cols-2` (50/50) pra
+`lg:grid-cols-[minmax(0,1fr)_minmax(360px,480px)]` — a lista (agora só 3 colunas, mais estreita)
+ganha o espaço flexível `1fr`, o mapa fica numa faixa fixa entre 360-480px, evitando que o mapa
+estique demais em telas muito largas. Altura do mapa também subiu de 480px pra 560px, já que agora
+tem mais largura disponível — mantendo uma proporção visual melhor.
+
+**Imagem de satélite via Esri World Imagery**: o usuário perguntou explicitamente sobre trocar o
+mapa (antes só OpenStreetMap) por imagem de satélite, incluindo "quais as implicações" — resposta
+dada antes de implementar (Google Maps exigiria conta Google Cloud + faturamento + chave de API
+restrita, e o jeito simples de "URL de tile" viola os termos de uso do Google; Esri World Imagery é
+gratuito, sem chave, sem conta, e é só trocar a URL do `<TileLayer>`). `MapaPastos.tsx` trocou
+`url`/`attribution` do OpenStreetMap pro serviço `World_Imagery` do ArcGIS REST
+(`server.arcgisonline.com`, esquema de tile `{z}/{y}/{x}` — atenção: ordem `y` antes de `x`, diferente
+da convenção `{z}/{x}/{y}` do OSM). A cor do contorno da fazenda (linha tracejada) mudou de cinza
+(`#5E6E6A`) pra branco (`#FFFFFF`) — a cor antiga tinha baixíssimo contraste sobre fundo de satélite
+(verde/marrom), enquanto branco se destaca bem nos dois. As cores dos polígonos de pasto
+(`corCategorica`, paleta categórica já existente) não precisaram de ajuste — continuam legíveis sobre
+satélite.
+
+Verificado no navegador: `getBoundingClientRect` confirmou a lista e o mapa lado a lado sem
+sobreposição (gap de ~18px, largura de conteúdo saltando de ~430px pra ~1025px em viewport 1280px);
+criação de pasto com o campo único de área persistindo corretamente; exclusão de pasto de teste;
+tiles do Esri carregando com sucesso (`complete: true, naturalWidth: 256` nos elementos
+`.leaflet-tile`); Relatório de Lotação recalculando corretamente com `area_ha` usando dados reais já
+desenhados pelo usuário na fazenda de teste (ex.: pasto com 0,76 ha e 33 cabeças resultando em
+27,49 UA/ha — conferido pela fórmula).

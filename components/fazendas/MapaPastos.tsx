@@ -92,16 +92,16 @@ export default function MapaPastos({
   const centroInicial: [number, number] = [-15.78, -47.93]
 
   return (
-    <div className="overflow-hidden rounded-control border border-border" style={{ height: 480 }}>
+    <div className="overflow-hidden rounded-control border border-border" style={{ height: 560 }}>
       <MapContainer center={centroInicial} zoom={4} style={{ height: '100%', width: '100%' }}>
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
         />
         {fazendaGeometria && (
           <GeoJSON
             data={fazendaGeometria as any}
-            style={{ color: '#5E6E6A', weight: 2, dashArray: '6 4', fill: false }}
+            style={{ color: '#FFFFFF', weight: 2, dashArray: '6 4', fill: false }}
             interactive={false}
           />
         )}

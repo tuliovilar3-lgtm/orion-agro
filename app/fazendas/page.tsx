@@ -150,7 +150,7 @@ export default function FazendasPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
+    <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Fazendas</h1>
       <p className="mt-1 text-sm text-text-secondary">Cadastre e acompanhe as fazendas do grupo.</p>
 
