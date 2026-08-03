@@ -1027,27 +1027,9 @@ $$;
 
 create type tipo_utilizacao_modulo as enum ('PECUARIA', 'AGRICULTURA');
 
--- Retiro (migração 038): nível organizacional novo entre fazenda e
--- módulo — puramente uma camada de agrupamento/filtro (modulos.fazenda_id
--- continua existindo direto, sem depender de retiro pra saldo/
--- reconciliação de área/trajetória de edição).
-create table retiros (
-  id              uuid primary key default gen_random_uuid(),
-  fazenda_id      uuid not null references fazendas(id),
-  nome            text not null,
-  ativo           boolean not null default true,
-  ordem           int not null default 0,
-  -- retiro "Geral" auto-criado — mesma proteção de sistema de módulo/pasto
-  sistema         boolean not null default false,
-  created_at      timestamptz not null default now(),
-  constraint uq_retiro_nome_fazenda unique (fazenda_id, nome)
-);
-alter table retiros disable row level security;
-
 create table modulos (
   id              uuid primary key default gen_random_uuid(),
   fazenda_id      uuid not null references fazendas(id),
-  retiro_id       uuid not null references retiros(id),
   nome            text not null,
   tipo_utilizacao tipo_utilizacao_modulo not null default 'PECUARIA',
   ativo           boolean not null default true,
@@ -1085,26 +1067,24 @@ create table pastos (
   -- importado de KML casando pelo nome; quando presente, alimenta o
   -- cálculo automático de area_ha, mas nunca é obrigatório
   geometria       jsonb,
+  -- cor customizada no mapa (hex) — nula usa a cor automática do
+  -- módulo (migração 041)
+  cor             text,
   created_at      timestamptz not null default now(),
   constraint uq_pasto_nome_modulo unique (modulo_id, nome)
 );
 alter table pastos disable row level security;
 
--- toda fazenda nova já ganha retiro + módulo + pasto "Geral"
--- automaticamente — se o grupo não liga controla_pasto ninguém vê essa
--- tela, mas todo lançamento de rebanho sempre tem pra onde apontar
+-- toda fazenda nova já ganha módulo + pasto "Geral" automaticamente —
+-- se o grupo não liga controla_pasto ninguém vê essa tela, mas todo
+-- lançamento de rebanho sempre tem pra onde apontar
 create or replace function fn_criar_modulo_pasto_geral()
 returns trigger as $$
 declare
-  v_retiro_id uuid;
   v_modulo_id uuid;
 begin
-  insert into retiros (fazenda_id, nome, ordem, sistema)
-  values (new.id, 'Geral', 0, true)
-  returning id into v_retiro_id;
-
-  insert into modulos (fazenda_id, retiro_id, nome, tipo_utilizacao, ordem, sistema)
-  values (new.id, v_retiro_id, 'Geral', 'PECUARIA', 0, true)
+  insert into modulos (fazenda_id, nome, tipo_utilizacao, ordem, sistema)
+  values (new.id, 'Geral', 'PECUARIA', 0, true)
   returning id into v_modulo_id;
 
   insert into pastos (modulo_id, nome, ordem, sistema)
@@ -1117,33 +1097,6 @@ $$ language plpgsql;
 create trigger trg_criar_modulo_pasto_geral
 after insert on fazendas
 for each row execute function fn_criar_modulo_pasto_geral();
-
--- ---------------------------------------------------------------------
--- TRIGGER: retiro "Geral" nunca pode ser excluído. Retiro criado pelo
--- usuário só pode ser excluído se já estiver sem nenhum módulo.
--- A proteção de sistema=true é liberada quando a exclusão vem de uma
--- cascata de exclusão de fazenda inteira (ver fn_validar_delete_fazenda
--- mais abaixo, seção de fazendas).
--- ---------------------------------------------------------------------
-
-create or replace function fn_validar_delete_retiro()
-returns trigger as $$
-begin
-  if old.sistema and coalesce(current_setting('orion.excluindo_fazenda', true), 'false') <> 'true' then
-    raise exception 'O retiro "Geral" não pode ser excluído — inative-o em vez disso.';
-  end if;
-
-  if exists (select 1 from modulos where retiro_id = old.id) then
-    raise exception 'Não é possível excluir: existem módulos nesse retiro. Exclua-os primeiro.';
-  end if;
-
-  return old;
-end;
-$$ language plpgsql;
-
-create trigger trg_validar_delete_retiro
-before delete on retiros
-for each row execute function fn_validar_delete_retiro();
 
 -- ---------------------------------------------------------------------
 -- TRIGGER: pasto "Geral" nunca pode ser excluído. Pasto criado pelo
@@ -1206,9 +1159,9 @@ for each row execute function fn_validar_delete_modulo();
 -- ---------------------------------------------------------------------
 -- TRIGGER: exclusão de fazenda (migração 038) — só permitida se não
 -- houver nenhuma movimentação (rebanho, área ou pesagem) referenciando
--- a fazenda. Passando essa checagem, apaga em cascata retiro/módulo/
--- pasto "Geral" (normalmente protegidos contra exclusão) via flag de
--- sessão checado acima em fn_validar_delete_retiro/pasto/modulo.
+-- a fazenda. Passando essa checagem, apaga em cascata módulo/pasto
+-- "Geral" (normalmente protegidos contra exclusão) via flag de sessão
+-- checado acima em fn_validar_delete_pasto/modulo.
 -- ---------------------------------------------------------------------
 
 create or replace function fn_validar_delete_fazenda()
@@ -1232,7 +1185,6 @@ begin
   perform set_config('orion.excluindo_fazenda', 'true', true);
   delete from pastos where modulo_id in (select id from modulos where fazenda_id = old.id);
   delete from modulos where fazenda_id = old.id;
-  delete from retiros where fazenda_id = old.id;
   perform set_config('orion.excluindo_fazenda', 'false', true);
 
   return old;

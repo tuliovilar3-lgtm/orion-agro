@@ -27,6 +27,7 @@ type Pasto = {
   modulo_id: string
   nome: string
   area_ha: number | null
+  cor: string | null
   ativo: boolean
   ordem: number
   sistema: boolean
@@ -105,7 +106,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     const { data: pas } = modIds.length
       ? await supabase
           .from('pastos')
-          .select('id, modulo_id, nome, area_ha, ativo, ordem, sistema, geometria')
+          .select('id, modulo_id, nome, area_ha, cor, ativo, ordem, sistema, geometria')
           .in('modulo_id', modIds)
           .order('ordem')
       : { data: [] as Pasto[] }
@@ -211,6 +212,26 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
       alert('Erro: ' + error.message)
     } else {
       setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, area_ha: novaArea } : x)))
+    }
+  }
+
+  async function handleAtualizarCorPasto(p: Pasto, novaCor: string) {
+    if (novaCor === p.cor) return
+    const { error } = await supabase.from('pastos').update({ cor: novaCor }).eq('id', p.id)
+    if (error) {
+      alert('Erro: ' + error.message)
+    } else {
+      setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, cor: novaCor } : x)))
+    }
+  }
+
+  async function handleMoverPastoModulo(p: Pasto, novoModuloId: string) {
+    if (!novoModuloId || novoModuloId === p.modulo_id) return
+    const { error } = await supabase.from('pastos').update({ modulo_id: novoModuloId }).eq('id', p.id)
+    if (error) {
+      alert('Erro ao mover pasto: ' + error.message)
+    } else {
+      await carregarModulosPastos()
     }
   }
 
@@ -419,7 +440,13 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const corPorModulo = Object.fromEntries(modulos.map((m, i) => [m.id, corCategorica(i)]))
   const pastosParaMapa: PastoMapa[] = pastos
     .filter((p) => p.ativo)
-    .map((p) => ({ id: p.id, nome: p.nome, areaHa: p.area_ha, geometria: p.geometria, cor: corPorModulo[p.modulo_id] || '#1C8C7C' }))
+    .map((p) => ({
+      id: p.id,
+      nome: p.nome,
+      areaHa: p.area_ha,
+      geometria: p.geometria,
+      cor: p.cor || corPorModulo[p.modulo_id] || '#1C8C7C',
+    }))
   const pastoSelecionadoMapa = pastos.find((p) => p.id === pastoSelecionadoMapaId) || null
   const pastosSemContorno = pastos.filter((p) => p.ativo && !p.geometria)
 
@@ -729,11 +756,34 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                         onClick={() => p.geometria && setPastoSelecionadoMapaId(p.id)}
                       >
                         <td className="border-b border-border p-2 pl-6" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            className={`w-full ${inputClass}`}
-                            defaultValue={p.nome}
-                            onBlur={(e) => handleRenomearPasto(p, e.target.value)}
-                          />
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              title="Cor no mapa"
+                              className="h-8 w-8 shrink-0 cursor-pointer rounded-control border border-border bg-surface p-0.5"
+                              value={p.cor || corPorModulo[p.modulo_id] || '#1C8C7C'}
+                              onChange={(e) => handleAtualizarCorPasto(p, e.target.value)}
+                            />
+                            <input
+                              className={`w-full ${inputClass}`}
+                              defaultValue={p.nome}
+                              onBlur={(e) => handleRenomearPasto(p, e.target.value)}
+                            />
+                            {!p.sistema && modulos.length > 1 && (
+                              <select
+                                title="Mover pra outro módulo"
+                                className={`shrink-0 ${inputClass}`}
+                                value={p.modulo_id}
+                                onChange={(e) => handleMoverPastoModulo(p, e.target.value)}
+                              >
+                                {modulos.map((mod) => (
+                                  <option key={mod.id} value={mod.id}>
+                                    {mod.nome}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
                         </td>
                         <td className="border-b border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
                           <input

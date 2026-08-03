@@ -1472,3 +1472,93 @@ tiles do Esri carregando com sucesso (`complete: true, naturalWidth: 256` nos el
 `.leaflet-tile`); Relatório de Lotação recalculando corretamente com `area_ha` usando dados reais já
 desenhados pelo usuário na fazenda de teste (ex.: pasto com 0,76 ha e 33 cabeças resultando em
 27,49 UA/ha — conferido pela fórmula).
+
+## Retiro removido por completo (migração 040)
+
+Depois de usar o app na prática, o usuário decidiu que não precisa do nível Retiro de jeito nenhum —
+diferente da decisão original (Fase A/B/C, "manter oculto pra quando fizer sentido no futuro"), a
+infraestrutura toda foi removida: `alter table modulos drop column retiro_id`, `drop table retiros`,
+e as funções/triggers que só existiam por causa dele (`fn_validar_delete_retiro`,
+`fn_criar_modulo_pasto_geral` volta a criar só módulo+pasto "Geral" sem retiro,
+`fn_validar_delete_fazenda` não cascade-deleta mais `retiros`). Como retiro nunca teve UI nenhuma em
+nenhum momento do projeto, não havia dado real de usuário nessa tabela — a migração 040 é uma
+remoção limpa, sem backfill nem preocupação de perda de dado.
+
+**Como o bug foi descoberto**: `modulos.retiro_id` era `not null`, mas
+`GestaoAreasPanel.tsx`/`handleCriarModulo` nunca preenchia esse campo (o formulário de "novo módulo"
+não tinha motivo pra saber que esse campo existia, já que retiro era pra ser 100% invisível) — criar
+um módulo novo por essa tela sempre dava `null value in column "retiro_id" ... violates not-null
+constraint`. Só não foi pego antes porque toda fazenda de teste usada neste projeto até agora já
+tinha o módulo "Geral" auto-criado (via trigger, que preenchia `retiro_id` corretamente); a falha só
+aparecia ao clicar em "+ Módulo" pra criar um módulo *adicional* — o usuário foi quem primeiro fez
+isso. A correção inicial (carregar o retiro "Geral" da fazenda e enviar junto no insert) foi
+descartada em favor da remoção completa, já que o usuário deixou claro que não quer manter essa
+camada nem oculta.
+
+## Botão de tela cheia no mapa
+
+`MapaPastos.tsx` ganha um botão de tela cheia (ícone de "expandir"/"recolher", SVG inline no mesmo
+estilo de traço já usado no resto do app) — implementado como um controle nativo do Leaflet
+(`L.Control.extend`, mesmo padrão imperativo já usado em `ControleDesenho`), empilhando
+automaticamente abaixo do toolbar de desenho no canto superior direito do mapa, sem precisar de
+posicionamento absoluto manual por cima do `MapContainer`. Usa a Fullscreen API nativa do navegador
+(`element.requestFullscreen()`/`document.exitFullscreen()`) no `<div>` que envolve o mapa — nenhuma
+biblioteca nova, é a mesma API já suportada por todos os navegadores relevantes. Dois detalhes que
+precisaram de atenção:
+
+- **`InvalidarTamanho`**: o Leaflet calcula o tamanho dos tiles com base nas dimensões do container
+  no momento em que ele é medido: entrar/sair da tela cheia muda o tamanho do container por fora do
+  controle do React, então sem chamar `map.invalidateSize()` depois da transição o mapa ficaria
+  cortado/desalinhado até o usuário arrastar ou dar zoom manualmente. Componente auxiliar novo,
+  mesmo padrão de `AjustarZoom`/`ControleDesenho` (usa `useMap()` de dentro do `MapContainer`),
+  disparado num `useEffect` com `setTimeout` curto sempre que o estado de tela cheia muda.
+- **Altura do container**: a `<div>` que envolve o mapa tinha `height: 560` fixo inline — em tela
+  cheia isso precisa virar `100vh` (senão o navegador limitaria a área "cheia" à altura antiga em vez
+  de ocupar a tela toda), então a altura agora é condicional ao estado `telaCheia`.
+
+Um listener em `document.addEventListener('fullscreenchange', ...)` mantém o estado sincronizado
+mesmo quando o usuário sai da tela cheia pela tecla Esc (comportamento nativo do navegador, sem
+passar pelo botão) — comparando `document.fullscreenElement` com a própria `<div>` do mapa.
+
+Verificado no navegador: o botão renderiza corretamente empilhado no canto certo, com o ícone e o
+`title` esperados; a API `requestFullscreen` está disponível e habilitada no elemento
+(`document.fullscreenEnabled === true`). **Não foi possível simular a transição completa de tela
+cheia neste ambiente de teste automatizado** — a Fullscreen API exige um gesto genuíno do usuário
+(um `.click()` disparado via script não conta como "user activation" pros navegadores, e o painel de
+preview usado nesta sessão não estava com o viewport visualmente ativo pra permitir um clique por
+coordenada de tela) — vale uma conferência visual manual (local ou no deploy) depois de subir.
+
+## Mover pasto de módulo + cor customizada por pasto (migração 041)
+
+Dois pedidos do usuário depois de usar a Gestão de Áreas na prática, implementados juntos por
+tocarem na mesma linha da tabela de pastos.
+
+**Mover pasto pra outro módulo**: como módulo é só uma camada organizacional (saldo/movimentações/
+pesagens são resolvidos por `pasto_id` direto, nunca por módulo; a validação de área também é por
+fazenda inteira via `fn_validar_area_pasto`, não por módulo), reatribuir `pastos.modulo_id` não tem
+nenhuma implicação de saldo ou trajetória — só uma reorganização visual. Por isso não precisou de
+nenhuma checagem tipo `fn_checar_edicao_movimentacao`: é um `update` direto (`handleMoverPastoModulo`
+em `GestaoAreasPanel.tsx`), sem confirmação, já que é reversível a qualquer momento escolhendo o
+módulo de volta. Aparece como um `<select>` compacto na própria linha do pasto na lista — só quando
+existe mais de um módulo pra escolher — e fica de fora do pasto "Geral" (`sistema = true`), que
+continua sempre atrelado ao módulo "Geral", mesmo princípio já usado nos outros campos protegidos
+desse pasto.
+
+**Cor customizada por pasto**: antes, todos os pastos de um mesmo módulo compartilhavam a mesma cor
+automática no mapa (`corCategorica` indexada pelo módulo) — num módulo com vários pastos (comum
+depois que a Fase D transformou a lista em módulo→pasto plano, sem mais limite visual por card),
+ficava difícil distinguir um pasto do outro só pela cor. `pastos.cor` (migração 041, `text` nullable)
+guarda uma cor customizada em hex; quando nula, o comportamento de sempre continua (cor automática do
+módulo) — nenhuma mudança pros pastos que nunca tiverem cor escolhida. UI é um swatch nativo do
+navegador (`<input type="color">`) ao lado do nome do pasto na lista — decisão deliberada de não
+replicar o popover de paleta fixa + campo hex do sistema de referência (visto num print do usuário):
+o input nativo já dá acesso a qualquer cor e a um campo hex embutido, com muito menos código pra
+manter. `pastosParaMapa` resolve a cor final como `p.cor || corPorModulo[p.modulo_id] || '#1C8C7C'`
+— mesma prioridade (customizada > automática > fallback) usada em qualquer campo opcional do
+sistema.
+
+Verificado no navegador e direto no banco: trocar a cor de um pasto de teste persistiu corretamente
+(`pastos.cor` = `#ff00ff`) e sumiu ao reverter (`null`); mover um pasto de "Geral" pra um módulo
+criado pelo usuário ("Sítio Túlio") atualizou `modulo_id` corretamente e a lista reagrupou o pasto
+sob o novo módulo automaticamente, sem precisar recarregar a página. Os dois testes foram revertidos
+ao estado original depois da verificação.
