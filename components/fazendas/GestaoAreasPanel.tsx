@@ -27,25 +27,47 @@ type Pasto = {
   modulo_id: string
   nome: string
   area_ha: number | null
+  area_produtiva_ha: number | null
   ativo: boolean
   ordem: number
   sistema: boolean
   geometria: Geometry | null
 }
 
-type Modo = 'lista' | 'mapa'
+const NOVO_PASTO = '__novo__'
 
 type LinhaRevisaoImportacao = {
   nome: string
   geometria: Geometry
   areaHa: number
   pastoIdCasado: string | null
+  criarNovo: boolean
+  moduloIdNovo: string
 }
 
 const inputClass =
   'rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500'
 
-export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string }) {
+function IconToggle({ ativo }: { ativo: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      {ativo ? <path d="M8 12.5l2.5 2.5L16 9.5" /> : <path d="M9 9l6 6M15 9l-6 6" />}
+    </svg>
+  )
+}
+
+function IconExcluir() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16" />
+      <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+      <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+    </svg>
+  )
+}
+
+export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [modulos, setModulos] = useState<Modulo[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
   const [loadingPastos, setLoadingPastos] = useState(false)
@@ -54,11 +76,11 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
   const [criandoModulo, setCriandoModulo] = useState(false)
   const [novoPastoNomePorModulo, setNovoPastoNomePorModulo] = useState<Record<string, string>>({})
   const [novoPastoAreaPorModulo, setNovoPastoAreaPorModulo] = useState<Record<string, string>>({})
+  const [novoPastoAreaProdutivaPorModulo, setNovoPastoAreaProdutivaPorModulo] = useState<Record<string, string>>({})
   const [criandoPastoModuloId, setCriandoPastoModuloId] = useState<string | null>(null)
   const [confirmandoExclusaoModuloId, setConfirmandoExclusaoModuloId] = useState<string | null>(null)
   const [confirmandoExclusaoPastoId, setConfirmandoExclusaoPastoId] = useState<string | null>(null)
 
-  const [modo, setModo] = useState<Modo>('lista')
   const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
   const [importandoContornoFazenda, setImportandoContornoFazenda] = useState(false)
   const [importandoKmlPastos, setImportandoKmlPastos] = useState(false)
@@ -85,7 +107,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
     const { data: pas } = modIds.length
       ? await supabase
           .from('pastos')
-          .select('id, modulo_id, nome, area_ha, ativo, ordem, sistema, geometria')
+          .select('id, modulo_id, nome, area_ha, area_produtiva_ha, ativo, ordem, sistema, geometria')
           .in('modulo_id', modIds)
           .order('ordem')
       : { data: [] as Pasto[] }
@@ -154,6 +176,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
     const nome = (novoPastoNomePorModulo[moduloId] || '').trim()
     if (!nome) return
     const areaStr = novoPastoAreaPorModulo[moduloId] || ''
+    const areaProdutivaStr = novoPastoAreaProdutivaPorModulo[moduloId] || ''
     setCriandoPastoModuloId(moduloId)
     const pastosDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
     const proximaOrdem = pastosDoModulo.length ? Math.max(...pastosDoModulo.map((p) => p.ordem)) + 1 : 0
@@ -161,6 +184,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
       modulo_id: moduloId,
       nome,
       area_ha: areaStr ? parseFloat(areaStr) : null,
+      area_produtiva_ha: areaProdutivaStr ? parseFloat(areaProdutivaStr) : null,
       ordem: proximaOrdem,
     })
     if (error) {
@@ -168,6 +192,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
     } else {
       setNovoPastoNomePorModulo((prev) => ({ ...prev, [moduloId]: '' }))
       setNovoPastoAreaPorModulo((prev) => ({ ...prev, [moduloId]: '' }))
+      setNovoPastoAreaProdutivaPorModulo((prev) => ({ ...prev, [moduloId]: '' }))
       await carregarModulosPastos()
     }
     setCriandoPastoModuloId(null)
@@ -191,6 +216,17 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
       alert('Erro: ' + error.message)
     } else {
       setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, area_ha: novaArea } : x)))
+    }
+  }
+
+  async function handleAtualizarAreaProdutivaPasto(p: Pasto, novaAreaStr: string) {
+    const novaArea = novaAreaStr ? parseFloat(novaAreaStr) : null
+    if (novaArea === p.area_produtiva_ha) return
+    const { error } = await supabase.from('pastos').update({ area_produtiva_ha: novaArea }).eq('id', p.id)
+    if (error) {
+      alert('Erro: ' + error.message)
+    } else {
+      setPastos((prev) => prev.map((x) => (x.id === p.id ? { ...x, area_produtiva_ha: novaArea } : x)))
     }
   }
 
@@ -271,6 +307,8 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
           geometria: f.geometria,
           areaHa: f.areaHa,
           pastoIdCasado: porNome.get(normalizar(f.nome))?.id ?? null,
+          criarNovo: false,
+          moduloIdNovo: modulos[0]?.id ?? '',
         }))
       )
     } catch {
@@ -280,27 +318,61 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
     }
   }
 
-  function atualizarCasamentoImportacao(indice: number, pastoId: string) {
+  function atualizarSelecaoImportacao(indice: number, valor: string) {
     setRevisaoImportacao((prev) =>
-      prev ? prev.map((r, i) => (i === indice ? { ...r, pastoIdCasado: pastoId || null } : r)) : prev
+      prev
+        ? prev.map((r, i) =>
+            i === indice
+              ? valor === NOVO_PASTO
+                ? { ...r, criarNovo: true, pastoIdCasado: null }
+                : { ...r, criarNovo: false, pastoIdCasado: valor || null }
+              : r
+          )
+        : prev
     )
+  }
+
+  function atualizarModuloNovoImportacao(indice: number, moduloId: string) {
+    setRevisaoImportacao((prev) => (prev ? prev.map((r, i) => (i === indice ? { ...r, moduloIdNovo: moduloId } : r)) : prev))
   }
 
   async function handleConfirmarImportacaoKml() {
     if (!revisaoImportacao) return
-    const validos = revisaoImportacao.filter((r) => r.pastoIdCasado)
-    if (validos.length === 0) {
+    const paraCasar = revisaoImportacao.filter((r) => r.pastoIdCasado)
+    const paraCriar = revisaoImportacao.filter((r) => r.criarNovo && r.moduloIdNovo)
+    if (paraCasar.length === 0 && paraCriar.length === 0) {
       setRevisaoImportacao(null)
       return
     }
     setImportandoKmlPastos(true)
-    for (const r of validos) {
+
+    for (const r of paraCasar) {
       const { error } = await supabase
         .from('pastos')
         .update({ geometria: r.geometria, area_ha: r.areaHa })
         .eq('id', r.pastoIdCasado as string)
       if (error) alert(`Erro ao importar "${r.nome}": ` + error.message)
     }
+
+    const proximaOrdemPorModulo: Record<string, number> = {}
+    for (const r of paraCriar) {
+      if (proximaOrdemPorModulo[r.moduloIdNovo] === undefined) {
+        const pastosDoModulo = pastos.filter((p) => p.modulo_id === r.moduloIdNovo)
+        proximaOrdemPorModulo[r.moduloIdNovo] = pastosDoModulo.length
+          ? Math.max(...pastosDoModulo.map((p) => p.ordem)) + 1
+          : 0
+      }
+      const { error } = await supabase.from('pastos').insert({
+        modulo_id: r.moduloIdNovo,
+        nome: r.nome || 'Sem nome',
+        area_ha: r.areaHa,
+        geometria: r.geometria,
+        ordem: proximaOrdemPorModulo[r.moduloIdNovo],
+      })
+      proximaOrdemPorModulo[r.moduloIdNovo] += 1
+      if (error) alert(`Erro ao criar pasto "${r.nome}": ` + error.message)
+    }
+
     setImportandoKmlPastos(false)
     setRevisaoImportacao(null)
     await carregarModulosPastos()
@@ -365,6 +437,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
     .filter((p) => p.ativo)
     .map((p) => ({ id: p.id, nome: p.nome, areaHa: p.area_ha, geometria: p.geometria, cor: corPorModulo[p.modulo_id] || '#1C8C7C' }))
   const pastoSelecionadoMapa = pastos.find((p) => p.id === pastoSelecionadoMapaId) || null
+  const pastosSemContorno = pastos.filter((p) => p.ativo && !p.geometria)
 
   return (
     <div className="mt-4">
@@ -373,29 +446,220 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
         ultrapassar a área alocada em "Pecuária" na fazenda.
       </p>
 
-      <div className="mt-4 flex gap-1.5">
-        <button
-          type="button"
-          onClick={() => setModo('lista')}
-          className={`rounded-control px-3 py-1.5 text-sm font-medium ${
-            modo === 'lista' ? 'bg-brand-500 text-white' : 'border border-border text-text-secondary'
-          }`}
-        >
-          Lista
-        </button>
-        <button
-          type="button"
-          onClick={() => setModo('mapa')}
-          className={`rounded-control px-3 py-1.5 text-sm font-medium ${
-            modo === 'mapa' ? 'bg-brand-500 text-white' : 'border border-border text-text-secondary'
-          }`}
-        >
-          Mapa
-        </button>
+      {pastosSemContorno.length > 0 && (
+        <div className="mt-4 rounded-control border border-dashed border-border bg-surface p-4">
+          <p className="text-sm font-semibold text-text-primary">
+            {pastosSemContorno.length} pasto{pastosSemContorno.length === 1 ? '' : 's'} sem contorno no mapa
+          </p>
+          <p className="mt-1 text-sm text-text-secondary">
+            {pastosSemContorno.map((p) => p.nome).join(', ')} — desenhe ou importe um KML pra ver a área calculada
+            automaticamente.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="rounded-control border border-border p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">Contorno da fazenda</h3>
+              <p className="text-xs text-text-secondary">Usado só como referência visual de fundo — nunca obrigatório.</p>
+            </div>
+            <label className="cursor-pointer rounded-control border border-border px-3 py-1.5 text-sm text-text-primary">
+              {importandoContornoFazenda ? 'Importando...' : fazendaGeometria ? 'Substituir KML' : 'Importar KML'}
+              <input
+                type="file"
+                accept=".kml"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) handleUploadContornoFazenda(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="rounded-control border border-border p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">Importar pastos de um KML</h3>
+              <p className="text-xs text-text-secondary">
+                Casa cada polígono com um pasto existente pelo nome, ou crie pastos novos — revise antes de confirmar.
+              </p>
+            </div>
+            <label className="cursor-pointer rounded-control border border-border px-3 py-1.5 text-sm text-text-primary">
+              {importandoKmlPastos ? 'Lendo...' : 'Importar KML'}
+              <input
+                type="file"
+                accept=".kml"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) handleUploadKmlPastos(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          </div>
+        </div>
       </div>
 
-      {modo === 'lista' ? (
-        <div className="mt-4 space-y-4">
+      {revisaoImportacao && (
+        <div className="mt-4 rounded-control border border-warning bg-warning-bg p-4">
+          <h3 className="text-sm font-semibold text-text-primary">
+            Revisar importação ({revisaoImportacao.length} polígono{revisaoImportacao.length === 1 ? '' : 's'})
+          </h3>
+          <div className="mt-3 space-y-2">
+            {revisaoImportacao.map((r, i) => (
+              <div
+                key={i}
+                className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-surface p-2.5 text-sm"
+              >
+                <span className="min-w-32 font-medium text-text-primary">{r.nome || '(sem nome)'}</span>
+                <span className="text-text-secondary">{formatArea(r.areaHa)} ha</span>
+                <select
+                  className={inputClass}
+                  value={r.criarNovo ? NOVO_PASTO : r.pastoIdCasado ?? ''}
+                  onChange={(e) => atualizarSelecaoImportacao(i, e.target.value)}
+                >
+                  <option value="">Ignorar</option>
+                  <option value={NOVO_PASTO}>+ Criar novo pasto</option>
+                  {pastos.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nome}
+                    </option>
+                  ))}
+                </select>
+                {r.criarNovo && (
+                  <select
+                    className={inputClass}
+                    value={r.moduloIdNovo}
+                    onChange={(e) => atualizarModuloNovoImportacao(i, e.target.value)}
+                  >
+                    {modulos.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.nome}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setRevisaoImportacao(null)}
+              className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={importandoKmlPastos}
+              onClick={handleConfirmarImportacaoKml}
+              className="rounded-control bg-warning px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {importandoKmlPastos ? 'Salvando...' : 'Confirmar importação'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {desenhoPendente && (
+        <div className="mt-4 rounded-control border border-brand-500 bg-brand-100 p-4">
+          <h3 className="text-sm font-semibold text-text-primary">Novo contorno desenhado</h3>
+          <p className="mt-1 text-xs text-text-secondary">
+            Área calculada: {formatArea(desenhoPendente.areaHa)} ha. Escolha a quem atribuir.
+          </p>
+
+          <div className="mt-3 flex gap-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={modoAtribuicao === 'novo'} onChange={() => setModoAtribuicao('novo')} />
+              Novo pasto
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                checked={modoAtribuicao === 'existente'}
+                onChange={() => setModoAtribuicao('existente')}
+              />
+              Substituir pasto existente
+            </label>
+          </div>
+
+          {modoAtribuicao === 'novo' ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-text-secondary">
+                  Nome
+                  <Required />
+                </label>
+                <input className={inputClass} value={atribuirNovoNome} onChange={(e) => setAtribuirNovoNome(e.target.value)} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-text-secondary">
+                  Módulo
+                  <Required />
+                </label>
+                <select
+                  className={inputClass}
+                  value={atribuirNovoModuloId}
+                  onChange={(e) => setAtribuirNovoModuloId(e.target.value)}
+                >
+                  {modulos.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3">
+              <label className="mb-1 block text-xs font-medium text-text-secondary">
+                Pasto
+                <Required />
+              </label>
+              <select
+                className={inputClass}
+                value={atribuirPastoExistenteId}
+                onChange={(e) => setAtribuirPastoExistenteId(e.target.value)}
+              >
+                <option value="">Selecione...</option>
+                {pastos.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setDesenhoPendente(null)}
+              className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={salvandoAtribuicao}
+              onClick={handleConfirmarAtribuicao}
+              className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {salvandoAtribuicao ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <div className="space-y-4">
           {modulos.map((m) => {
             const pastosDoModulo = pastos.filter((p) => p.modulo_id === m.id).sort((a, b) => a.ordem - b.ordem)
             const ativosDoModulo = pastosDoModulo.filter((p) => p.ativo)
@@ -404,7 +668,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
               <div key={m.id} className={`rounded-control border border-border p-4 ${!m.ativo ? 'opacity-60' : ''}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <input
-                    className={`w-48 font-semibold ${inputClass}`}
+                    className={`w-40 font-semibold ${inputClass}`}
                     defaultValue={m.nome}
                     onBlur={(e) => handleRenomearModulo(m, e.target.value)}
                   />
@@ -428,23 +692,30 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 text-text-secondary">
                       <button
                         type="button"
                         disabled={processandoPastoId === m.id || (m.ativo && ativosNaFazenda.length <= 1)}
-                        title={m.ativo && ativosNaFazenda.length <= 1 ? 'Precisa haver ao menos um módulo ativo.' : undefined}
-                        className="text-xs text-brand-500 underline disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline"
+                        title={
+                          m.ativo && ativosNaFazenda.length <= 1
+                            ? 'Precisa haver ao menos um módulo ativo.'
+                            : m.ativo
+                              ? 'Inativar módulo'
+                              : 'Ativar módulo'
+                        }
+                        className="hover:text-success disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={() => handleAlternarAtivoModulo(m)}
                       >
-                        {m.ativo ? 'Inativar módulo' : 'Ativar módulo'}
+                        <IconToggle ativo={m.ativo} />
                       </button>
                       {!m.sistema && (
                         <button
                           type="button"
-                          className="text-xs text-error underline"
+                          title="Excluir módulo"
+                          className="hover:text-error"
                           onClick={() => setConfirmandoExclusaoModuloId(m.id)}
                         >
-                          Excluir módulo
+                          <IconExcluir />
                         </button>
                       )}
                     </div>
@@ -455,31 +726,50 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                   <thead>
                     <tr>
                       <th className="border border-border p-2 text-left text-text-secondary">Pasto/talhão</th>
-                      <th className="border border-border p-2 text-right text-text-secondary">Área (ha)</th>
-                      <th className="border border-border p-2 text-right text-text-secondary">Status</th>
+                      <th className="border border-border p-2 text-right text-text-secondary">Área total (ha)</th>
+                      <th className="border border-border p-2 text-right text-text-secondary" title="Área realmente aproveitável pra pastagem, descontando brejo/pedra/mata">
+                        Área produtiva (ha)
+                      </th>
+                      <th className="border border-border p-2 text-right text-text-secondary">Ações</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pastosDoModulo.map((p) => (
-                      <tr key={p.id} className={!p.ativo ? 'opacity-60' : ''}>
-                        <td className="border border-border p-2">
+                      <tr
+                        key={p.id}
+                        className={`cursor-pointer ${!p.ativo ? 'opacity-60' : ''} ${
+                          pastoSelecionadoMapaId === p.id ? 'bg-brand-100' : ''
+                        }`}
+                        onClick={() => p.geometria && setPastoSelecionadoMapaId(p.id)}
+                      >
+                        <td className="border border-border p-2" onClick={(e) => e.stopPropagation()}>
                           <input
                             className={`w-full ${inputClass}`}
                             defaultValue={p.nome}
                             onBlur={(e) => handleRenomearPasto(p, e.target.value)}
                           />
                         </td>
-                        <td className="border border-border p-2 text-right">
+                        <td className="border border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
                           <input
                             type="number"
                             min="0"
                             step="0.01"
-                            className={`w-28 text-right ${inputClass}`}
+                            className={`w-24 text-right ${inputClass}`}
                             defaultValue={p.area_ha ?? ''}
                             onBlur={(e) => handleAtualizarAreaPasto(p, e.target.value)}
                           />
                         </td>
-                        <td className="border border-border p-2 text-right">
+                        <td className="border border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className={`w-24 text-right ${inputClass}`}
+                            defaultValue={p.area_produtiva_ha ?? ''}
+                            onBlur={(e) => handleAtualizarAreaProdutivaPasto(p, e.target.value)}
+                          />
+                        </td>
+                        <td className="border border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
                           {confirmandoExclusaoPastoId === p.id ? (
                             <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
                               <span className="text-error">Excluir?</span>
@@ -500,27 +790,30 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center justify-end gap-3">
+                            <div className="flex items-center justify-end gap-2 text-text-secondary">
                               <button
                                 type="button"
                                 disabled={processandoPastoId === p.id || (p.ativo && ativosDoModulo.length <= 1)}
                                 title={
                                   p.ativo && ativosDoModulo.length <= 1
                                     ? 'Precisa haver ao menos um pasto ativo no módulo.'
-                                    : undefined
+                                    : p.ativo
+                                      ? 'Inativar'
+                                      : 'Ativar'
                                 }
-                                className="text-xs text-brand-500 underline disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline"
+                                className="hover:text-success disabled:cursor-not-allowed disabled:opacity-40"
                                 onClick={() => handleAlternarAtivoPasto(p)}
                               >
-                                {p.ativo ? 'Inativar' : 'Ativar'}
+                                <IconToggle ativo={p.ativo} />
                               </button>
                               {!p.sistema && (
                                 <button
                                   type="button"
-                                  className="text-xs text-error underline"
+                                  title="Excluir"
+                                  className="hover:text-error"
                                   onClick={() => setConfirmandoExclusaoPastoId(p.id)}
                                 >
-                                  Excluir
+                                  <IconExcluir />
                                 </button>
                               )}
                             </div>
@@ -544,7 +837,7 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-text-secondary">Área (ha)</label>
+                    <label className="mb-1 block text-xs font-medium text-text-secondary">Área total (ha)</label>
                     <input
                       type="number"
                       min="0"
@@ -552,6 +845,17 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                       className={`w-24 ${inputClass}`}
                       value={novoPastoAreaPorModulo[m.id] || ''}
                       onChange={(e) => setNovoPastoAreaPorModulo((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-text-secondary">Área produtiva (ha)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={`w-24 ${inputClass}`}
+                      value={novoPastoAreaProdutivaPorModulo[m.id] || ''}
+                      onChange={(e) => setNovoPastoAreaProdutivaPorModulo((prev) => ({ ...prev, [m.id]: e.target.value }))}
                     />
                   </div>
                   <button
@@ -585,105 +889,12 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
             </button>
           </div>
         </div>
-      ) : (
-        <div className="mt-4 space-y-4">
-          <div className="rounded-control border border-border p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-text-primary">Contorno da fazenda</h3>
-                <p className="text-xs text-text-secondary">Usado só como referência visual de fundo — nunca obrigatório.</p>
-              </div>
-              <label className="cursor-pointer rounded-control border border-border px-3 py-1.5 text-sm text-text-primary">
-                {importandoContornoFazenda ? 'Importando...' : fazendaGeometria ? 'Substituir KML' : 'Importar KML'}
-                <input
-                  type="file"
-                  accept=".kml"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) handleUploadContornoFazenda(f)
-                    e.target.value = ''
-                  }}
-                />
-              </label>
-            </div>
-          </div>
 
-          <div className="rounded-control border border-border p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-semibold text-text-primary">Importar pastos de um KML</h3>
-                <p className="text-xs text-text-secondary">
-                  Casa cada polígono com um pasto existente pelo nome — revise antes de confirmar.
-                </p>
-              </div>
-              <label className="cursor-pointer rounded-control border border-border px-3 py-1.5 text-sm text-text-primary">
-                {importandoKmlPastos ? 'Lendo...' : 'Importar KML'}
-                <input
-                  type="file"
-                  accept=".kml"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) handleUploadKmlPastos(f)
-                    e.target.value = ''
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-
-          {revisaoImportacao && (
-            <div className="rounded-control border border-warning bg-warning-bg p-4">
-              <h3 className="text-sm font-semibold text-text-primary">
-                Revisar importação ({revisaoImportacao.length} polígono{revisaoImportacao.length === 1 ? '' : 's'})
-              </h3>
-              <div className="mt-3 space-y-2">
-                {revisaoImportacao.map((r, i) => (
-                  <div
-                    key={i}
-                    className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-surface p-2.5 text-sm"
-                  >
-                    <span className="min-w-32 font-medium text-text-primary">{r.nome || '(sem nome)'}</span>
-                    <span className="text-text-secondary">{formatArea(r.areaHa)} ha</span>
-                    <select
-                      className={inputClass}
-                      value={r.pastoIdCasado ?? ''}
-                      onChange={(e) => atualizarCasamentoImportacao(i, e.target.value)}
-                    >
-                      <option value="">Ignorar</option>
-                      {pastos.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.nome}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRevisaoImportacao(null)}
-                  className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  disabled={importandoKmlPastos}
-                  onClick={handleConfirmarImportacaoKml}
-                  className="rounded-control bg-warning px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {importandoKmlPastos ? 'Salvando...' : 'Confirmar importação'}
-                </button>
-              </div>
-            </div>
-          )}
-
+        <div className="space-y-4">
           <MapaPastos
             fazendaGeometria={fazendaGeometria}
             pastos={pastosParaMapa}
+            pastoDestacadoId={pastoSelecionadoMapaId}
             onDesenhado={handleDesenhado}
             onClicarPasto={setPastoSelecionadoMapaId}
           />
@@ -701,102 +912,15 @@ export default function ModulosPastosPanel({ fazendaId }: { fazendaId: string })
                 </button>
               </div>
               <p className="mt-1 text-text-secondary">
-                Área: {pastoSelecionadoMapa.area_ha != null ? `${formatArea(pastoSelecionadoMapa.area_ha)} ha` : '—'}
+                Área total: {pastoSelecionadoMapa.area_ha != null ? `${formatArea(pastoSelecionadoMapa.area_ha)} ha` : '—'}
+                {' · '}
+                Área produtiva:{' '}
+                {pastoSelecionadoMapa.area_produtiva_ha != null ? `${formatArea(pastoSelecionadoMapa.area_produtiva_ha)} ha` : '—'}
               </p>
-            </div>
-          )}
-
-          {desenhoPendente && (
-            <div className="rounded-control border border-brand-500 bg-brand-100 p-4">
-              <h3 className="text-sm font-semibold text-text-primary">Novo contorno desenhado</h3>
-              <p className="mt-1 text-xs text-text-secondary">
-                Área calculada: {formatArea(desenhoPendente.areaHa)} ha. Escolha a quem atribuir.
-              </p>
-
-              <div className="mt-3 flex gap-4 text-sm">
-                <label className="flex items-center gap-1.5">
-                  <input type="radio" checked={modoAtribuicao === 'novo'} onChange={() => setModoAtribuicao('novo')} />
-                  Novo pasto
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="radio"
-                    checked={modoAtribuicao === 'existente'}
-                    onChange={() => setModoAtribuicao('existente')}
-                  />
-                  Substituir pasto existente
-                </label>
-              </div>
-
-              {modoAtribuicao === 'novo' ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-text-secondary">
-                      Nome
-                      <Required />
-                    </label>
-                    <input className={inputClass} value={atribuirNovoNome} onChange={(e) => setAtribuirNovoNome(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-text-secondary">
-                      Módulo
-                      <Required />
-                    </label>
-                    <select
-                      className={inputClass}
-                      value={atribuirNovoModuloId}
-                      onChange={(e) => setAtribuirNovoModuloId(e.target.value)}
-                    >
-                      {modulos.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.nome}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-3">
-                  <label className="mb-1 block text-xs font-medium text-text-secondary">
-                    Pasto
-                    <Required />
-                  </label>
-                  <select
-                    className={inputClass}
-                    value={atribuirPastoExistenteId}
-                    onChange={(e) => setAtribuirPastoExistenteId(e.target.value)}
-                  >
-                    <option value="">Selecione...</option>
-                    {pastos.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.nome}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDesenhoPendente(null)}
-                  className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  disabled={salvandoAtribuicao}
-                  onClick={handleConfirmarAtribuicao}
-                  className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {salvandoAtribuicao ? 'Salvando...' : 'Salvar'}
-                </button>
-              </div>
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

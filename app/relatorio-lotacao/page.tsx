@@ -49,7 +49,7 @@ type LinhaPastoRaw = {
   peso_medio_kg: number | null
 }
 
-type PastoInfo = { area_ha: number | null; fazenda_id: string }
+type PastoInfo = { area_produtiva_ha: number | null; fazenda_id: string }
 
 type PastoLotacao = {
   pasto_id: string
@@ -57,7 +57,7 @@ type PastoLotacao = {
   fazenda_nome: string
   quantidade: number
   pesoVivoTotal: number
-  area_ha: number | null
+  area_produtiva_ha: number | null
   lotacao: number | null
 }
 
@@ -230,7 +230,7 @@ export default function RelatorioLotacaoPage() {
     Promise.all([
       supabase
         .from('pastos')
-        .select('id, nome, area_ha, ativo, modulo:modulos!modulo_id(fazenda_id)')
+        .select('id, nome, area_produtiva_ha, ativo, modulo:modulos!modulo_id(fazenda_id)')
         .eq('ativo', true),
       Promise.all(
         fazendaIds.map((fId) =>
@@ -245,7 +245,7 @@ export default function RelatorioLotacaoPage() {
 
       const infoPasto = new Map<string, PastoInfo>()
       for (const p of (pastosResp.data as any[]) || []) {
-        infoPasto.set(p.id, { area_ha: p.area_ha, fazenda_id: p.modulo?.fazenda_id })
+        infoPasto.set(p.id, { area_produtiva_ha: p.area_produtiva_ha, fazenda_id: p.modulo?.fazenda_id })
       }
       const nomeFazenda = new Map(fazendas.map((f) => [f.id, f.nome]))
 
@@ -259,7 +259,7 @@ export default function RelatorioLotacaoPage() {
             fazenda_nome: nomeFazenda.get(fazendaId) ?? '',
             quantidade: 0,
             pesoVivoTotal: 0,
-            area_ha: info?.area_ha ?? null,
+            area_produtiva_ha: info?.area_produtiva_ha ?? null,
             lotacao: null,
           }
           existente.quantidade += r.quantidade
@@ -270,7 +270,7 @@ export default function RelatorioLotacaoPage() {
 
       const linhas = [...acumulado.values()].map((p) => ({
         ...p,
-        lotacao: p.area_ha && p.area_ha > 0 ? p.pesoVivoTotal / KG_POR_UA / p.area_ha : null,
+        lotacao: p.area_produtiva_ha && p.area_produtiva_ha > 0 ? p.pesoVivoTotal / KG_POR_UA / p.area_produtiva_ha : null,
       }))
       linhas.sort((a, b) => (b.lotacao ?? -1) - (a.lotacao ?? -1))
 
@@ -630,7 +630,7 @@ export default function RelatorioLotacaoPage() {
                             </span>
                             <span className="tabular-nums text-text-secondary">
                               {formatQuantidade(p.quantidade)} cab. · {formatPeso(pesoMedio)} kg ·{' '}
-                              {p.area_ha != null ? `${formatArea(p.area_ha)} ha · ` : ''}
+                              {p.area_produtiva_ha != null ? `${formatArea(p.area_produtiva_ha)} ha · ` : ''}
                               <b className="text-text-primary">{formatLotacao(p.lotacao)} UA/ha</b>
                             </span>
                           </div>

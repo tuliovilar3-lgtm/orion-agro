@@ -73,11 +73,13 @@ function AjustarZoom({ geometrias }: { geometrias: Geometry[] }) {
 export default function MapaPastos({
   fazendaGeometria,
   pastos,
+  pastoDestacadoId,
   onDesenhado,
   onClicarPasto,
 }: {
   fazendaGeometria: Geometry | null
   pastos: PastoMapa[]
+  pastoDestacadoId?: string | null
   onDesenhado: (geometria: Geometry, areaHa: number) => void
   onClicarPasto: (pastoId: string) => void
 }) {
@@ -105,14 +107,17 @@ export default function MapaPastos({
         )}
         {pastos
           .filter((p) => p.geometria)
-          .map((p) => (
-            <GeoJSON
-              key={p.id}
-              data={p.geometria as any}
-              style={{ color: p.cor, weight: 2, fillColor: p.cor, fillOpacity: 0.25 }}
-              eventHandlers={{ click: () => onClicarPasto(p.id) }}
-            />
-          ))}
+          .map((p) => {
+            const destacado = p.id === pastoDestacadoId
+            return (
+              <GeoJSON
+                key={`${p.id}-${destacado}`}
+                data={p.geometria as any}
+                style={{ color: p.cor, weight: destacado ? 4 : 2, fillColor: p.cor, fillOpacity: destacado ? 0.45 : 0.25 }}
+                eventHandlers={{ click: () => onClicarPasto(p.id) }}
+              />
+            )
+          })}
         <AjustarZoom geometrias={todasGeometrias} />
         <ControleDesenho onDesenhado={onDesenhado} />
       </MapContainer>

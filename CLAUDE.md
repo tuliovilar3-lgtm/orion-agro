@@ -1250,3 +1250,160 @@ O fluxo de "+ Novo cliente/fornecedor" inline em `app/movimentacoes/page.tsx` (c
 continua funcionando sem alteração — grava só `nome`/`documento` e o(s) papel(is), deixando todos os
 campos novos desta seção em branco; a pessoa criada por ali aparece completa em "Pessoas e Empresas"
 depois, pronta pra ser complementada com endereço/contato se o usuário quiser.
+
+## Gestão de Áreas — renomeação de Módulos e Pastos (Fase D)
+
+`components/fazendas/ModulosPastosPanel.tsx` foi renomeado pra `GestaoAreasPanel.tsx`, e o item da
+aba na fazenda selecionada acompanhou: "Módulos e Pastos" → "Gestão de Áreas" (a aba "Distribuição
+da Área" continua separada, sem fundir — o plano original considerou fundir as duas, mas decisão foi
+manter cada uma com seu propósito específico: uma edita o cadastro de módulo/pasto, a outra lança e
+visualiza `MUDANCA_USO`). **Nível Retiro continua fora da UI** desta fase também — a versão original
+do plano previa um CRUD de Retiro aqui (Retiro → Módulo → Pasto indentado na Lista); essa parte foi
+pulada por inteiro, seguindo a mesma instrução explícita do usuário já documentada na seção
+"Fase A/B/C" acima (Retiro existe no schema, sempre usa o "Geral", nenhuma tela mostra/cria/edita
+retiro).
+
+**`pastos` ganha o campo `area_produtiva_ha`** (já existia na coluna desde a migração 038, só sem UI
+até agora) lado a lado com `area_ha` — tanto na tabela de pastos já cadastrados (coluna "Área
+produtiva (ha)", com `title` explicando a diferença pro "Área total (ha)") quanto no formulário
+inline de "Novo pasto/talhão". Segue o mesmo padrão de todos os campos desse formulário: opcional,
+editável no blur do input, sem botão de salvar próprio.
+
+**Lista e mapa lado a lado** (`grid gap-4 md:grid-cols-2` — empilha em mobile, sem toggle) substitui
+o antigo botão Lista/Mapa: a Lista fica sempre a esquerda, o Mapa sempre à direita em telas `md:` e
+acima. Os controles de upload de KML (contorno da fazenda + importar pastos), a revisão de
+importação e o card de "novo contorno desenhado" ficam **acima** da grade lista+mapa, ocupando a
+largura toda — só o CRUD de módulo/pasto e o `MapaPastos` propriamente dito entram na grade de duas
+colunas.
+
+**Clicar num pasto da lista destaca o polígono no mapa** — cada `<tr>` da tabela de pastos é
+clicável (só se `p.geometria` existir; sem contorno não tem o que destacar) e seta
+`pastoSelecionadoMapaId`, a mesma variável de estado que já existia pro clique no mapa em si (agora
+bidirecional: lista→mapa e mapa→lista). `MapaPastos` ganha um prop novo, `pastoDestacadoId`, que
+engorda o traço (`weight` 2→4) e a opacidade do preenchimento (0.25→0.45) do polígono destacado — a
+implementação força um remount da camada `<GeoJSON>` correspondente via `key={id}-{destacado}` em
+vez de confiar em `setStyle` reativo do react-leaflet, escolha deliberada pra garantir que o
+restyle sempre aconteça (o comportamento de atualização de estilo em camadas já montadas varia
+entre versões da lib). A linha da tabela também ganha destaque visual (`bg-brand-100`) quando
+selecionada, espelhando o destaque no mapa.
+
+**Ações de módulo/pasto viram ícones** (`IconToggle`/`IconExcluir`, SVGs inline no mesmo estilo de
+traço da Sidebar — `viewBox 0 0 24 24`, `strokeWidth 1.75`) no lugar dos links de texto
+"Inativar"/"Ativar"/"Excluir" — `title` no botão substitui o texto visível, confirmação de exclusão
+continua inline (mesmo padrão `error`/"Sim, excluir"/"Cancelar"). Nome e áreas continuam editáveis
+inline via blur, sem ícone de "editar" próprio (não existe uma ação de editar separada — o campo já
+é o próprio editor).
+
+**Aviso de "pastos sem contorno"**: card `border-dashed` (não `warning` — é informativo, não um
+alerta) no topo da aba, abaixo do parágrafo introdutório, listando por nome (separado por vírgula)
+os pastos ativos sem `geometria`. Só renderiza quando essa lista tem pelo menos um item — reativo,
+soma/subtrai da lista assim que um pasto ganha ou perde contorno (criar um pasto novo sem desenhar
+nada, ou desenhar um contorno pra um pasto que não tinha, atualiza o card sem precisar recarregar a
+página).
+
+**Criar pasto em lote a partir do KML**: o `<select>` de cada linha da revisão de "Importar pastos
+de um KML" ganha uma segunda opção fixa, **"+ Criar novo pasto"** (`NOVO_PASTO`, valor sentinela
+`'__novo__'`), ao lado de "Ignorar" e da lista de pastos existentes pra casar pelo nome. Escolher
+essa opção revela um segundo `<select>` inline (módulo de destino, pré-selecionado com o primeiro
+módulo da fazenda) só naquela linha. `LinhaRevisaoImportacao` ganhou `criarNovo: boolean` e
+`moduloIdNovo: string` — `handleConfirmarImportacaoKml` agora processa dois grupos na mesma
+confirmação: `paraCasar` (atualiza `geometria`+`area_ha` de pastos existentes, como antes) e
+`paraCriar` (insere pastos novos, calculando `ordem` incrementalmente por módulo pra suportar várias
+linhas do mesmo lote caindo no mesmo módulo). Pastos criados por essa via não recebem
+`area_produtiva_ha` (só a área calculada do KML vai pra `area_ha`) — o usuário completa depois na
+lista, mesmo fluxo de qualquer pasto novo.
+
+Verificado no navegador (`FAZENDA TESTE TULIO`): renomeação da aba, layout lista+mapa lado a lado
+(confirmado via `getBoundingClientRect` que a lista fica à esquerda do mapa em viewport 1280px),
+criar pasto com área total + área produtiva preenchidas (valores persistidos corretamente),
+excluir pasto via ícone com confirmação inline, card "pastos sem contorno" atualizando ao
+criar/excluir pasto, e o fluxo completo de importação de KML em lote — um KML sintético com dois
+placemarks (um casando pelo nome com um pasto existente, outro sem correspondência) confirmou
+auto-casamento correto pelo primeiro, "+ Criar novo pasto" com seletor de módulo aparecendo pro
+segundo, e a confirmação da importação executando as duas ações na mesma passada (pasto existente
+atualizado com geometria/área, pasto novo criado com geometria/área e vinculado ao módulo
+escolhido). Dados de teste revertidos ao estado original depois da verificação (pasto de teste
+excluído, geometria/área do pasto "Geral" restauradas).
+
+## Área Inicial fundida no cadastro da fazenda (Fase E)
+
+A aba "Área Inicial" foi removida — declarar a área por tipo de uso deixa de ser uma tela permanente
+e vira um **passo único logo após criar uma fazenda**, no mesmo espírito do que já acontecia (a
+fazenda recém-criada já era auto-selecionada; agora esse momento é usado pra guiar a declaração
+antes de mostrar as abas normais). Toda a lógica que antes vivia inline em `app/fazendas/page.tsx`
+(nunca tinha sido extraída em componente próprio) foi movida pra
+`components/fazendas/AreaInicialForm.tsx`, reutilizado em dois lugares:
+
+1. **`app/fazendas/page.tsx`**: quando `fazendaRecemCriadaId === fazendaSelecionadaId`, a página
+   renderiza um card único ("[Nome] cadastrada com sucesso" + o formulário) **no lugar** da barra de
+   abas — não existe mais aba "Área Inicial" pra abrir sozinha depois. Um botão "Pular por enquanto"
+   deixa esse passo puramente opcional (decisão deliberada: nada no pedido original exigia bloquear o
+   fluxo, e forçar a declaração antes de lançar o saldo inicial do rebanho seria uma fricção
+   desnecessária). Salvar ou pular chamam o mesmo `handleAreaInicialConcluida` — some o card e abre a
+   aba "Saldo Inicial" (`abaSelecionada('saldo')`), que é a única aba visível por padrão daqui pra
+   frente (junto de "Distribuição da Área" e "Gestão de Áreas", quando `controla_pasto` estiver
+   ligado).
+2. **`components/fazendas/DistribuicaoAreaPanel.tsx`**: ganha uma seção nova, **"Corrigir declaração
+   inicial"**, colapsável (`+`/`−`, fechada por padrão pra não competir visualmente com "Lançar
+   mudança de uso", o fluxo mais usado dessa aba) — é o único lugar pra reabrir e editar a
+   declaração depois que o passo inicial foi salvo ou pulado. Sem `onSalvo` bloqueante: como cada
+   linha de área inicial já tem `existingId` só quando já existe uma linha `SALDO_INICIAL` gravada
+   pra aquele tipo de uso, o mesmo componente serve tanto pra "declarar pela primeira vez" quanto
+   "corrigir depois" sem nenhuma bifurcação de código — a diferença entre os dois contextos é só
+   coreografia de onde o componente aparece na tela, nunca lógica interna.
+
+**`AreaInicialForm` ganha importação de KML** (novidade desta fase — a aba antiga só aceitava
+digitar os números à mão): um botão "Importar KML" abre a mesma tela de revisão já usada em
+"Importar pastos de um KML" (Fase D) — cada polígono do arquivo vira uma linha com nome, área
+calculada e um `<select>` de tipo de uso (7 opções + "Ignorar", sem tentativa de casar automático
+por nome, diferente do import de pasto — "Pecuária tratada igual aos demais", sem vínculo com pasto
+nenhum). **Ao confirmar, polígonos do mesmo tipo de uso são somados entre si primeiro, e essa soma é
+somada (não substituída) ao valor que já estiver no campo daquele tipo de uso** — permite digitar
+uma parte à mão e importar o resto, ou importar em duas levas de KML diferentes, sem perder o que já
+tinha sido preenchido. Verificado no navegador com um KML sintético de 2 polígonos: um campo já
+preenchido manualmente (Pecuária = 50) recebeu +118,99 de um polígono importado (resultado: 168,99),
+e Reserva Legal/APP (campo vazio) recebeu os 118,99 do outro polígono — comportamento de soma
+confirmado nos dois casos (campo vazio e campo já preenchido).
+
+**Refresh reativo entre a correção e o gráfico**: como "Corrigir declaração inicial" agora vive
+dentro da mesma tela que o gráfico/tabela de "Distribuição de área" (antes eram abas separadas, e
+trocar de aba já recarregava tudo sozinho), salvar uma correção precisa avisar o resto do painel pra
+não ficar com número desatualizado até o usuário recarregar a página manualmente — bug real
+encontrado durante a verificação desta fase (corrigi um valor, o card "Corrigir declaração inicial"
+mostrou o total certo, mas o gráfico acima continuou com o número antigo até um F5). Corrigido com
+`refreshKey` (contador incrementado no `onSalvo` do formulário), incluído nas dependências dos três
+`useEffect` que buscam dado de `DistribuicaoAreaPanel` (distribuição mensal, áreas finais por tipo
+de uso, conferência com pastos) — mesmo padrão de "trigger de recarga" já usado em vários outros
+pontos do app via callback `onSaved`/`onSalvo`, só que aqui escrevendo pro estado do componente pai
+em vez de re-montar um componente filho.
+
+Verificado no navegador: criar fazenda nova → passo de área inicial aparece automaticamente (sem
+barra de abas) → digitar um valor manual + importar KML com 2 polígonos (um casando com o tipo já
+preenchido, somando; outro pra um tipo vazio) → salvar → transição automática pra aba "Saldo
+Inicial" com as abas normais visíveis. Depois, na aba "Distribuição da Área", "Corrigir declaração
+inicial" expandido mostrou os valores corretos já carregados (`existingId` preenchido), edição de um
+valor + salvar atualizou tanto o próprio formulário quanto o gráfico/tabela acima **sem precisar
+recarregar a página** (confirmando o fix do `refreshKey`). Fazenda e pessoa de teste removidas depois
+da verificação.
+
+## Relatório de Lotação: área produtiva como denominador (Fase F)
+
+`app/relatorio-lotacao/page.tsx`, seção "Lotação atual por pasto", trocou `pastos.area_ha` (área
+total) por `pastos.area_produtiva_ha` (área realmente aproveitável pra pastagem, adicionada na
+migração 038 — ver "Fase A/B/C" acima) tanto no cálculo de UA/ha quanto no valor de área exibido ao
+lado (`PastoInfo`/`PastoLotacao` renomeados de `area_ha` para `area_produtiva_ha` de ponta a ponta,
+pra não sobrar um campo chamado "area_ha" guardando na verdade a área produtiva). Cai pra "—" quando
+o pasto não tem área produtiva preenchida — mesmo tratamento que área ausente já tinha antes, só que
+agora a ausência é da área produtiva especificamente (a maioria dos pastos hoje não tem esse campo
+preenchido ainda, já que é opcional e só ganhou UI na Fase D). O restante do relatório (KPIs do
+período, gráfico combinado, lotação agregada da fazenda via `fn_area_por_uso` em Pecuária) não muda
+— a troca vale só pra granularidade por pasto, que é a única parte do relatório com acesso à área de
+cada pasto individualmente.
+
+Verificado no navegador: com `area_produtiva_ha` nulo (estado padrão de pastos existentes), a linha
+de cada pasto mostrou "— UA/ha" sem nenhum valor de área ao lado — confirma que a troca realmente
+saiu de `area_ha` (que tinha valor preenchido e teria mostrado uma lotação real antes desta fase).
+Preenchendo `area_produtiva_ha` temporariamente num pasto de teste (15 ha), a lotação calculou
+corretamente (1,39 UA/ha pra 33 cabeças a ~285 kg — confere: 33×285/450/15 = 1,39) e a área exibida
+passou a mostrar os 15 ha da área produtiva, não os 50 ha de área total do mesmo pasto. Valor de
+teste revertido pra `null` depois da verificação.

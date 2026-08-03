@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { corTipoUsoArea } from '@/lib/area-cores'
+import AreaInicialForm from '@/components/fazendas/AreaInicialForm'
 import { formatArea, formatQuantidade } from '@/lib/format'
 import {
   ultimoDiaDoMes,
@@ -112,6 +113,9 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   // livre (sem subtipo/tipo de uso próprio).
   const [pastosAtivos, setPastosAtivos] = useState<PastoResumo[]>([])
   const [areaPecuariaHoje, setAreaPecuariaHoje] = useState<number | null>(null)
+
+  const [mostrarCorrecaoInicial, setMostrarCorrecaoInicial] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   // lançamento de mudança de uso
   const [data, setData] = useState('')
@@ -247,7 +251,7 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
         setLoadingDistribuicao(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaId, dataInicio, dataFim])
+  }, [fazendaId, dataInicio, dataFim, refreshKey])
 
   useEffect(() => {
     if (!dataFim || tiposUso.length === 0 || periodoInvalido) {
@@ -268,7 +272,7 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaId, dataFim, tiposUso, periodoInvalido])
+  }, [fazendaId, dataFim, tiposUso, periodoInvalido, refreshKey])
 
   // conferência com pastos: pastos ativos da fazenda (todos os módulos)
   // vs. área em Pecuária hoje
@@ -297,7 +301,7 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlaPasto, tipoPecuaria?.id, fazendaId])
+  }, [controlaPasto, tipoPecuaria?.id, fazendaId, refreshKey])
 
   useEffect(() => {
     if (!tipoUsoOrigemId || !data) {
@@ -796,6 +800,27 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
           </div>
         </div>
       )}
+
+      <div className="rounded-card border border-border bg-bg p-5">
+        <button
+          type="button"
+          onClick={() => setMostrarCorrecaoInicial((v) => !v)}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Corrigir declaração inicial</h3>
+            <p className="mt-1 text-xs text-text-secondary">
+              Ajuste a área por tipo de uso declarada quando a fazenda foi cadastrada.
+            </p>
+          </div>
+          <span className="text-lg text-text-secondary">{mostrarCorrecaoInicial ? '−' : '+'}</span>
+        </button>
+        {mostrarCorrecaoInicial && (
+          <div className="mt-4">
+            <AreaInicialForm fazendaId={fazendaId} onSalvo={() => setRefreshKey((k) => k + 1)} />
+          </div>
+        )}
+      </div>
 
       <div className="rounded-card border border-border bg-bg p-5">
         <div className="mb-4 text-sm text-text-secondary">
