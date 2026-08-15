@@ -24,7 +24,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const { nome, ativo, modo, modulos } = body as {
     nome?: string
     ativo?: boolean
-    modo?: 'CAMPO' | 'GESTAO'
+    modo?: 'CAMPO' | 'GESTAO' | 'CONSULTA'
     modulos?: string[]
   }
 

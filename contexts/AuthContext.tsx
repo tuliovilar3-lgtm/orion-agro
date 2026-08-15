@@ -12,7 +12,7 @@ type UsuarioApp = {
   email: string
   dono: boolean
   ativo: boolean
-  modo: 'CAMPO' | 'GESTAO'
+  modo: 'CAMPO' | 'GESTAO' | 'CONSULTA'
 }
 
 type AuthValue = {

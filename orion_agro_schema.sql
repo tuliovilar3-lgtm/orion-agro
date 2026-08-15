@@ -142,10 +142,12 @@ create table usuarios_app (
   email text not null,
   dono boolean not null default false,
   ativo boolean not null default true,
-  -- 'CAMPO'/'GESTAO': preparado agora pra não exigir migração nova
-  -- quando o modo de navegação simplificado (PWA) for implementado —
-  -- ainda sem nenhuma tela/rota que leia essa coluna
-  modo text not null default 'GESTAO' check (modo in ('CAMPO', 'GESTAO')),
+  -- CAMPO: navegação simplificada (barra de abas, sem sidebar).
+  -- GESTAO: sidebar completa de sempre. CONSULTA: sidebar completa, mas
+  -- só pode ter os 4 módulos de relatório liberados (migração 043) —
+  -- reaproveita o mesmo mecanismo de permissão por módulo, sem
+  -- bloqueio novo de "somente leitura" dentro das telas.
+  modo text not null default 'GESTAO' check (modo in ('CAMPO', 'GESTAO', 'CONSULTA')),
   created_at timestamptz not null default now()
 );
 

@@ -1750,3 +1750,97 @@ inativação: toggle "Inativar" na UI do administrador → próxima tentativa de
 inativado é bloqueada com aviso, confirmado só depois de corrigir o bug real encontrado nesse teste
 (inativar não deslogava quem já tinha sessão ativa). Usuário de teste inativado ao final (não
 excluído — sem rota de exclusão, por design).
+
+## PWA Modo Campo / Modo Gestão
+
+Última peça do roadmap de melhorias derivado do mockup externo — desbloqueada só depois do modelo de
+acesso e login existir (`usuarios_app.modo`, preparado desde a migração 042, mas sem nenhum
+comportamento até agora). Modo Gestão continua sendo a sidebar clássica de sempre, sem nenhuma
+mudança; Modo Campo troca a navegação inteira por um layout simplificado pensado pra uso no celular
+com uma mão só, no meio do trabalho de campo — mas **reaproveita as mesmas páginas/formulários** do
+Modo Gestão, sem versão simplificada própria de cada tela (escopo deliberadamente contido: o que
+muda é só a navegação ao redor, não o conteúdo de cada módulo).
+
+**`lib/nav-icons.tsx`**: `Icon`/`ICONS` extraídos de `components/Sidebar.tsx` (que agora importa de
+lá) pra serem reaproveitados também pelo Modo Campo, sem duplicar ~15 `<svg>`. `lib/modulos.ts` ganhou
+um campo `icon` por módulo (referenciando `ICONS`), então tanto a Sidebar quanto os componentes novos
+do Modo Campo desenham o mesmo ícone por módulo a partir de uma fonte só.
+
+**`components/campo/InicioCampo.tsx`**: substitui o Painel completo (KPIs, gráficos) quando
+`usuarioApp.modo === 'CAMPO'` — em vez disso, mostra uma saudação ("Olá, [nome]") e um botão grande
+por módulo liberado (ícone + rótulo, num card `bg-brand-100`/`text-brand-700`), sem nenhum dado
+agregado pra carregar. Ordem dos botões prioriza os módulos de lançamento mais comuns em campo
+(`movimentacoes`, `pesagens`, `mudanca_pasto` primeiro, via `ORDEM_PRIORIDADE`); os demais módulos
+liberados (caso a pessoa tenha) aparecem depois, na ordem do catálogo. `app/page.tsx` foi dividido em
+dois componentes — `PainelPage` (só chama `useAuth()` e decide qual dos dois renderizar) e
+`PainelDashboard` (todo o conteúdo antigo do Painel, movido pra dentro de um componente próprio) —
+de propósito: como React não permite pular hooks condicionalmente, decidir isso *dentro* do mesmo
+componente exigiria chamar todos os hooks de busca de dados do dashboard mesmo pra quem nunca vai
+ver esse conteúdo (Modo Campo). Com a decisão sendo "qual componente montar" em vez de "quais hooks
+pular", os hooks do `PainelDashboard` (e as buscas que eles disparam) só rodam quando ele é
+efetivamente renderizado.
+
+**`components/campo/ModoCampoShell.tsx`**: layout alternativo ao par Sidebar+conteúdo — barra
+superior fina (marca + nome do usuário + "Sair") e uma barra de abas fixa embaixo (`fixed inset-x-0
+bottom-0`, com `overflow-x-auto` caso a pessoa tenha muitos módulos) contendo "Início" + um item por
+módulo liberado, ambos usando os mesmos ícones de `lib/nav-icons.tsx`. `<main>` recebe `pb-20` pra o
+conteúdo não ficar escondido atrás da barra fixa. As páginas em si (formulários, listas) renderizam
+sem nenhuma adaptação — a mesma página que aparece dentro da Sidebar no Modo Gestão aparece aqui
+dentro desse shell, incluindo o `ModuloGate`: acessar uma URL de um módulo não liberado continua
+mostrando "Acesso restrito" normalmente, mesmo em Modo Campo.
+
+**`components/AppShell.tsx`** ganhou um componente interno novo, `LayoutPorModo` — só ele fica
+*dentro* do `AuthProvider` (por isso não pode viver direto em `AppShell`, que precisa decidir *antes*
+de montar `AuthProvider` se a rota é `/login`) e escolhe entre `Sidebar` (Modo Gestão, ou enquanto
+`usuarioApp` ainda não carregou) e `ModoCampoShell` (Modo Campo) via `useAuth().usuarioApp?.modo`.
+
+**Modo editável depois da criação**: até agora o campo `modo` só podia ser escolhido no momento de
+criar o usuário (`CadastrarUsuarioModal`, sem UI pra mudar depois). `app/usuarios/page.tsx` ganhou um
+`<select>` por usuário (não-administrador) — mesmo padrão dos módulos, `PATCH` imediato sem botão de
+salvar próprio — usando a mesma Route Handler que já existia (`app/api/usuarios/[id]/route.ts` já
+aceitava `modo` no corpo desde a Fase 6, só não tinha UI que enviasse esse campo depois da criação).
+
+Verificado no navegador: usuário de teste reconfigurado pra `modo = 'CAMPO'` com 2 módulos
+(Lançamento de Movimentações, Pesagens) — login mostrou `InicioCampo` com os 2 botões na ordem certa
+e a barra de abas inferior com Início + os 2 módulos; clicar num item da barra abriu a página real
+(formulário de Lançamento de Movimentações) dentro do shell simplificado, com o `ModuloGate` normal
+por trás; navegar direto pra uma URL de módulo não liberado (`/fazendas`) mostrou "Acesso restrito"
+com a mesma barra de navegação do Modo Campo ao redor (chrome mantido, conteúdo bloqueado). Usuário
+de teste revertido a `ativo = false`/`modo = 'GESTAO'` ao final.
+
+## Modo Consulta (migração 043) + módulos recolhíveis em Usuários
+
+Terceiro valor de `usuarios_app.modo`, pedido pelo usuário pra gente que só precisa acompanhar
+relatórios sem lançar ou editar nada. **Decisão deliberada de escopo**: em vez de criar um mecanismo
+novo de "somente leitura" (desabilitar botão de salvar/criar/excluir dentro de cada tela), Consulta
+reaproveita o mesmo sistema de permissão por módulo já existente — 4 dos 10 módulos
+(`resumo_movimentacao`, `relatorios_movimentacoes`, `relatorio_lotacao`, `rebanho_por_pasto`) já são
+100% somente-leitura hoje (nenhum tem ação de escrita), e Consulta simplesmente só pode ter esses 4
+liberados. A alternativa (bloquear edição campo a campo dentro de Fazendas/Categorias/Pessoas/etc.)
+foi descartada por ser um trabalho bem maior — mexeria em mais de 10 telas — sem pedido claro de que
+alguém precise *ver* essas telas de cadastro sem poder editá-las.
+
+`lib/modulos.ts` ganhou `somenteLeitura?: boolean` por módulo e `MODULOS_CONSULTA` (a lista derivada
+dos módulos com essa flag). Consulta usa a mesma sidebar completa de Gestão (não a barra de abas do
+Modo Campo) — só o Painel dela mesmo, uma pessoa de escritório acompanhando números, não alguém no
+campo. `components/usuarios/CadastrarUsuarioModal.tsx` filtra a lista de checkboxes mostrada pra só
+os 4 módulos quando "Consulta" está selecionado, e poda (`handleMudarModo`) qualquer módulo de
+escrita que já estivesse marcado se o rádio for trocado de volta pra Consulta depois de já ter
+marcado outra coisa. `app/usuarios/page.tsx` espelha a mesma poda ao trocar o modo de um usuário já
+existente — `handleAlterarModo` manda `modo` e `modulos` (já filtrados) na mesma chamada `PATCH`,
+pra não deixar um módulo de escrita "esquecido" preso num usuário que acabou de virar Consulta.
+
+**Módulos recolhíveis em `/usuarios`**: pedido separado do usuário, pra "otimizar espaço e ficar mais
+limpo" — a lista de checkboxes de módulo por usuário (que cresce conforme mais módulos existem)
+virou uma seção com cabeçalho clicável "Módulos (N selecionados)" + `+`/`−`, fechada por padrão,
+mesmo padrão de accordion já usado em outros pontos do app (ex.: "Corrigir declaração inicial" em
+Distribuição da Área). O `<select>` de modo (compacto, uma linha só) não precisou desse tratamento,
+só a grade de checkboxes.
+
+Verificado: migração aplicada (constraint aceita `CONSULTA`); usuário de teste reconfigurado direto
+no banco pra `modo = 'CONSULTA'` com 2 módulos de relatório — login mostrou a sidebar completa (não
+a barra de abas do Modo Campo) só com Painel + os 2 relatórios liberados, e acesso direto por URL a
+`/movimentacoes` continuou bloqueado com "Acesso restrito", confirmando que Consulta não abre
+nenhuma tela de escrita mesmo sem nenhum bloqueio novo dentro delas. Accordion recolhido por padrão
+e opção "Consulta (só relatórios)" no `<select>` confirmados visualmente pelo usuário na sua própria
+sessão de administrador. Usuário de teste revertido a `ativo = false`/`modo = 'GESTAO'` ao final.

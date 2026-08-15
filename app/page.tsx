@@ -12,6 +12,8 @@ import KpiCard from '@/components/relatorios/KpiCard'
 import { agruparPorChave, formatarDataBr, mediaPonderada } from '@/components/relatorios/tipos'
 import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components/FluxoRebanho'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
+import { useAuth } from '@/contexts/AuthContext'
+import InicioCampo from '@/components/campo/InicioCampo'
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
@@ -43,6 +45,17 @@ function formaSetor(props: any) {
 }
 
 export default function PainelPage() {
+  // Modo Campo mostra uma home simplificada (botões grandes por módulo
+  // liberado) em vez do dashboard completo — checado antes de qualquer
+  // outro hook do dashboard pra não disparar as buscas de dados dele à
+  // toa pra quem não vai ver esse conteúdo
+  const { usuarioApp, loading: loadingAuth } = useAuth()
+  if (!loadingAuth && usuarioApp?.modo === 'CAMPO') return <InicioCampo />
+
+  return <PainelDashboard />
+}
+
+function PainelDashboard() {
   const {
     fazendas,
     fazendaIds,

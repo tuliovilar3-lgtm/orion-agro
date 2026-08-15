@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
-import { MODULOS, type ModuloId } from '@/lib/modulos'
+import { MODULOS, MODULOS_CONSULTA, type ModuloId } from '@/lib/modulos'
 
 export default function CadastrarUsuarioModal({
   onClose,
@@ -15,10 +15,21 @@ export default function CadastrarUsuarioModal({
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
-  const [modo, setModo] = useState<'GESTAO' | 'CAMPO'>('GESTAO')
+  const [modo, setModo] = useState<'GESTAO' | 'CAMPO' | 'CONSULTA'>('GESTAO')
   const [modulosSelecionados, setModulosSelecionados] = useState<Set<ModuloId>>(new Set())
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+
+  const modulosDisponiveis = modo === 'CONSULTA' ? MODULOS.filter((m) => m.somenteLeitura) : MODULOS
+
+  function handleMudarModo(novoModo: 'GESTAO' | 'CAMPO' | 'CONSULTA') {
+    setModo(novoModo)
+    // Consulta só pode ter os módulos de relatório — poda qualquer
+    // módulo de escrita que já estivesse marcado antes da troca
+    if (novoModo === 'CONSULTA') {
+      setModulosSelecionados((prev) => new Set([...prev].filter((id) => MODULOS_CONSULTA.includes(id))))
+    }
+  }
 
   function alternarModulo(id: ModuloId) {
     setModulosSelecionados((prev) => {
@@ -99,26 +110,34 @@ export default function CadastrarUsuarioModal({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Modo de navegação</label>
-            <div className="flex gap-4 text-sm text-text-primary">
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Modo de acesso</label>
+            <div className="flex flex-wrap gap-4 text-sm text-text-primary">
               <label className="flex items-center gap-1.5">
-                <input type="radio" checked={modo === 'GESTAO'} onChange={() => setModo('GESTAO')} />
+                <input type="radio" checked={modo === 'GESTAO'} onChange={() => handleMudarModo('GESTAO')} />
                 Gestão (completo)
               </label>
               <label className="flex items-center gap-1.5">
-                <input type="radio" checked={modo === 'CAMPO'} onChange={() => setModo('CAMPO')} />
+                <input type="radio" checked={modo === 'CAMPO'} onChange={() => handleMudarModo('CAMPO')} />
                 Campo (simplificado)
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={modo === 'CONSULTA'} onChange={() => handleMudarModo('CONSULTA')} />
+                Consulta (só relatórios)
               </label>
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              O modo Campo ainda não muda a navegação — é só preparado aqui pra quando existir.
+              {modo === 'CAMPO'
+                ? 'Modo Campo troca a sidebar por uma barra de abas simplificada com Início + os módulos liberados abaixo — pensado pra uso no celular.'
+                : modo === 'CONSULTA'
+                  ? 'Modo Consulta só pode acessar os relatórios abaixo — nenhuma tela de lançamento ou cadastro.'
+                  : 'Modo Gestão usa a sidebar completa de sempre.'}
             </p>
           </div>
 
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">Módulos liberados</label>
             <div className="grid grid-cols-1 gap-1.5 rounded-control border border-border p-3 sm:grid-cols-2">
-              {MODULOS.map((m) => (
+              {modulosDisponiveis.map((m) => (
                 <label key={m.id} className="flex items-center gap-2 text-sm text-text-primary">
                   <input
                     type="checkbox"

@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     email?: string
     senha?: string
     modulos?: string[]
-    modo?: 'CAMPO' | 'GESTAO'
+    modo?: 'CAMPO' | 'GESTAO' | 'CONSULTA'
   }
   if (!nome || !email || !senha) {
     return NextResponse.json({ error: 'Nome, e-mail e senha são obrigatórios.' }, { status: 400 })

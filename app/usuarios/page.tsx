@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
-import { MODULOS, type ModuloId } from '@/lib/modulos'
+import { MODULOS, MODULOS_CONSULTA, type ModuloId } from '@/lib/modulos'
 import CadastrarUsuarioModal from '@/components/usuarios/CadastrarUsuarioModal'
 
 type UsuarioLinha = {
@@ -11,7 +11,7 @@ type UsuarioLinha = {
   email: string
   dono: boolean
   ativo: boolean
-  modo: 'CAMPO' | 'GESTAO'
+  modo: 'CAMPO' | 'GESTAO' | 'CONSULTA'
   modulos: ModuloId[]
 }
 
@@ -31,6 +31,16 @@ export default function UsuariosPage() {
   const [erro, setErro] = useState<string | null>(null)
   const [modalAberto, setModalAberto] = useState(false)
   const [salvandoId, setSalvandoId] = useState<string | null>(null)
+  const [modulosExpandidos, setModulosExpandidos] = useState<Set<string>>(new Set())
+
+  function alternarExpandido(id: string) {
+    setModulosExpandidos((prev) => {
+      const novo = new Set(prev)
+      if (novo.has(id)) novo.delete(id)
+      else novo.add(id)
+      return novo
+    })
+  }
 
   async function carregar() {
     setLoading(true)
@@ -59,6 +69,25 @@ export default function UsuariosPage() {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ativo: !u.ativo }),
+    })
+    setSalvandoId(null)
+    carregar()
+  }
+
+  async function handleAlterarModo(u: UsuarioLinha, modo: 'CAMPO' | 'GESTAO' | 'CONSULTA') {
+    setSalvandoId(u.id)
+    // Consulta só pode ter os módulos de relatório — poda qualquer
+    // módulo de escrita que já estivesse liberado antes da troca, na
+    // mesma chamada (senão o usuário ficaria com acesso de escrita
+    // "esquecido" mesmo depois de virar Consulta)
+    const body: { modo: string; modulos?: ModuloId[] } = { modo }
+    if (modo === 'CONSULTA') {
+      body.modulos = u.modulos.filter((m) => MODULOS_CONSULTA.includes(m))
+    }
+    await fetch(`/api/usuarios/${u.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     })
     setSalvandoId(null)
     carregar()
@@ -153,18 +182,48 @@ export default function UsuariosPage() {
             </div>
 
             {!u.dono && (
-              <div className="mt-3 grid grid-cols-1 gap-1.5 border-t border-border pt-3 sm:grid-cols-2">
-                {MODULOS.map((m) => (
-                  <label key={m.id} className="flex items-center gap-2 text-sm text-text-primary">
-                    <input
-                      type="checkbox"
-                      disabled={salvandoId === u.id}
-                      checked={u.modulos.includes(m.id)}
-                      onChange={() => handleToggleModulo(u, m.id)}
-                    />
-                    {m.label}
-                  </label>
-                ))}
+              <div className="mt-3 flex items-center gap-2 border-t border-border pt-3 text-sm">
+                <label className="font-medium text-text-secondary">Modo de acesso</label>
+                <select
+                  disabled={salvandoId === u.id}
+                  value={u.modo}
+                  onChange={(e) => handleAlterarModo(u, e.target.value as 'CAMPO' | 'GESTAO' | 'CONSULTA')}
+                  className="rounded-control border border-border bg-surface px-2 py-1 text-sm text-text-primary outline-none focus:border-brand-500"
+                >
+                  <option value="GESTAO">Gestão (completo)</option>
+                  <option value="CAMPO">Campo (simplificado)</option>
+                  <option value="CONSULTA">Consulta (só relatórios)</option>
+                </select>
+              </div>
+            )}
+
+            {!u.dono && (
+              <div className="mt-3 border-t border-border pt-3">
+                <button
+                  type="button"
+                  onClick={() => alternarExpandido(u.id)}
+                  className="flex w-full items-center justify-between text-left text-sm font-medium text-text-secondary"
+                >
+                  <span>
+                    Módulos <span className="text-text-muted">({u.modulos.length} selecionado{u.modulos.length !== 1 ? 's' : ''})</span>
+                  </span>
+                  <span className="text-brand-500">{modulosExpandidos.has(u.id) ? '−' : '+'}</span>
+                </button>
+                {modulosExpandidos.has(u.id) && (
+                  <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                    {(u.modo === 'CONSULTA' ? MODULOS.filter((m) => m.somenteLeitura) : MODULOS).map((m) => (
+                      <label key={m.id} className="flex items-center gap-2 text-sm text-text-primary">
+                        <input
+                          type="checkbox"
+                          disabled={salvandoId === u.id}
+                          checked={u.modulos.includes(m.id)}
+                          onChange={() => handleToggleModulo(u, m.id)}
+                        />
+                        {m.label}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
