@@ -5,26 +5,17 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatArea, formatLotacao, formatPeso, formatQuantidade } from '@/lib/format'
-import {
-  ultimoDiaDoMes,
-  periodoSafra,
-  periodoAno,
-  anoInicioSafraAtual,
-  anoCalendarioAtual,
-  opcoesSafra,
-  opcoesAno,
-} from '@/lib/periodo'
+import { opcoesSafra, opcoesAno, anoInicioSafraAtual, anoCalendarioAtual } from '@/lib/periodo'
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from 'recharts'
 import { corCategorica, CORES_BINARIAS } from '@/lib/relatorio-cores'
 import KpiCard from '@/components/relatorios/KpiCard'
 import { agruparPorChave, formatarDataBr, mediaPonderada } from '@/components/relatorios/tipos'
 import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components/FluxoRebanho'
+import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
 const KG_POR_UA = 450
-
-type Fazenda = { id: string; nome: string }
 
 type ResumoLinha = {
   fazenda_id: string
@@ -52,8 +43,29 @@ function formaSetor(props: any) {
 }
 
 export default function PainelPage() {
-  const [fazendas, setFazendas] = useState<Fazenda[]>([])
-  const [fazendaIds, setFazendaIds] = useState<string[]>([])
+  const {
+    fazendas,
+    fazendaIds,
+    alternarFazenda,
+    alternarTodas,
+    todasSelecionadas,
+    modoFiltro,
+    setModoFiltro,
+    mes,
+    setMes,
+    safraAnoInicio,
+    setSafraAnoInicio,
+    anoCalendarioSelecionado,
+    setAnoCalendarioSelecionado,
+    dataInicioCustom,
+    setDataInicioCustom,
+    dataFimCustom,
+    setDataFimCustom,
+    dataInicio,
+    dataFim,
+    periodoInvalido,
+  } = useFiltroGlobal()
+
   const [tipoPecuariaId, setTipoPecuariaId] = useState<string | null>(null)
 
   const [resumo, setResumo] = useState<ResumoLinha[]>([])
@@ -63,50 +75,13 @@ export default function PainelPage() {
   const [hoverSexoIndex, setHoverSexoIndex] = useState<number | null>(null)
   const [hoverCategoriaIndex, setHoverCategoriaIndex] = useState<number | null>(null)
 
-  const [modoFiltro, setModoFiltro] = useState<'mes' | 'safra' | 'ano' | 'periodo'>('safra')
-  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
-  const [safraAnoInicio, setSafraAnoInicio] = useState(() => anoInicioSafraAtual())
-  const [anoCalendarioSelecionado, setAnoCalendarioSelecionado] = useState(() => anoCalendarioAtual())
-  const [dataInicioCustom, setDataInicioCustom] = useState(() => `${new Date().toISOString().slice(0, 7)}-01`)
-  const [dataFimCustom, setDataFimCustom] = useState(() => new Date().toISOString().slice(0, 10))
-
   const [fluxoLinhas, setFluxoLinhas] = useState<LinhaFluxoRebanho[]>([])
   const [loadingFluxo, setLoadingFluxo] = useState(true)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
-  const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
-
-  const safra = periodoSafra(safraAnoInicio)
-  const anoCalendario = periodoAno(anoCalendarioSelecionado)
-  const dataInicio =
-    modoFiltro === 'mes'
-      ? `${mes}-01`
-      : modoFiltro === 'safra'
-        ? safra.dataInicio
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataInicio
-          : dataInicioCustom
-  const dataFimBruta =
-    modoFiltro === 'mes'
-      ? `${mes}-${String(ultimoDiaDoMes(mes)).padStart(2, '0')}`
-      : modoFiltro === 'safra'
-        ? safra.dataFim
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataFim
-          : dataFimCustom
-  const dataFim = dataFimBruta > hoje ? hoje : dataFimBruta
-  const periodoInvalido = modoFiltro === 'periodo' && dataInicioCustom > dataFimCustom
 
   useEffect(() => {
-    supabase
-      .from('fazendas')
-      .select('id, nome')
-      .order('nome')
-      .then(({ data }) => {
-        setFazendas(data || [])
-        setFazendaIds((data || []).map((f) => f.id))
-      })
     supabase
       .from('tipos_uso_area')
       .select('id, nome')
@@ -173,14 +148,6 @@ export default function PainelPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaIds, dataInicio, dataFim, periodoInvalido])
-
-  function alternarFazenda(id: string) {
-    setFazendaIds((prev) => (prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]))
-  }
-
-  function alternarTodas() {
-    setFazendaIds(todasSelecionadas ? [] : fazendas.map((f) => f.id))
-  }
 
   const totalCabecas = resumo.reduce((s, r) => s + r.quantidade, 0)
   const pesoMedioGeral = mediaPonderada(resumo.map((r) => ({ valor: r.peso_medio_kg, peso: r.quantidade })))
@@ -291,11 +258,18 @@ export default function PainelPage() {
             <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="rounded-card border border-border bg-surface p-5">
                 <h3 className="mb-3 text-sm font-semibold text-text-primary">Distribuição do rebanho atual</h3>
-                <div className="space-y-2.5">
+                <div className="space-y-1">
                   {porCategoria.map((c) => {
                     const pct = totalCabecas ? (c.quantidade / totalCabecas) * 100 : 0
+                    const idxNaRosca = porCategoriaPorSexo.findIndex((pc) => pc.nome === c.nome)
+                    const destacada = hoverCategoriaIndex != null && hoverCategoriaIndex === idxNaRosca
                     return (
-                      <div key={c.nome}>
+                      <div
+                        key={c.nome}
+                        onMouseEnter={() => setHoverCategoriaIndex(idxNaRosca)}
+                        onMouseLeave={() => setHoverCategoriaIndex(null)}
+                        className={`cursor-pointer rounded-control px-1.5 py-1 transition-colors ${destacada ? 'bg-brand-100' : ''}`}
+                      >
                         <div className="mb-1 flex justify-between text-xs">
                           <span className="text-text-primary">{c.nome}</span>
                           <span className="tabular-nums text-text-secondary">
@@ -390,13 +364,14 @@ export default function PainelPage() {
                 <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                   {porCategoriaPorSexo.map((c, i) => {
                     const pct = totalCabecas ? (c.quantidade / totalCabecas) * 100 : 0
+                    const destacada = hoverCategoriaIndex === i
                     return (
                       <div
                         key={c.nome}
                         onMouseEnter={() => setHoverCategoriaIndex(i)}
                         onMouseLeave={() => setHoverCategoriaIndex(null)}
                         onClick={() => setHoverCategoriaIndex(i)}
-                        className="flex cursor-pointer items-center gap-1.5"
+                        className={`flex cursor-pointer items-center gap-1.5 rounded-control px-1 py-0.5 transition-colors ${destacada ? 'bg-brand-100' : ''}`}
                       >
                         <span
                           className="h-2 w-2 shrink-0 rounded-sm"

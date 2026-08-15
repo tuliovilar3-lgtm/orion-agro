@@ -6,6 +6,7 @@ import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZER
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatPeso } from '@/lib/format'
+import ModuloGate from '@/components/ModuloGate'
 
 type Sexo = 'MACHO' | 'FEMEA'
 
@@ -131,6 +132,7 @@ export default function CategoriasPage() {
   }
 
   return (
+    <ModuloGate modulo="categorias">
     <div className="p-8 max-w-2xl">
       <h1 className="text-2xl font-bold mb-6">Categorias de animal</h1>
 
@@ -314,5 +316,6 @@ export default function CategoriasPage() {
         </ul>
       )}
     </div>
+    </ModuloGate>
   )
 }

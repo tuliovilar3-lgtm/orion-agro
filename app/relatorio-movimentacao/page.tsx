@@ -4,18 +4,10 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatQuantidade } from '@/lib/format'
-import {
-  ultimoDiaDoMes,
-  periodoSafra,
-  periodoAno,
-  anoInicioSafraAtual,
-  anoCalendarioAtual,
-  opcoesSafra,
-  opcoesAno,
-} from '@/lib/periodo'
+import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
+import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import FluxoRebanho, { somarFluxoRebanho } from '@/components/FluxoRebanho'
-
-type Fazenda = { id: string; nome: string }
+import ModuloGate from '@/components/ModuloGate'
 
 type RelatorioLinha = {
   categoria_id: string
@@ -85,14 +77,29 @@ function linhaEstaZerada(l: RelatorioLinha) {
 }
 
 export default function RelatorioMovimentacaoPage() {
-  const [fazendas, setFazendas] = useState<Fazenda[]>([])
-  const [fazendaIds, setFazendaIds] = useState<string[]>([])
-  const [modoFiltro, setModoFiltro] = useState<'mes' | 'safra' | 'ano' | 'periodo'>('mes')
-  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
-  const [safraAnoInicio, setSafraAnoInicio] = useState(() => anoInicioSafraAtual())
-  const [anoCalendarioSelecionado, setAnoCalendarioSelecionado] = useState(() => anoCalendarioAtual())
-  const [dataInicioCustom, setDataInicioCustom] = useState(() => `${new Date().toISOString().slice(0, 7)}-01`)
-  const [dataFimCustom, setDataFimCustom] = useState(() => new Date().toISOString().slice(0, 10))
+  const {
+    fazendas,
+    fazendaIds,
+    alternarFazenda,
+    alternarTodas,
+    todasSelecionadas,
+    modoFiltro,
+    setModoFiltro,
+    mes,
+    setMes,
+    safraAnoInicio,
+    setSafraAnoInicio,
+    anoCalendarioSelecionado,
+    setAnoCalendarioSelecionado,
+    dataInicioCustom,
+    setDataInicioCustom,
+    dataFimCustom,
+    setDataFimCustom,
+    dataInicio,
+    dataFim,
+    periodoInvalido,
+  } = useFiltroGlobal()
+
   const [linhas, setLinhas] = useState<RelatorioLinha[]>([])
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
@@ -101,42 +108,6 @@ export default function RelatorioMovimentacaoPage() {
 
   const hoje = new Date().toISOString().slice(0, 10)
   const mesAtual = hoje.slice(0, 7)
-
-  const safra = periodoSafra(safraAnoInicio)
-  const anoCalendario = periodoAno(anoCalendarioSelecionado)
-  const dataInicio =
-    modoFiltro === 'mes'
-      ? `${mes}-01`
-      : modoFiltro === 'safra'
-        ? safra.dataInicio
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataInicio
-          : dataInicioCustom
-  const dataFimBruta =
-    modoFiltro === 'mes'
-      ? `${mes}-${String(ultimoDiaDoMes(mes)).padStart(2, '0')}`
-      : modoFiltro === 'safra'
-        ? safra.dataFim
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataFim
-          : dataFimCustom
-  // rebanho não tem "previsão" como área — não é possível lançar
-  // movimentação futura, então o estoque final nunca passa de hoje
-  const dataFim = dataFimBruta > hoje ? hoje : dataFimBruta
-  const periodoInvalido = modoFiltro === 'periodo' && dataInicioCustom > dataFimCustom
-  const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
-
-  useEffect(() => {
-    supabase
-      .from('fazendas')
-      .select('id, nome')
-      .order('nome')
-      .then(({ data }) => {
-        setFazendas(data || [])
-        setFazendaIds((data || []).map((f) => f.id))
-      })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   useEffect(() => {
     if (fazendaIds.length === 0 || periodoInvalido) {
@@ -161,14 +132,6 @@ export default function RelatorioMovimentacaoPage() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaIds, dataInicio, dataFim])
-
-  function alternarFazenda(id: string) {
-    setFazendaIds((prev) => (prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]))
-  }
-
-  function alternarTodas() {
-    setFazendaIds(todasSelecionadas ? [] : fazendas.map((f) => f.id))
-  }
 
   const linhasVisiveis = linhas.filter((l) => !linhaEstaZerada(l))
 
@@ -211,6 +174,7 @@ export default function RelatorioMovimentacaoPage() {
   const totalDistribuicao = distribuicao.reduce((s, l) => s + l.estoque_final, 0)
 
   return (
+    <ModuloGate modulo="resumo_movimentacao">
     <div className="p-8 max-w-6xl">
       <h1 className="text-2xl font-bold mb-6">Resumo de Movimentação de Rebanho</h1>
 
@@ -482,5 +446,6 @@ export default function RelatorioMovimentacaoPage() {
         </>
       )}
     </div>
+    </ModuloGate>
   )
 }

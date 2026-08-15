@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatQuantidade, formatPeso } from '@/lib/format'
+import ModuloGate from '@/components/ModuloGate'
 
 type Fazenda = { id: string; nome: string }
 type Categoria = { id: string; nome: string }
@@ -245,6 +246,7 @@ export default function PesagensPage() {
     valoresPreenchidos.every(pesoValido)
 
   return (
+    <ModuloGate modulo="pesagens">
     <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Pesagens</h1>
       <p className="mt-1 text-sm text-text-secondary">
@@ -478,5 +480,6 @@ export default function PesagensPage() {
         </div>
       )}
     </div>
+    </ModuloGate>
   )
 }

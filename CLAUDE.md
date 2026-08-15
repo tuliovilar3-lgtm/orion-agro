@@ -1562,3 +1562,191 @@ Verificado no navegador e direto no banco: trocar a cor de um pasto de teste per
 criado pelo usuário ("Sítio Túlio") atualizou `modulo_id` corretamente e a lista reagrupou o pasto
 sob o novo módulo automaticamente, sem precisar recarregar a página. Os dois testes foram revertidos
 ao estado original depois da verificação.
+
+## Revisão de UI baseada em mockup externo (dropdown, sidebar, tabelas, Painel, filtro global)
+
+Sequência de melhorias sugeridas por um mockup gerado por outra ferramenta ("claude cowork"),
+filtradas e adaptadas ao design system real do ORION (a paleta/tipografia inventada do mockup **não**
+foi adotada — só a estrutura de algumas ideias). Ordem de implementação confirmada com o usuário,
+que deliberadamente excluiu duas propostas do mockup: trocar o gráfico de Lotação de rótulo
+sempre-visível pra hover-only (contradiria uma decisão anterior já documentada acima) e a paleta de
+cores nova (o sistema já tem uma paleta própria e consistente).
+
+**Dropdown de tipo de movimentação humanizado**: `app/movimentacoes/page.tsx` tinha um bug real —
+os dois `<select>` de tipo (formulário de lançamento e filtro da listagem) e os dois pontos de
+exibição na listagem (`m.tipo`/`primeira.tipo`) mostravam o enum cru do banco (`VENDA_PE`,
+`CONSUMO_DOACAO`) em vez de um rótulo legível. Corrigido com um dicionário `LABEL_TIPO: Record<TipoMovimentacao, string>`
+local ao arquivo, aplicado nos 4 pontos.
+
+**Sidebar colapsável**: `components/Sidebar.tsx` ganhou um botão de recolher/expandir (ícone de seta,
+no topo da sidebar desktop, ao lado do nome "ORION AGRO") — colapsada, vira uma faixa de 64px
+(`w-16`) só com ícones (com `title` nativo como tooltip); expandida, os 240px (`w-60`) de sempre. O
+estado do menu mobile (drawer) não muda — o toggle só existe na versão desktop. Como o espaço
+reservado pro conteúdo (`md:pl-60`) vivia em `app/layout.tsx`, fora do componente `Sidebar`, o estado
+`collapsed` precisou subir pra um componente novo, `components/AppShell.tsx` — client component que
+envolve `Sidebar` + o `<div>` de conteúdo, repassando `collapsed`/`onToggleCollapsed` como props pro
+`Sidebar` e trocando `md:pl-60`/`md:pl-16` no wrapper de conteúdo em uníssono. Estado persistido em
+`localStorage` (`orion.sidebarColapsada`), lido só depois de montar (evita mismatch de hidratação
+entre servidor e cliente). `AppShell` também passou a ser o lugar natural pra hospedar os providers de
+contexto compartilhados entre páginas (`AuthProvider`, `FiltroGlobalProvider` — ver abaixo).
+
+**Tabela → card no mobile**: abaixo de 768px, tabelas largas viram uma lista de cards empilhados em
+vez de rolagem horizontal. Aplicado nas duas tabelas mais largas do app: `app/relatorio-rebanho-por-pasto/page.tsx`
+(pasto + linhas de categoria/quantidade/peso, cada `<table>`/lista de cards renderizada com
+`hidden md:block`/`md:hidden` a partir dos mesmos dados já calculados, sem chamada nova ao banco) e a
+tabela cruzada (tipo de uso × mês) de `components/fazendas/DistribuicaoAreaPanel.tsx` — nesse caso o
+card do mobile **não** repete o detalhe mês a mês (empilhar 12 colunas como linhas seria só uma
+tabela disfarçada, não mais legível); mostra só o resumo que importa pra decisão rápida — Área média
+e Área final por tipo de uso —, com o detalhe mensal completo ficando reservado pra tela `md:` acima.
+
+**Destaque cruzado lista ↔ rosca no Painel**: a lista "Distribuição do rebanho atual" e a rosca
+"Distribuição sexo × categoria" (`app/page.tsx`) já existiam lado a lado, mas isoladas uma da outra.
+Passar o mouse numa linha da lista agora encontra o índice correspondente em `porCategoriaPorSexo`
+(as duas listas têm ordens diferentes — a lista é só por quantidade desc, a rosca agrupa por sexo
+primeiro —, então o casamento é por **nome da categoria**, não por índice) e chama o mesmo
+`setHoverCategoriaIndex` que a rosca e a legenda já usavam, destacando a linha (`bg-brand-100`), a
+fatia da rosca (crescimento nativo do recharts) e o item da legenda (`bg-brand-100` também, novo) ao
+mesmo tempo, com o rótulo central da rosca atualizando pra mostrar a categoria em foco.
+
+**Filtro de período global sincronizado**: Painel, Relatório de Lotação, Relatórios de Movimentações
+e Resumo de Movimentação de Rebanho reimplementavam cada um seu próprio estado de fazenda(s) +
+período (mesmas ~8 variáveis: `fazendaIds`, `modoFiltro`, `mes`, `safraAnoInicio`,
+`anoCalendarioSelecionado`, `dataInicioCustom`, `dataFimCustom`, mais os cálculos derivados de
+`dataInicio`/`dataFim`/`periodoInvalido`) — escolher uma fazenda específica + um período numa tela e
+navegar pra outra resetava tudo. Extraído pra `contexts/FiltroGlobalContext.tsx` (`FiltroGlobalProvider`,
+montado em `AppShell`, então sobrevive à navegação entre páginas sem precisar de `localStorage` —
+mas persiste em `localStorage` também, `orion.filtroGlobal`, pra sobreviver a um F5), com um hook
+`useFiltroGlobal()` que devolve exatamente as mesmas variáveis que cada página já tinha localmente —
+a migração de cada página foi só trocar a declaração local por essa chamada de hook, sem tocar no
+resto do arquivo (JSX, queries). Fazenda(s): começa com todas marcadas na primeira visita (sem nada
+salvo ainda); depois disso, a seleção sempre vem do `localStorage`, filtrando ids que não existem
+mais. Período: default `'safra'` (Ano Safra atual) — o Painel já usava esse default antes de existir
+sincronização; as outras 3 páginas usavam `'mes'` como default próprio, então esse é um efeito
+colateral consciente da unificação (documentado aqui, não um bug): a primeira visão de qualquer uma
+delas agora abre em "Safra atual" em vez de "Mês atual", exceto se o usuário já tiver escolhido outra
+coisa antes (aí o valor salvo vale). Verificado no navegador: selecionar 1 fazenda + "Período
+personalizado" (fev/2026) no Painel e navegar pra Relatório de Lotação e Relatórios de Movimentações
+mostrou a mesma fazenda e o mesmo período nos dois, sem precisar reconfigurar.
+
+## Modelo de acesso e login (Supabase Auth, migração 042)
+
+Decisão já registrada em memória de projeto antes desta implementação (`permission_model_design`):
+sem perfis/papéis nomeados — permissão **direta por usuário → módulo**. Um usuário "dono" (rebatizado
+"Administrador" em todo texto visível — ver nota de nomenclatura abaixo) tem acesso total sem passar
+por nenhuma checagem; os demais usuários (funcionários) têm uma lista própria de módulos liberados.
+Single-tenant (um grupo só) — não há isolamento entre "contas" diferentes, só entre pessoas dentro do
+mesmo grupo. RLS **continua desligado** propositalmente (decisão já registrada em
+`deployment_roadmap`: reativar RLS é um passo futuro separado, só depois deste modelo estar pronto e
+testado) — o enforcement de módulo nesta fase é feito inteiramente no app (Proxy + client-side), não
+no banco.
+
+**`usuarios_app`** (id referencia `auth.users(id)`, nome, email, `dono` boolean, `ativo` boolean,
+`modo` — 'CAMPO'/'GESTAO', preparado agora pra não exigir migração nova quando a Fase 7 do roadmap de
+melhorias, PWA "Modo Campo/Modo Gestão", for implementada; hoje nenhuma tela lê essa coluna) +
+**`usuario_modulos`** (usuario_id, modulo — um módulo liberado por linha, catálogo de strings livre
+que espelha os ids de rota já usados na Sidebar, sem tabela de módulos própria — mesmo espírito de
+"sem tabela de perfis" já decidido). **Nome deliberadamente `usuarios_app`, não `usuarios`**: o schema
+já tinha uma tabela `usuarios`/`usuario_fazenda`/enum `papel_usuario` de um rascunho anterior à
+decisão de usar Supabase Auth — nunca teve nenhuma linha nem foi referenciada por código nenhum do
+app (só colunas `created_by`/`usuario_id` nullable e nunca escritas em `categorias_animal`/
+`movimentacoes_rebanho`/`pesagens`/`lancamentos_financeiros`). Deixado como está (dead schema
+inofensivo) — mexer numa tabela de produção fora do escopo desta migração não valia o risco só por
+causa de um nome. `fn_existe_dono()` (`select exists(...)`) é chamada pela tela de login com a chave
+anônima, antes de qualquer sessão existir, pra decidir entre mostrar o formulário normal de entrar ou
+o formulário único de "criar conta de administrador" — só retorna um boolean, nunca expõe dado.
+
+**Catálogo de módulos** (`lib/modulos.ts`, `ModuloId`): um id por rota gateável — `fazendas`,
+`categorias`, `pessoas`, `movimentacoes`, `pesagens`, `resumo_movimentacao`,
+`relatorios_movimentacoes`, `relatorio_lotacao`, `mudanca_pasto`, `rebanho_por_pasto`. **O Painel
+(`/`) fica de propósito fora do catálogo** — é só uma visão geral somente-leitura, sempre acessível a
+qualquer usuário logado (administrador ou funcionário), porque sem isso um funcionário sem nenhum
+módulo liberado não teria pra onde ir depois de entrar.
+
+**Infra de sessão** (Next.js 16 renomeou Middleware pra Proxy — mesmo arquivo/convenção, nome novo;
+`proxy.ts` na raiz do projeto): `lib/supabase/server.ts` (cliente SSR lendo/escrevendo sessão via
+cookies, usado no proxy e nas Route Handlers) e `lib/supabase/admin.ts` (cliente com a
+`service_role` key, `import 'server-only'` no topo — faz o build falhar se algum componente client
+tentar importar esse arquivo, garantindo que a chave nunca alcança o navegador). `proxy.ts` roda em
+toda rota (exceto `/api`, assets estáticos e os ícones/manifest do PWA), renova a sessão via
+`supabase.auth.getUser()` e redireciona quem não está logado pro `/login` — é uma checagem
+"otimista" (só lê o cookie, sem tocar o banco); qual módulo cada um pode ver continua sendo checado
+no app, não aqui.
+
+**`/login`**: formulário normal de entrar (e-mail+senha) quando `fn_existe_dono()` é `true`; quando
+`false`, um formulário único de "criar conta de administrador" (nome+e-mail+senha,
+`supabase.auth.signUp()` seguido de um insert em `usuarios_app` com `dono: true` — funciona mesmo com
+RLS desligado, e mesmo se a confirmação por e-mail estiver ligada no projeto Supabase, porque o insert
+usa o `id` já retornado pelo `signUp()` antes da confirmação). Se o projeto tiver confirmação de
+e-mail ativada, mostra um aviso "verifique seu e-mail" em vez de redirecionar direto — cai pro fluxo
+normal de entrar depois que a pessoa confirmar.
+
+**`contexts/AuthContext.tsx`** (`AuthProvider`, montado em `AppShell` — sobre `/login`, uma versão
+mínima sem `FiltroGlobalProvider`/`Sidebar`, já que essa rota não precisa de nenhum dos dois):
+carrega `usuarios_app` + `usuario_modulos` do usuário logado (via `supabase.auth.onAuthStateChange`,
+tanto no carregamento inicial quanto em login/logout subsequentes) e expõe `isDono`,
+`podeAcessar(modulo)` (`isDono || modulosPermitidos.has(modulo)`) e `signOut()`. **Usuário inativado
+(`ativo = false`) é deslogado automaticamente** — inativar só desliga uma flag no banco, não revoga a
+sessão já existente no Supabase Auth, então sem essa checagem no `AuthContext` a pessoa continuaria
+acessando os módulos que tinha antes de ser desligada. Ao detectar `ativo = false`,
+`carregarDadosApp` chama `signOut()` e redireciona pra `/login?inativo=1` (que mostra um aviso) — via
+`window.location.href`, não `router.push()`: um bug real foi descoberto durante o teste (o cache de
+rota do Next.js reaproveitava a instância já montada de `/login`, que não relia o parâmetro da URL no
+efeito de montagem), então esse redirecionamento específico usa navegação completa de propósito, pra
+garantir uma montagem nova.
+
+**Sidebar filtrada por permissão**: `components/Sidebar.tsx` filtra os itens de cada grupo por
+`podeAcessar(item.modulo)` (grupo inteiro some se nenhum item sobrar), mostra uma seção
+"Administração → Usuários" só pra `isDono`, e o rodapé ganha o nome do usuário logado + botão "Sair"
+(some quando colapsada, vira só o ícone).
+
+**`components/ModuloGate.tsx`**: aplicado em volta do JSX de retorno das 10 páginas gateáveis (uma
+por módulo do catálogo) — se `podeAcessar(modulo)` for falso, renderiza um card "Acesso restrito" no
+lugar do conteúdo real, no mesmo estilo `border-dashed` já usado em outros estados vazios do app.
+Client-side, então não é a linha de defesa final (RLS desligado ainda permite ler os dados via
+`anon key` se alguém inspecionar a rede) — é suficiente pra impedir acesso casual via UI/URL direta
+enquanto RLS não volta a ser reativado (próximo passo do roadmap, fora do escopo desta migração).
+
+**`/usuarios`** (só `isDono`, checagem própria — não usa `ModuloGate`, já que não é um módulo
+liberável, é exclusivo do administrador): lista usuários com seus módulos, um botão "+ Novo usuário"
+(`components/usuarios/CadastrarUsuarioModal.tsx`) e checkboxes de módulo editáveis inline por
+usuário (toggle imediato via `PATCH`, sem botão de salvar próprio). Radio de Modo Gestão/Campo já
+presente no formulário de criação (grava a coluna, mas ainda não muda nenhum comportamento — nota
+explícita no formulário avisando disso). Ações de servidor em `app/api/usuarios/route.ts` (`GET`
+lista, `POST` cria) e `app/api/usuarios/[id]/route.ts` (`PATCH` — nome/ativo/modo/módulos, módulos
+sempre substituídos por completo, apaga-e-reinsere, mesmo princípio já usado noutros pontos do
+sistema pra listas filhas). Toda rota começa com `exigirDono()` (sessão válida + `usuarios_app.dono`
+via o cliente de servidor) antes de qualquer coisa — Route Handlers são tratadas com a mesma
+seriedade de um endpoint público, mesmo protegido atrás de `/api`. `POST` usa
+`admin.auth.admin.createUser({ email, password, email_confirm: true })` — confirmado na hora, porque
+quem está criando a conta é o próprio administrador, não faz sentido exigir que o funcionário
+confirme por e-mail uma senha que o administrador acabou de definir; se o insert em `usuarios_app`
+falhar depois, o usuário de auth recém-criado é apagado (`deleteUser`) pra não sobrar uma conta órfã
+sem perfil. Não existe rota de exclusão — "Inativar" (toggle de `ativo`) é a única forma de desligar
+alguém, mesmo princípio de "inativar, nunca excluir" já usado em categoria/pasto/pessoa/fazenda.
+
+**Nomenclatura "Dono" → "Administrador"**: pedido do usuário depois de ver a implementação — a coluna
+interna `usuarios_app.dono` e a variável `isDono`/`exigirDono()` continuam com esse nome (mudar teria
+significado mexer em toda a lógica de banco/API só por causa de rótulo, sem ganho real), mas todo
+texto **visível** foi trocado pra "Administrador": título e botão de "Criar conta de administrador" em
+`/login`, badge "Administrador" ao lado do nome na lista de `/usuarios`, e as duas mensagens de erro
+"Só o administrador pode gerenciar usuários." nas Route Handlers.
+
+**Variável de ambiente nova**: `SUPABASE_SERVICE_ROLE_KEY` em `.env.local` (Project Settings → API →
+`service_role`/secret key no painel do Supabase) — necessária só pro `lib/supabase/admin.ts`
+(criação/edição de usuário funcionário). Nunca commitada (`.env*` já estava no `.gitignore`); precisa
+ser adicionada também nas variáveis de ambiente da Vercel antes do próximo deploy pra produção, senão
+a criação de usuário funciona local mas quebra em produção.
+
+Verificado de ponta a ponta no navegador: bootstrap da conta de administrador (`fn_existe_dono()`
+`false` → `true` depois de criada, confirmado também via query direta), login/logout por senha,
+Sidebar mostrando todos os grupos + "Administração/Usuários" pro administrador, criação de um usuário
+funcionário de teste com todos os módulos marcados (confirmado no banco: linha em `usuarios_app` +
+10 linhas em `usuario_modulos`), reconfiguração pra só 1 módulo direto no banco (simulando o mesmo
+efeito do toggle de checkbox), login como esse funcionário mostrando **só** "Painel" + o módulo
+liberado na Sidebar, bloqueio de acesso direto por URL tanto a um módulo não liberado quanto a
+`/usuarios` (mensagens "Acesso restrito" distintas — uma por `ModuloGate`, outra específica de
+`/usuarios`), redirecionamento de sessão não autenticada pro `/login` (proxy), e o fluxo de
+inativação: toggle "Inativar" na UI do administrador → próxima tentativa de login do funcionário
+inativado é bloqueada com aviso, confirmado só depois de corrigir o bug real encontrado nesse teste
+(inativar não deslogava quem já tinha sessão ativa). Usuário de teste inativado ao final (não
+excluído — sem rota de exclusão, por design).

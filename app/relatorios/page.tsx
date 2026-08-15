@@ -3,15 +3,8 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
-import {
-  ultimoDiaDoMes,
-  periodoSafra,
-  periodoAno,
-  anoInicioSafraAtual,
-  anoCalendarioAtual,
-  opcoesSafra,
-  opcoesAno,
-} from '@/lib/periodo'
+import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
+import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import { MovimentacaoRelatorio, formatarDataBr } from '@/components/relatorios/tipos'
 import RelatorioNascimento from '@/components/relatorios/RelatorioNascimento'
 import RelatorioDesmame from '@/components/relatorios/RelatorioDesmame'
@@ -21,6 +14,7 @@ import RelatorioVendaAbate from '@/components/relatorios/RelatorioVendaAbate'
 import RelatorioMortalidade from '@/components/relatorios/RelatorioMortalidade'
 import RelatorioConsumoDoacao from '@/components/relatorios/RelatorioConsumoDoacao'
 import RelatorioTransferencia from '@/components/relatorios/RelatorioTransferencia'
+import ModuloGate from '@/components/ModuloGate'
 
 type Fazenda = { id: string; nome: string }
 type Categoria = { id: string; nome: string }
@@ -59,18 +53,32 @@ function nomeMesLongo(anoMes: string) {
 }
 
 export default function RelatoriosPage() {
-  const [fazendas, setFazendas] = useState<Fazenda[]>([])
-  const [fazendaIds, setFazendaIds] = useState<string[]>([])
+  const {
+    fazendas,
+    fazendaIds,
+    alternarFazenda,
+    alternarTodas,
+    todasSelecionadas,
+    modoFiltro,
+    setModoFiltro,
+    mes,
+    setMes,
+    safraAnoInicio,
+    setSafraAnoInicio,
+    anoCalendarioSelecionado,
+    setAnoCalendarioSelecionado,
+    dataInicioCustom,
+    setDataInicioCustom,
+    dataFimCustom,
+    setDataFimCustom,
+    dataInicio,
+    dataFim,
+    periodoInvalido,
+  } = useFiltroGlobal()
+
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [categoriaId, setCategoriaId] = useState('')
   const [tipoSelecionado, setTipoSelecionado] = useState<TipoRelatorio>('NASCIMENTO')
-
-  const [modoFiltro, setModoFiltro] = useState<'mes' | 'safra' | 'ano' | 'periodo'>('mes')
-  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
-  const [safraAnoInicio, setSafraAnoInicio] = useState(() => anoInicioSafraAtual())
-  const [anoCalendarioSelecionado, setAnoCalendarioSelecionado] = useState(() => anoCalendarioAtual())
-  const [dataInicioCustom, setDataInicioCustom] = useState(() => `${new Date().toISOString().slice(0, 7)}-01`)
-  const [dataFimCustom, setDataFimCustom] = useState(() => new Date().toISOString().slice(0, 10))
 
   const [linhas, setLinhas] = useState<MovimentacaoRelatorio[]>([])
   const [loading, setLoading] = useState(false)
@@ -80,37 +88,7 @@ export default function RelatoriosPage() {
   const hoje = new Date().toISOString().slice(0, 10)
   const mesAtual = hoje.slice(0, 7)
 
-  const safra = periodoSafra(safraAnoInicio)
-  const anoCalendario = periodoAno(anoCalendarioSelecionado)
-  const dataInicio =
-    modoFiltro === 'mes'
-      ? `${mes}-01`
-      : modoFiltro === 'safra'
-        ? safra.dataInicio
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataInicio
-          : dataInicioCustom
-  const dataFimBruta =
-    modoFiltro === 'mes'
-      ? `${mes}-${String(ultimoDiaDoMes(mes)).padStart(2, '0')}`
-      : modoFiltro === 'safra'
-        ? safra.dataFim
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataFim
-          : dataFimCustom
-  const dataFim = dataFimBruta > hoje ? hoje : dataFimBruta
-  const periodoInvalido = modoFiltro === 'periodo' && dataInicioCustom > dataFimCustom
-  const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
-
   useEffect(() => {
-    supabase
-      .from('fazendas')
-      .select('id, nome')
-      .order('nome')
-      .then(({ data }) => {
-        setFazendas(data || [])
-        setFazendaIds((data || []).map((f) => f.id))
-      })
     // categorias sem filtro de ativa — o relatório precisa continuar
     // achando histórico de categoria já inativada
     supabase
@@ -162,14 +140,6 @@ export default function RelatoriosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tipoSelecionado, fazendaIds, categoriaId, dataInicio, dataFim])
 
-  function alternarFazenda(id: string) {
-    setFazendaIds((prev) => (prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]))
-  }
-
-  function alternarTodas() {
-    setFazendaIds(todasSelecionadas ? [] : fazendas.map((f) => f.id))
-  }
-
   const rotuloPeriodo =
     modoFiltro === 'mes'
       ? nomeMesLongo(mes)
@@ -180,6 +150,7 @@ export default function RelatoriosPage() {
           : `${formatarDataBr(dataInicio)} até ${formatarDataBr(dataFim)}`
 
   return (
+    <ModuloGate modulo="relatorios_movimentacoes">
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Relatórios de Movimentações</h1>
       <p className="mt-1 text-sm text-text-secondary">
@@ -379,5 +350,6 @@ export default function RelatoriosPage() {
         )}
       </div>
     </div>
+    </ModuloGate>
   )
 }

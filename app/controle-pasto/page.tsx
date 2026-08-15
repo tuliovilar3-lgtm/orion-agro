@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatQuantidade, formatPeso } from '@/lib/format'
+import ModuloGate from '@/components/ModuloGate'
 
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Categoria = { id: string; nome: string }
@@ -398,6 +399,7 @@ export default function ControlePastoPage() {
   }
 
   return (
+    <ModuloGate modulo="mudanca_pasto">
     <div className="mx-auto max-w-3xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Mudança de Pasto</h1>
       <p className="mt-1 text-sm text-text-secondary">
@@ -724,5 +726,6 @@ export default function ControlePastoPage() {
         </div>
       )}
     </div>
+    </ModuloGate>
   )
 }

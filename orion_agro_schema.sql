@@ -124,6 +124,58 @@ alter table configuracoes disable row level security;
 
 insert into configuracoes (controla_pasto) values (false);
 
+-- ---------------------------------------------------------------------
+-- Acesso e login (migração 042) — Supabase Auth
+-- ---------------------------------------------------------------------
+-- Nome "usuarios_app" (não "usuarios") de propósito: `usuarios` /
+-- `usuario_fazenda` / `papel_usuario` logo abaixo são um rascunho do
+-- schema original, anterior à decisão de usar Supabase Auth — nunca
+-- tiveram nenhuma linha nem foram referenciados por código nenhum do
+-- app (só colunas `created_by`/`usuario_id` nullable e nunca escritas em
+-- categorias_animal/movimentacoes_rebanho/pesagens/lancamentos_financeiros).
+-- Deixados como estão (dead schema inofensivo) pra não mexer em tabelas
+-- de produção fora do escopo desta migração — não usar `usuarios` pra
+-- nada novo.
+create table usuarios_app (
+  id uuid primary key references auth.users(id) on delete cascade,
+  nome text not null,
+  email text not null,
+  dono boolean not null default false,
+  ativo boolean not null default true,
+  -- 'CAMPO'/'GESTAO': preparado agora pra não exigir migração nova
+  -- quando o modo de navegação simplificado (PWA) for implementado —
+  -- ainda sem nenhuma tela/rota que leia essa coluna
+  modo text not null default 'GESTAO' check (modo in ('CAMPO', 'GESTAO')),
+  created_at timestamptz not null default now()
+);
+
+comment on table usuarios_app is
+  'Dados de app por usuário autenticado (auth.users é só identidade/senha). Um dono por grupo — os demais são funcionários com módulos liberados individualmente.';
+
+-- catálogo de módulos é só uma convenção de string usada pelo frontend
+-- (mesmos ids de rota já usados na Sidebar) — sem tabela de módulos
+-- própria, igual o modelo já decidido dispensa tabela de perfis
+create table usuario_modulos (
+  usuario_id uuid not null references usuarios_app(id) on delete cascade,
+  modulo text not null,
+  primary key (usuario_id, modulo)
+);
+
+comment on table usuario_modulos is
+  'Um módulo liberado por linha, por usuário — sem perfis/papéis nomeados (decisão em memória permission_model_design). Dono não precisa de linhas aqui: bypassa a checagem inteira.';
+
+-- usada pelo /login (com a chave anônima, antes de qualquer sessão
+-- existir) pra decidir entre mostrar o formulário normal de entrar ou o
+-- formulário único de "criar conta de dono" — só retorna um boolean,
+-- sem expor nenhum dado, então é seguro chamar sem autenticação
+create or replace function fn_existe_dono()
+returns boolean as $$
+  select exists(select 1 from usuarios_app where dono = true);
+$$ language sql stable;
+
+-- ---------------------------------------------------------------------
+-- Rascunho original não utilizado — ver comentário acima
+-- ---------------------------------------------------------------------
 create table usuarios (
   id              uuid primary key default gen_random_uuid(),
   nome            text not null,

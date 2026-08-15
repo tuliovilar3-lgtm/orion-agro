@@ -4,15 +4,8 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatArea, formatLotacao, formatPeso, formatQuantidade } from '@/lib/format'
-import {
-  ultimoDiaDoMes,
-  periodoSafra,
-  periodoAno,
-  anoInicioSafraAtual,
-  anoCalendarioAtual,
-  opcoesSafra,
-  opcoesAno,
-} from '@/lib/periodo'
+import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
+import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import KpiCard from '@/components/relatorios/KpiCard'
 import { corCategorica } from '@/lib/relatorio-cores'
 import {
@@ -25,6 +18,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import ModuloGate from '@/components/ModuloGate'
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção do Painel
 const KG_POR_UA = 450
@@ -128,16 +122,30 @@ function formatarValor(valor: number | null, casas: number) {
 }
 
 export default function RelatorioLotacaoPage() {
-  const [fazendas, setFazendas] = useState<Fazenda[]>([])
-  const [fazendaIds, setFazendaIds] = useState<string[]>([])
-  const [controlaPasto, setControlaPasto] = useState(false)
+  const {
+    fazendas,
+    fazendaIds,
+    alternarFazenda,
+    alternarTodas,
+    todasSelecionadas,
+    modoFiltro,
+    setModoFiltro,
+    mes,
+    setMes,
+    safraAnoInicio,
+    setSafraAnoInicio,
+    anoCalendarioSelecionado,
+    setAnoCalendarioSelecionado,
+    dataInicioCustom,
+    setDataInicioCustom,
+    dataFimCustom,
+    setDataFimCustom,
+    dataInicio,
+    dataFim,
+    periodoInvalido,
+  } = useFiltroGlobal()
 
-  const [modoFiltro, setModoFiltro] = useState<'mes' | 'safra' | 'ano' | 'periodo'>('safra')
-  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
-  const [safraAnoInicio, setSafraAnoInicio] = useState(() => anoInicioSafraAtual())
-  const [anoCalendarioSelecionado, setAnoCalendarioSelecionado] = useState(() => anoCalendarioAtual())
-  const [dataInicioCustom, setDataInicioCustom] = useState(() => `${new Date().toISOString().slice(0, 7)}-01`)
-  const [dataFimCustom, setDataFimCustom] = useState(() => new Date().toISOString().slice(0, 10))
+  const [controlaPasto, setControlaPasto] = useState(false)
 
   const [linhasMensais, setLinhasMensais] = useState<LinhaMensal[]>([])
   const [loading, setLoading] = useState(false)
@@ -152,40 +160,8 @@ export default function RelatorioLotacaoPage() {
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
   const mesAtual = hoje.slice(0, 7)
-  const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
-
-  const safra = periodoSafra(safraAnoInicio)
-  const anoCalendario = periodoAno(anoCalendarioSelecionado)
-  const dataInicio =
-    modoFiltro === 'mes'
-      ? `${mes}-01`
-      : modoFiltro === 'safra'
-        ? safra.dataInicio
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataInicio
-          : dataInicioCustom
-  const dataFimBruta =
-    modoFiltro === 'mes'
-      ? `${mes}-${String(ultimoDiaDoMes(mes)).padStart(2, '0')}`
-      : modoFiltro === 'safra'
-        ? safra.dataFim
-        : modoFiltro === 'ano'
-          ? anoCalendario.dataFim
-          : dataFimCustom
-  // rebanho não tem "previsão" como área — não é possível lançar
-  // movimentação futura, então o período nunca passa de hoje
-  const dataFim = dataFimBruta > hoje ? hoje : dataFimBruta
-  const periodoInvalido = modoFiltro === 'periodo' && dataInicioCustom > dataFimCustom
 
   useEffect(() => {
-    supabase
-      .from('fazendas')
-      .select('id, nome')
-      .order('nome')
-      .then(({ data }) => {
-        setFazendas(data || [])
-        setFazendaIds((data || []).map((f) => f.id))
-      })
     supabase
       .from('configuracoes')
       .select('controla_pasto')
@@ -284,14 +260,6 @@ export default function RelatorioLotacaoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlaPasto, fazendaIds])
 
-  function alternarFazenda(id: string) {
-    setFazendaIds((prev) => (prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]))
-  }
-
-  function alternarTodas() {
-    setFazendaIds(todasSelecionadas ? [] : fazendas.map((f) => f.id))
-  }
-
   function alternarSerie(key: SerieKey) {
     setVisiveis((prev) => {
       const novo = new Set(prev)
@@ -335,6 +303,7 @@ export default function RelatorioLotacaoPage() {
   const maxLotacaoPasto = Math.max(...pastosLotacao.map((p) => p.lotacao ?? 0), 0.0001)
 
   return (
+    <ModuloGate modulo="relatorio_lotacao">
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Relatório de Lotação</h1>
       <p className="mt-1 text-sm text-text-secondary">
@@ -648,6 +617,7 @@ export default function RelatorioLotacaoPage() {
         )}
       </div>
     </div>
+    </ModuloGate>
   )
 }
 

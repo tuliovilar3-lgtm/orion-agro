@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatQuantidade, formatPeso as formatPesoValor } from '@/lib/format'
+import ModuloGate from '@/components/ModuloGate'
 
 type Fazenda = { id: string; nome: string }
 
@@ -100,6 +101,7 @@ export default function RelatorioRebanhoPorPastoPage() {
   const pesoMedioGeral = quantidadeComPeso > 0 ? totalGeralPeso / quantidadeComPeso : null
 
   return (
+    <ModuloGate modulo="rebanho_por_pasto">
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Rebanho por pasto</h1>
       <p className="mt-1 text-sm text-text-secondary">
@@ -160,61 +162,101 @@ export default function RelatorioRebanhoPorPastoPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-card border border-border bg-surface">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr>
-                  <th className="border-b border-border p-3 text-left font-medium text-text-secondary">Pasto</th>
-                  <th className="border-b border-border p-3 text-left font-medium text-text-secondary">Categoria</th>
-                  <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Quantidade</th>
-                  <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Peso médio</th>
-                  <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Peso total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pastos.map((p, pIdx) => {
-                  const zebra = pIdx % 2 === 1
-                  return p.linhas.map((l, lIdx) => (
-                    <tr key={`${p.pasto_id}-${l.categoria_id}`} className={zebra ? 'bg-bg' : undefined}>
-                      {lIdx === 0 && (
-                        <td
-                          rowSpan={p.linhas.length}
-                          className="border-b border-border p-3 align-top font-semibold text-text-primary"
-                        >
-                          {p.pasto_nome}
-                          <div className="mt-0.5 text-xs font-normal text-text-secondary">
-                            {formatQuantidade(p.totalQuantidade)} cab.
-                          </div>
+          <>
+            {/* tabela — telas md e acima */}
+            <div className="hidden overflow-x-auto rounded-card border border-border bg-surface md:block">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr>
+                    <th className="border-b border-border p-3 text-left font-medium text-text-secondary">Pasto</th>
+                    <th className="border-b border-border p-3 text-left font-medium text-text-secondary">Categoria</th>
+                    <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Quantidade</th>
+                    <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Peso médio</th>
+                    <th className="border-b border-border p-3 text-right font-medium text-text-secondary">Peso total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pastos.map((p, pIdx) => {
+                    const zebra = pIdx % 2 === 1
+                    return p.linhas.map((l, lIdx) => (
+                      <tr key={`${p.pasto_id}-${l.categoria_id}`} className={zebra ? 'bg-bg' : undefined}>
+                        {lIdx === 0 && (
+                          <td
+                            rowSpan={p.linhas.length}
+                            className="border-b border-border p-3 align-top font-semibold text-text-primary"
+                          >
+                            {p.pasto_nome}
+                            <div className="mt-0.5 text-xs font-normal text-text-secondary">
+                              {formatQuantidade(p.totalQuantidade)} cab.
+                            </div>
+                          </td>
+                        )}
+                        <td className="border-b border-border p-3 text-text-primary">{l.categoria_nome}</td>
+                        <td className="border-b border-border p-3 text-right tabular-nums">
+                          {formatQuantidade(l.quantidade)}
                         </td>
-                      )}
-                      <td className="border-b border-border p-3 text-text-primary">{l.categoria_nome}</td>
-                      <td className="border-b border-border p-3 text-right tabular-nums">
-                        {formatQuantidade(l.quantidade)}
-                      </td>
-                      <td className="border-b border-border p-3 text-right tabular-nums">
-                        {formatPeso(l.peso_medio_kg)}
-                      </td>
-                      <td className="border-b border-border p-3 text-right tabular-nums">
-                        {l.peso_medio_kg != null ? formatPeso(l.peso_medio_kg * l.quantidade) : '—'}
-                      </td>
-                    </tr>
-                  ))
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="p-3 text-text-primary" colSpan={2}>
-                    Total geral
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{formatQuantidade(totalGeralQuantidade)}</td>
-                  <td className="p-3 text-right tabular-nums">{formatPeso(pesoMedioGeral)}</td>
-                  <td className="p-3 text-right tabular-nums">{formatPeso(totalGeralPeso)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                        <td className="border-b border-border p-3 text-right tabular-nums">
+                          {formatPeso(l.peso_medio_kg)}
+                        </td>
+                        <td className="border-b border-border p-3 text-right tabular-nums">
+                          {l.peso_medio_kg != null ? formatPeso(l.peso_medio_kg * l.quantidade) : '—'}
+                        </td>
+                      </tr>
+                    ))
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="font-semibold">
+                    <td className="p-3 text-text-primary" colSpan={2}>
+                      Total geral
+                    </td>
+                    <td className="p-3 text-right tabular-nums">{formatQuantidade(totalGeralQuantidade)}</td>
+                    <td className="p-3 text-right tabular-nums">{formatPeso(pesoMedioGeral)}</td>
+                    <td className="p-3 text-right tabular-nums">{formatPeso(totalGeralPeso)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* cards — abaixo de md, uma tabela de 5 colunas não cabe sem rolagem horizontal */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {pastos.map((p) => (
+                <div key={p.pasto_id} className="rounded-card border border-border bg-surface p-4">
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-semibold text-text-primary">{p.pasto_nome}</span>
+                    <span className="text-xs text-text-secondary">{formatQuantidade(p.totalQuantidade)} cab.</span>
+                  </div>
+                  <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5">
+                    {p.linhas.map((l) => (
+                      <div key={l.categoria_id} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-text-primary">{l.categoria_nome}</span>
+                        <span className="shrink-0 text-right text-text-secondary tabular-nums">
+                          {formatQuantidade(l.quantidade)} cab. · {formatPeso(l.peso_medio_kg)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-card border border-border bg-brand-100 p-4">
+                <div className="flex items-baseline justify-between font-semibold text-text-primary">
+                  <span>Total geral</span>
+                  <span className="tabular-nums">{formatQuantidade(totalGeralQuantidade)} cab.</span>
+                </div>
+                <div className="mt-1 flex items-baseline justify-between text-sm text-text-secondary">
+                  <span>Peso médio</span>
+                  <span className="tabular-nums">{formatPeso(pesoMedioGeral)}</span>
+                </div>
+                <div className="flex items-baseline justify-between text-sm text-text-secondary">
+                  <span>Peso total</span>
+                  <span className="tabular-nums">{formatPeso(totalGeralPeso)}</span>
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
     </div>
+    </ModuloGate>
   )
 }

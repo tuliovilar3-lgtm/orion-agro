@@ -7,6 +7,7 @@ import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatMoeda, formatQuantidade, formatPeso, formatDecimal } from '@/lib/format'
 import { PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
 import { safraSugeridaParaData, formatSafra, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
+import ModuloGate from '@/components/ModuloGate'
 
 type TipoMovimentacao =
   | 'NASCIMENTO'
@@ -37,6 +38,18 @@ const TIPOS: TipoMovimentacao[] = [
   'MUDANCA_CATEGORIA',
   'TRANSFERENCIA',
 ]
+
+const LABEL_TIPO: Record<TipoMovimentacao, string> = {
+  NASCIMENTO: 'Nascimento',
+  DESMAME: 'Desmame',
+  COMPRA: 'Compra',
+  VENDA_PE: 'Venda em Pé',
+  VENDA_ABATE: 'Venda Abate',
+  MORTE: 'Morte',
+  CONSUMO_DOACAO: 'Consumo/Doação',
+  MUDANCA_CATEGORIA: 'Mudança de Categoria',
+  TRANSFERENCIA: 'Transferência',
+}
 
 const TIPOS_SIMPLES: TipoMovimentacao[] = ['NASCIMENTO', 'DESMAME', 'MORTE']
 const TIPOS_COM_PRECO: TipoMovimentacao[] = ['COMPRA', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'TRANSFERENCIA']
@@ -1784,6 +1797,7 @@ export default function MovimentacoesPage() {
   }
 
   return (
+    <ModuloGate modulo="movimentacoes">
     <div className="p-8 max-w-2xl">
       <h1 className="text-2xl font-bold mb-6">Lançamento de Movimentações de Rebanho</h1>
 
@@ -1799,7 +1813,7 @@ export default function MovimentacoesPage() {
           >
             {TIPOS.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {LABEL_TIPO[t]}
               </option>
             ))}
           </select>
@@ -2801,7 +2815,7 @@ export default function MovimentacoesPage() {
             <option value="">Todos</option>
             {TIPOS.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {LABEL_TIPO[t]}
               </option>
             ))}
           </select>
@@ -2865,7 +2879,7 @@ export default function MovimentacoesPage() {
               return (
                 <li key={m.id} className="border p-3 rounded">
                   <div className="flex justify-between items-start">
-                    <strong>{m.tipo}</strong>
+                    <strong>{LABEL_TIPO[m.tipo]}</strong>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-gray-500">{m.data}</span>
                       <button
@@ -2898,7 +2912,7 @@ export default function MovimentacoesPage() {
               <li key={grupo.groupId} className="border p-3 rounded">
                 <div className="flex justify-between items-start">
                   <strong>
-                    {primeira.tipo} · {grupo.movimentacoes.length} categorias
+                    {LABEL_TIPO[primeira.tipo]} · {grupo.movimentacoes.length} categorias
                   </strong>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-gray-500">{primeira.data}</span>
@@ -3055,5 +3069,6 @@ export default function MovimentacoesPage() {
         </div>
       )}
     </div>
+    </ModuloGate>
   )
 }

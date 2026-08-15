@@ -720,7 +720,8 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
               ))}
             </div>
 
-            <div className="overflow-x-auto">
+            {/* tabela cruzada (tipo de uso × mês) — telas md e acima */}
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr>
@@ -773,6 +774,42 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
                   </tr>
                 </tfoot>
               </table>
+            </div>
+
+            {/* cards — abaixo de md, o detalhe mês a mês fica só na tabela (com
+                rolagem própria se reaberta numa tela maior); no card mostramos
+                o resumo que importa pra decisão rápida: média e área final */}
+            <div className="flex flex-col gap-2 md:hidden">
+              {linhasTipoUsoVisiveis.map((l) => (
+                <div key={l.tipo_uso_id} className="rounded-control border border-border bg-surface p-3">
+                  <div className="flex items-center gap-1.5 font-medium text-text-primary">
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: corTipoUsoArea(l.tipo_uso_nome) }} />
+                    {l.tipo_uso_nome}
+                  </div>
+                  <div className="mt-1.5 flex items-baseline justify-between text-sm">
+                    <span className="text-text-secondary">Área média</span>
+                    <span className="tabular-nums text-text-primary">{formatArea(l.areaMedia)} ha</span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-sm">
+                    <span className="text-text-secondary" title="Área alocada nesse tipo de uso no último dia do período.">
+                      Área final
+                    </span>
+                    <span className="tabular-nums text-text-primary">{formatArea(areasFinais[l.tipo_uso_id] ?? 0)} ha</span>
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-control border border-border bg-brand-100 p-3 font-semibold">
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="text-text-primary">Total — Área média</span>
+                  <span className="tabular-nums text-text-primary">{formatArea(areaMediaGeral)} ha</span>
+                </div>
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="text-text-primary">Total — Área final</span>
+                  <span className="tabular-nums text-text-primary">
+                    {formatArea(round2(linhasTipoUsoVisiveis.reduce((s, l) => s + (areasFinais[l.tipo_uso_id] ?? 0), 0)))} ha
+                  </span>
+                </div>
+              </div>
             </div>
           </>
         )}

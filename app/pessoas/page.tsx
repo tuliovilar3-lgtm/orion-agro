@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import CadastrarPessoaModal from '@/components/pessoas/CadastrarPessoaModal'
+import ModuloGate from '@/components/ModuloGate'
 
 type Papel = 'CLIENTE' | 'FORNECEDOR' | 'PROPRIETARIO' | 'FUNCIONARIO'
 
@@ -162,6 +163,7 @@ export default function PessoasPage() {
   }
 
   return (
+    <ModuloGate modulo="pessoas">
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -330,5 +332,6 @@ export default function PessoasPage() {
         />
       )}
     </div>
+    </ModuloGate>
   )
 }
