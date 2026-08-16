@@ -63,9 +63,32 @@ create type tipo_movimentacao_area as enum ('SALDO_INICIAL', 'MUDANCA_USO');
 -- 1. TABELAS DE REFERÊNCIA (globais / compartilhadas entre fazendas)
 -- =====================================================================
 
+-- ---------------------------------------------------------------------
+-- Multi-tenant (migração 046) — `contas` é o tenant. Toda tabela
+-- operacional abaixo ganha uma coluna `conta_id` (ver cada CREATE TABLE)
+-- isolando os dados de cada cliente via RLS (policy `conta_id =
+-- fn_conta_atual()`, ver fn_conta_atual logo depois de usuarios_app,
+-- mais abaixo — só pode ser criada depois que usuarios_app existe).
+-- Catálogos verdadeiramente globais do domínio (grupos_categoria,
+-- grupos_categoria_papel, tipos_uso_area) continuam sem conta_id —
+-- compartilhados entre todas as contas, nunca customizados por cliente.
+-- Seed abaixo já insere uma "Conta Principal" pra poder popular o
+-- restante do seed do arquivo (categorias/subtipos do sistema, cada um
+-- por conta) já daqui pra frente.
+-- ---------------------------------------------------------------------
+create table contas (
+  id         uuid primary key default gen_random_uuid(),
+  nome       text not null,
+  ativo      boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+insert into contas (nome) values ('Conta Principal');
+
 create table fazendas (
   id              uuid primary key default gen_random_uuid(),
-  nome            text not null unique,
+  conta_id        uuid not null references contas(id),
+  nome            text not null,
   localizacao     text,
   area_ha         numeric(12,2),
   ativo           boolean not null default true,
@@ -98,16 +121,23 @@ create table fazendas (
   latitude        numeric(10,7),
   longitude       numeric(10,7),
   created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now()
+  updated_at      timestamptz not null default now(),
+  -- nome único só dentro da mesma conta (duas contas diferentes podem
+  -- ambas ter uma "Fazenda Teste") — antes da migração 046 era único
+  -- globalmente
+  constraint uq_fazendas_conta_nome unique (conta_id, nome)
 );
 
--- configuração única do grupo (não por fazenda) — hoje só
+-- configuração única por conta (não por fazenda) — hoje só
 -- controla_pasto, mas é o lugar natural pra outras opções futuras que
--- valem pra todas as fazendas de uma vez. O índice único sobre uma
--- expressão constante garante que só existe (e só pode existir) uma
--- linha nessa tabela.
+-- valem pra todas as fazendas de uma conta de uma vez. Até a migração
+-- 046 era uma linha só NO SISTEMA INTEIRO (índice único sobre uma
+-- expressão constante); agora é uma linha por conta (índice único sobre
+-- conta_id), auto-criada pra toda conta nova por
+-- fn_criar_configuracoes_conta (ver logo depois de fn_conta_atual).
 create table configuracoes (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id),
   -- opt-in: o grupo passa a poder cadastrar módulos/pastos além do
   -- "Geral" padrão em todas as fazendas. Desligado, ninguém vê essa
   -- tela — tudo é lançado no módulo/pasto "Geral", que sempre existe
@@ -119,10 +149,10 @@ create table configuracoes (
   controla_subtipo_area boolean not null default false,
   updated_at      timestamptz not null default now()
 );
-create unique index uq_configuracoes_singleton on configuracoes ((true));
-alter table configuracoes disable row level security;
+create unique index uq_configuracoes_conta on configuracoes (conta_id);
 
-insert into configuracoes (controla_pasto) values (false);
+insert into configuracoes (conta_id, controla_pasto)
+select id, false from contas limit 1;
 
 -- ---------------------------------------------------------------------
 -- Acesso e login (migração 042) — Supabase Auth
@@ -148,11 +178,101 @@ create table usuarios_app (
   -- reaproveita o mesmo mecanismo de permissão por módulo, sem
   -- bloqueio novo de "somente leitura" dentro das telas.
   modo text not null default 'GESTAO' check (modo in ('CAMPO', 'GESTAO', 'CONSULTA')),
+  -- nullable de propósito (migração 046): usuário de Suporte (equipe
+  -- interna do fornecedor, ver `suporte` abaixo) não pertence a nenhuma
+  -- conta de cliente. Sem valor padrão automático (default
+  -- fn_conta_atual()) — os dois Route Handlers que criam usuário usam o
+  -- cliente admin/service-role, que bypassa RLS e precisa passar
+  -- conta_id explicitamente.
+  conta_id uuid references contas(id),
+  -- equipe interna do fornecedor (Suporte técnico) — acessa qualquer
+  -- conta de cliente pra dar suporte. Só a coluna por enquanto: o
+  -- seletor de conta e o bypass de RLS pra quem tem suporte = true são
+  -- Fase 4 (ainda não implementada) do roadmap multi-tenant.
+  suporte boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 comment on table usuarios_app is
   'Dados de app por usuário autenticado (auth.users é só identidade/senha). Um dono por grupo — os demais são funcionários com módulos liberados individualmente.';
+
+-- ---------------------------------------------------------------------
+-- fn_conta_atual() (migração 046) — resolve a conta do usuário
+-- autenticado. Usada tanto como DEFAULT automático de conta_id em toda
+-- tabela abaixo (uma linha nova criada sem informar conta_id herda a do
+-- usuário logado sozinha, sem o app precisar mencionar essa coluna)
+-- quanto nas policies de RLS logo a seguir. Só pode ser criada aqui,
+-- depois que usuarios_app já existe (a função consulta essa tabela).
+--
+-- security definer + search_path fixo: evita recursão de RLS — a
+-- própria policy de usuarios_app (mais abaixo) também chama essa
+-- função, e sem security definer a consulta interna a usuarios_app
+-- disparia a própria RLS de novo, num ciclo. Bypassa RLS só nessa
+-- consulta interna específica, nunca expõe dado além da conta do
+-- próprio usuário que está chamando.
+-- ---------------------------------------------------------------------
+create or replace function fn_conta_atual()
+returns uuid
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select conta_id from usuarios_app where id = auth.uid();
+$$;
+
+-- fazendas e configuracoes são definidas mais acima no arquivo (antes
+-- de usuarios_app/fn_conta_atual existirem), então não puderam ganhar
+-- "default fn_conta_atual()" direto na própria CREATE TABLE — setado só
+-- agora.
+alter table fazendas alter column conta_id set default fn_conta_atual();
+alter table configuracoes alter column conta_id set default fn_conta_atual();
+
+-- toda conta nova ganha uma linha em configuracoes sozinha — mesmo
+-- princípio já usado pro módulo/pasto "Geral" de toda fazenda nova
+-- (fn_criar_modulo_pasto_geral). Não dispara pra "Conta Principal"
+-- (inserida lá em cima, antes desta trigger existir) — ela já ganhou
+-- sua linha de configuracoes por um insert explícito, evitando duas
+-- linhas pra mesma conta batendo na uq_configuracoes_conta.
+create or replace function fn_criar_configuracoes_conta()
+returns trigger as $$
+begin
+  insert into configuracoes (conta_id, controla_pasto) values (new.id, false);
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_criar_configuracoes_conta
+after insert on contas
+for each row execute function fn_criar_configuracoes_conta();
+
+-- ---------------------------------------------------------------------
+-- RLS (migração 046) — reativado (estava desligado de propósito desde a
+-- migração 042, documentado como "passo futuro"; a decisão de
+-- produtizar multi-tenant torna isso pré-requisito, não mais opcional).
+-- Uma policy por tabela: só enxerga/altera linhas da própria conta.
+-- `contas` compara contra o próprio id da linha (id = fn_conta_atual()),
+-- não uma coluna conta_id — todas as outras tabelas usam
+-- `conta_id = fn_conta_atual()`. Nenhuma das ~30 funções/triggers do
+-- resto do arquivo usa `security definer`, então todas já respeitam RLS
+-- automaticamente (rodam como SECURITY INVOKER, com o privilégio de
+-- quem chamou) — não precisaram de nenhum ajuste por causa disso.
+-- ---------------------------------------------------------------------
+alter table contas enable row level security;
+create policy contas_por_conta on contas for all
+  using (id = fn_conta_atual()) with check (id = fn_conta_atual());
+
+alter table fazendas enable row level security;
+create policy fazendas_por_conta on fazendas for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+alter table configuracoes enable row level security;
+create policy configuracoes_por_conta on configuracoes for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+alter table usuarios_app enable row level security;
+create policy usuarios_app_por_conta on usuarios_app for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- catálogo de módulos é só uma convenção de string usada pelo frontend
 -- (mesmos ids de rota já usados na Sidebar) — sem tabela de módulos
@@ -160,8 +280,12 @@ comment on table usuarios_app is
 create table usuario_modulos (
   usuario_id uuid not null references usuarios_app(id) on delete cascade,
   modulo text not null,
+  conta_id uuid not null references contas(id) default fn_conta_atual(),
   primary key (usuario_id, modulo)
 );
+alter table usuario_modulos enable row level security;
+create policy usuario_modulos_por_conta on usuario_modulos for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 comment on table usuario_modulos is
   'Um módulo liberado por linha, por usuário — sem perfis/papéis nomeados (decisão em memória permission_model_design). Dono não precisa de linhas aqui: bypassa a checagem inteira.';
@@ -219,6 +343,7 @@ alter table grupos_categoria_papel disable row level security;
 
 create table categorias_animal (
   id                     uuid primary key default gen_random_uuid(),
+  conta_id               uuid not null references contas(id) default fn_conta_atual(),
   nome                   text not null,
   -- grupo e sexo são obrigatórios: alimentam relatórios futuros e a
   -- filtragem de categorias válidas por tipo de movimentação (ex: só
@@ -263,6 +388,9 @@ create table categorias_animal (
 
 create index idx_categorias_fazenda on categorias_animal(fazenda_id);
 create index idx_categorias_ativa on categorias_animal(ativa);
+alter table categorias_animal enable row level security;
+create policy categorias_animal_por_conta on categorias_animal for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- ---------------------------------------------------------------------
 -- TRIGGER: deriva automaticamente sexo (pelo Grupo Categoria/papel) e
@@ -399,6 +527,7 @@ $$;
 -- pessoa_papeis logo abaixo, em vez de um enum de tipo único
 create table pessoas (
   id                    uuid primary key default gen_random_uuid(),
+  conta_id              uuid not null references contas(id) default fn_conta_atual(),
   nome                  text not null,
   documento             text,   -- CPF/CNPJ
   ativo                 boolean not null default true,
@@ -430,14 +559,20 @@ create table pessoas (
 create unique index uq_pessoa_documento
   on pessoas (documento)
   where documento is not null;
+alter table pessoas enable row level security;
+create policy pessoas_por_conta on pessoas for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table pessoa_papeis (
   id          uuid primary key default gen_random_uuid(),
   pessoa_id   uuid not null references pessoas(id),
   papel       papel_pessoa not null,
+  conta_id    uuid not null references contas(id) default fn_conta_atual(),
   constraint uq_pessoa_papel unique (pessoa_id, papel)
 );
-alter table pessoa_papeis disable row level security;
+alter table pessoa_papeis enable row level security;
+create policy pessoa_papeis_por_conta on pessoa_papeis for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- Exclusão de pessoa: só permitida se não estiver referenciada em
 -- nenhuma movimentação (cliente/fornecedor) nem como proprietário de
@@ -474,16 +609,24 @@ alter table fazendas add column proprietario_id uuid references pessoas(id);
 
 create table centros_custo (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id) default fn_conta_atual(),
   nome            text not null unique,
   created_at      timestamptz not null default now()
 );
+alter table centros_custo enable row level security;
+create policy centros_custo_por_conta on centros_custo for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table subcentros_custo (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id) default fn_conta_atual(),
   centro_custo_id uuid not null references centros_custo(id) on delete cascade,
   nome            text not null,
   constraint uq_subcentro_por_centro unique (centro_custo_id, nome)
 );
+alter table subcentros_custo enable row level security;
+create policy subcentros_custo_por_conta on subcentros_custo for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- =====================================================================
 -- 1b. GESTÃO DE ÁREAS — uso do solo por fazenda, com histórico editável
@@ -513,6 +656,7 @@ alter table tipos_uso_area disable row level security;
 -- "Geral" que sempre existe pra cada tipo de uso (seed abaixo).
 create table subtipos_uso_area (
   id           uuid primary key default gen_random_uuid(),
+  conta_id     uuid not null references contas(id) default fn_conta_atual(),
   tipo_uso_id  uuid not null references tipos_uso_area(id),
   nome         text not null,
   ativo        boolean not null default true,
@@ -522,10 +666,13 @@ create table subtipos_uso_area (
   created_at   timestamptz not null default now(),
   constraint uq_subtipo_nome_tipo_uso unique (tipo_uso_id, nome)
 );
-alter table subtipos_uso_area disable row level security;
+alter table subtipos_uso_area enable row level security;
+create policy subtipos_uso_area_por_conta on subtipos_uso_area for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table movimentacoes_area (
   id                    uuid primary key default gen_random_uuid(),
+  conta_id              uuid not null references contas(id) default fn_conta_atual(),
   fazenda_id            uuid not null references fazendas(id),
   tipo                  tipo_movimentacao_area not null,
   data                  date not null,
@@ -553,7 +700,9 @@ create table movimentacoes_area (
   )
 );
 
-alter table movimentacoes_area disable row level security;
+alter table movimentacoes_area enable row level security;
+create policy movimentacoes_area_por_conta on movimentacoes_area for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- só pode haver um saldo inicial por (fazenda, tipo de uso) — mesmo
 -- princípio de uq_saldo_inicial_por_categoria
@@ -1087,6 +1236,7 @@ create type tipo_utilizacao_modulo as enum ('PECUARIA', 'AGRICULTURA');
 
 create table modulos (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id) default fn_conta_atual(),
   fazenda_id      uuid not null references fazendas(id),
   nome            text not null,
   tipo_utilizacao tipo_utilizacao_modulo not null default 'PECUARIA',
@@ -1101,10 +1251,13 @@ create table modulos (
   -- só PECUARIA por enquanto (ver comentário da seção)
   constraint ck_modulo_tipo_utilizacao check (tipo_utilizacao = 'PECUARIA')
 );
-alter table modulos disable row level security;
+alter table modulos enable row level security;
+create policy modulos_por_conta on modulos for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table pastos (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id) default fn_conta_atual(),
   modulo_id       uuid not null references modulos(id),
   nome            text not null,
   -- livre (sem histórico por data, diferente de movimentacoes_area) —
@@ -1131,7 +1284,9 @@ create table pastos (
   created_at      timestamptz not null default now(),
   constraint uq_pasto_nome_modulo unique (modulo_id, nome)
 );
-alter table pastos disable row level security;
+alter table pastos enable row level security;
+create policy pastos_por_conta on pastos for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- toda fazenda nova já ganha módulo + pasto "Geral" automaticamente —
 -- se o grupo não liga controla_pasto ninguém vê essa tela, mas todo
@@ -1294,6 +1449,7 @@ for each row execute function fn_validar_area_pasto();
 
 create table movimentacoes_rebanho (
   id                    uuid primary key default gen_random_uuid(),
+  conta_id              uuid not null references contas(id) default fn_conta_atual(),
 
   -- fazenda "principal" do evento (para TRANSFERENCIA, ver origem/destino abaixo)
   fazenda_id            uuid not null references fazendas(id),
@@ -1483,6 +1639,9 @@ create index idx_mov_categoria on movimentacoes_rebanho(categoria_id);
 create index idx_mov_transf_origem on movimentacoes_rebanho(fazenda_origem_id);
 create index idx_mov_transf_destino on movimentacoes_rebanho(fazenda_destino_id);
 create index idx_mov_grupo_lancamento on movimentacoes_rebanho(grupo_lancamento_id) where grupo_lancamento_id is not null;
+alter table movimentacoes_rebanho enable row level security;
+create policy movimentacoes_rebanho_por_conta on movimentacoes_rebanho for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- no máximo um SALDO_INICIAL por fazenda+categoria — evita duplicidade
 -- antes da confirmação (a trava de edição/exclusão cuida do "depois")
@@ -2597,6 +2756,7 @@ for each row execute function fn_validar_delete_movimentacao();
 
 create table pesagens (
   id              uuid primary key default gen_random_uuid(),
+  conta_id        uuid not null references contas(id) default fn_conta_atual(),
   fazenda_id      uuid not null references fazendas(id),
   categoria_id    uuid not null references categorias_animal(id),
   -- sempre obrigatório — mesmo princípio do pasto em movimentacoes_rebanho:
@@ -2618,8 +2778,9 @@ create table pesagens (
 );
 
 create index idx_pesagens_fazenda_categoria_pasto_data on pesagens(fazenda_id, categoria_id, pasto_id, data);
--- ver comentário em grupos_categoria_papel sobre RLS padrão em tabela nova
-alter table pesagens disable row level security;
+alter table pesagens enable row level security;
+create policy pesagens_por_conta on pesagens for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- ---------------------------------------------------------------------
 -- fn_relatorio_rebanho_por_pasto: fotografia do rebanho numa fazenda,
@@ -2778,22 +2939,28 @@ create type tipo_ajuste_financeiro as enum ('DESCONTO', 'ACRESCIMO');
 
 create table itens_ajuste_financeiro (
   id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
   nome       text not null,
   tipo       tipo_ajuste_financeiro not null,
   created_at timestamptz not null default now(),
   constraint uq_item_ajuste_nome_tipo unique (nome, tipo)
 );
-alter table itens_ajuste_financeiro disable row level security;
+alter table itens_ajuste_financeiro enable row level security;
+create policy itens_ajuste_financeiro_por_conta on itens_ajuste_financeiro for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table movimentacao_ajustes (
   id               uuid primary key default gen_random_uuid(),
+  conta_id         uuid not null references contas(id) default fn_conta_atual(),
   movimentacao_id  uuid not null references movimentacoes_rebanho(id) on delete cascade,
   item_id          uuid not null references itens_ajuste_financeiro(id),
   valor            numeric(12,2) not null check (valor > 0),
   created_at       timestamptz not null default now()
 );
 create index idx_movimentacao_ajustes_movimentacao on movimentacao_ajustes(movimentacao_id);
-alter table movimentacao_ajustes disable row level security;
+alter table movimentacao_ajustes enable row level security;
+create policy movimentacao_ajustes_por_conta on movimentacao_ajustes for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create or replace function fn_validar_ajuste_movimentacao_comercial()
 returns trigger as $$
@@ -2818,6 +2985,7 @@ for each row execute function fn_validar_ajuste_movimentacao_comercial();
 
 create table lancamentos_financeiros (
   id                uuid primary key default gen_random_uuid(),
+  conta_id          uuid not null references contas(id) default fn_conta_atual(),
   fazenda_id        uuid not null references fazendas(id),
   conta             text,
   setor             text,
@@ -2834,9 +3002,13 @@ create table lancamentos_financeiros (
 
 create index idx_fin_fazenda_data on lancamentos_financeiros(fazenda_id, data);
 create index idx_fin_centro_custo on lancamentos_financeiros(centro_custo_id);
+alter table lancamentos_financeiros enable row level security;
+create policy lancamentos_financeiros_por_conta on lancamentos_financeiros for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table regras_rateio (
   id                uuid primary key default gen_random_uuid(),
+  conta_id          uuid not null references contas(id) default fn_conta_atual(),
   centro_custo_id   uuid not null references centros_custo(id),
   criterio          criterio_rateio not null,
   -- fazendas contempladas pelo rateio; se null, aplica a todas as ativas
@@ -2845,6 +3017,9 @@ create table regras_rateio (
   ativo             boolean not null default true,
   created_at        timestamptz not null default now()
 );
+alter table regras_rateio enable row level security;
+create policy regras_rateio_por_conta on regras_rateio for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- =====================================================================
 -- 4. VIEW — ESTOQUE CALCULADO POR FAZENDA / CATEGORIA
@@ -3249,28 +3424,33 @@ insert into grupos_categoria_papel (nome, sexo, ordem) values
 -- renomeadas/reclassificadas/excluídas pelo usuário. grupo_id (Grupo
 -- Faixa Etária) é preenchido automaticamente pela trigger
 -- fn_calcular_atributos_categoria a partir da era informada aqui.
-insert into categorias_animal (nome, grupo_categoria_papel_id, sexo, era, ordem_ciclo, sistema)
-select 'Bezerra 00 a 08 Meses', p.id, 'FEMEA'::sexo_categoria, '00-08', 1, true from grupos_categoria_papel p where p.nome = 'Bezerras Mamando'
+-- categorias_animal é conta-scoped (migração 046) — esse seed vale só
+-- pra "Conta Principal"; toda conta nova (Fase 2+ do roadmap
+-- multi-tenant, ainda não implementada) vai precisar rodar esse mesmo
+-- seed pra si própria, mesmo princípio já usado pro módulo/pasto
+-- "Geral" de toda fazenda nova.
+insert into categorias_animal (conta_id, nome, grupo_categoria_papel_id, sexo, era, ordem_ciclo, sistema)
+select (select id from contas limit 1), 'Bezerra 00 a 08 Meses', p.id, 'FEMEA'::sexo_categoria, '00-08', 1, true from grupos_categoria_papel p where p.nome = 'Bezerras Mamando'
 union all
-select 'Bezerro 00 a 08 Meses', p.id, 'MACHO'::sexo_categoria, '00-08', 2, true from grupos_categoria_papel p where p.nome = 'Bezerros Mamando'
+select (select id from contas limit 1), 'Bezerro 00 a 08 Meses', p.id, 'MACHO'::sexo_categoria, '00-08', 2, true from grupos_categoria_papel p where p.nome = 'Bezerros Mamando'
 union all
-select 'Novilha 08 a 12 Meses', p.id, 'FEMEA'::sexo_categoria, '08-12', 3, true from grupos_categoria_papel p where p.nome = 'Novilhas'
+select (select id from contas limit 1), 'Novilha 08 a 12 Meses', p.id, 'FEMEA'::sexo_categoria, '08-12', 3, true from grupos_categoria_papel p where p.nome = 'Novilhas'
 union all
-select 'Novilha 12 a 24 Meses', p.id, 'FEMEA'::sexo_categoria, '12-24', 4, true from grupos_categoria_papel p where p.nome = 'Novilhas'
+select (select id from contas limit 1), 'Novilha 12 a 24 Meses', p.id, 'FEMEA'::sexo_categoria, '12-24', 4, true from grupos_categoria_papel p where p.nome = 'Novilhas'
 union all
-select 'Novilha 24 a 36 Meses', p.id, 'FEMEA'::sexo_categoria, '24-36', 5, true from grupos_categoria_papel p where p.nome = 'Novilhas'
+select (select id from contas limit 1), 'Novilha 24 a 36 Meses', p.id, 'FEMEA'::sexo_categoria, '24-36', 5, true from grupos_categoria_papel p where p.nome = 'Novilhas'
 union all
-select 'Garrote 08 a 12 Meses', p.id, 'MACHO'::sexo_categoria, '08-12', 6, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
+select (select id from contas limit 1), 'Garrote 08 a 12 Meses', p.id, 'MACHO'::sexo_categoria, '08-12', 6, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
 union all
-select 'Garrote 12 a 24 Meses', p.id, 'MACHO'::sexo_categoria, '12-24', 7, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
+select (select id from contas limit 1), 'Garrote 12 a 24 Meses', p.id, 'MACHO'::sexo_categoria, '12-24', 7, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
 union all
-select 'Boi 24 a 36 Meses', p.id, 'MACHO'::sexo_categoria, '24-36', 8, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
+select (select id from contas limit 1), 'Boi 24 a 36 Meses', p.id, 'MACHO'::sexo_categoria, '24-36', 8, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
 union all
-select 'Boi +36 Meses', p.id, 'MACHO'::sexo_categoria, '36+', 9, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
+select (select id from contas limit 1), 'Boi +36 Meses', p.id, 'MACHO'::sexo_categoria, '36+', 9, true from grupos_categoria_papel p where p.nome = 'Garrotes e Bois'
 union all
-select 'Vaca +36 Meses', p.id, 'FEMEA'::sexo_categoria, '36+', 10, true from grupos_categoria_papel p where p.nome = 'Matrizes em Reprodução'
+select (select id from contas limit 1), 'Vaca +36 Meses', p.id, 'FEMEA'::sexo_categoria, '36+', 10, true from grupos_categoria_papel p where p.nome = 'Matrizes em Reprodução'
 union all
-select 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Touros';
+select (select id from contas limit 1), 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Touros';
 
 insert into tipos_uso_area (nome, ordem) values
   ('Reserva Legal/APP', 1),
@@ -3285,19 +3465,21 @@ insert into tipos_uso_area (nome, ordem) values
 -- (garante que todo lançamento sempre tem subtipo pra apontar, mesmo
 -- com controla_subtipo_area desligado) + sugestões iniciais pra
 -- Pecuária e Agricultura (usuário pode cadastrar outras livremente).
-insert into subtipos_uso_area (tipo_uso_id, nome, sistema, ordem)
-select id, 'Geral', true, 0 from tipos_uso_area;
+-- Conta-scoped desde a migração 046 — mesma observação de
+-- categorias_animal acima: esse seed vale só pra "Conta Principal".
+insert into subtipos_uso_area (conta_id, tipo_uso_id, nome, sistema, ordem)
+select (select id from contas limit 1), id, 'Geral', true, 0 from tipos_uso_area;
 
-insert into subtipos_uso_area (tipo_uso_id, nome, ordem)
-select t.id, s.nome, s.ordem
+insert into subtipos_uso_area (conta_id, tipo_uso_id, nome, ordem)
+select (select id from contas limit 1), t.id, s.nome, s.ordem
 from tipos_uso_area t
 cross join (values
   ('Corte', 1), ('Leite', 2), ('Ovinocultura', 3), ('Haras', 4)
 ) as s(nome, ordem)
 where t.nome = 'Pecuária';
 
-insert into subtipos_uso_area (tipo_uso_id, nome, ordem)
-select t.id, s.nome, s.ordem
+insert into subtipos_uso_area (conta_id, tipo_uso_id, nome, ordem)
+select (select id from contas limit 1), t.id, s.nome, s.ordem
 from tipos_uso_area t
 cross join (values
   ('Soja', 1), ('Milho', 2), ('Cana-de-açúcar', 3), ('Café', 4)

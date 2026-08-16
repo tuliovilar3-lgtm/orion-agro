@@ -12,10 +12,10 @@ async function exigirDono() {
   } = await supabase.auth.getUser()
   if (!user) return { erro: NextResponse.json({ error: 'Não autenticado.' }, { status: 401 }) }
 
-  const { data: perfil } = await supabase.from('usuarios_app').select('dono').eq('id', user.id).single()
+  const { data: perfil } = await supabase.from('usuarios_app').select('dono, conta_id').eq('id', user.id).single()
   if (!perfil?.dono) return { erro: NextResponse.json({ error: 'Só o administrador pode gerenciar usuários.' }, { status: 403 }) }
 
-  return { user }
+  return { user, contaId: perfil.conta_id as string }
 }
 
 export async function GET() {
@@ -72,9 +72,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: erroCriar?.message || 'Não foi possível criar o usuário.' }, { status: 400 })
   }
 
+  // conta_id passado explicitamente: o cliente admin (service-role)
+  // bypassa RLS e, com isso, o valor padrão automático de conta_id
+  // (fn_conta_atual(), que depende de uma sessão de usuário autenticada
+  // por trás da conexão) — sem isso o funcionário novo nasceria sem
+  // conta_id nenhuma
   const { error: erroPerfil } = await admin
     .from('usuarios_app')
-    .insert({ id: criado.user.id, nome, email, dono: false, modo: modo || 'GESTAO' })
+    .insert({ id: criado.user.id, nome, email, dono: false, modo: modo || 'GESTAO', conta_id: checagem.contaId })
   if (erroPerfil) {
     // desfaz a criação do login pra não sobrar uma conta órfã sem perfil
     await admin.auth.admin.deleteUser(criado.user.id)
@@ -84,7 +89,7 @@ export async function POST(request: Request) {
   if (modulos && modulos.length > 0) {
     const { error: erroModulos } = await admin
       .from('usuario_modulos')
-      .insert(modulos.map((modulo) => ({ usuario_id: criado.user.id, modulo })))
+      .insert(modulos.map((modulo) => ({ usuario_id: criado.user.id, modulo, conta_id: checagem.contaId })))
     if (erroModulos) {
       return NextResponse.json({ error: erroModulos.message }, { status: 500 })
     }

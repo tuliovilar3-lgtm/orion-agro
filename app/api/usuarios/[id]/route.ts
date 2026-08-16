@@ -9,10 +9,10 @@ async function exigirDono() {
   } = await supabase.auth.getUser()
   if (!user) return { erro: NextResponse.json({ error: 'Não autenticado.' }, { status: 401 }) }
 
-  const { data: perfil } = await supabase.from('usuarios_app').select('dono').eq('id', user.id).single()
+  const { data: perfil } = await supabase.from('usuarios_app').select('dono, conta_id').eq('id', user.id).single()
   if (!perfil?.dono) return { erro: NextResponse.json({ error: 'Só o administrador pode gerenciar usuários.' }, { status: 403 }) }
 
-  return { user }
+  return { user, contaId: perfil.conta_id as string }
 }
 
 const SENHA_PADRAO = '123456'
@@ -57,9 +57,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (erroDelete) return NextResponse.json({ error: erroDelete.message }, { status: 500 })
 
     if (modulos.length > 0) {
+      // conta_id explícito — mesmo motivo do POST em route.ts (cliente
+      // admin bypassa RLS e o valor padrão automático de conta_id)
       const { error: erroInsert } = await admin
         .from('usuario_modulos')
-        .insert(modulos.map((modulo) => ({ usuario_id: id, modulo })))
+        .insert(modulos.map((modulo) => ({ usuario_id: id, modulo, conta_id: checagem.contaId })))
       if (erroInsert) return NextResponse.json({ error: erroInsert.message }, { status: 500 })
     }
   }

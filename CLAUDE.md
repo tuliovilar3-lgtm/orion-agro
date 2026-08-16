@@ -2522,3 +2522,99 @@ relacionado ao código): a viewport do navegador de teste ficou em `0×0` depois
 "desktop" mal aplicado, dando leituras de largura sem sentido (18px em todo campo) até ser
 redefinida explicitamente pra 1280×800 — vale registrar como pegadinha de metodologia de teste, não
 como bug do app.
+
+## Multi-tenant — Fase 1 (migração 046): `conta_id` + RLS reativado
+
+Primeiro passo de uma reestruturação maior pra levar o ORION Agro ao mercado como produto
+multi-tenant (várias contas de clientes pagantes, não mais um grupo só) — decisão e desenho
+arquitetural completo documentados em memória de projeto (`project_multi_tenant_saas`). Esta fase é
+só a fundação: criar o conceito de conta e isolar os dados por conta. Ainda não existem tabelas de
+módulo/plano/limite (Fase 2) nem tela de Suporte (Fase 4) — essas dependem desta base.
+
+**`contas`** (id, nome, ativo, created_at) é o tenant. `conta_id` foi adicionado em toda tabela
+operacional do sistema — `fazendas`, `configuracoes`, `usuarios_app`/`usuario_modulos`,
+`categorias_animal`, `pessoas`/`pessoa_papeis`, `centros_custo`/`subcentros_custo`,
+`subtipos_uso_area`, `movimentacoes_area`, `modulos`, `pastos`, `movimentacoes_rebanho`, `pesagens`,
+`itens_ajuste_financeiro`, `movimentacao_ajustes`, `lancamentos_financeiros`, `regras_rateio` (18
+tabelas) — com os dados existentes migrados pra uma "Conta Principal" única. Catálogos
+verdadeiramente globais do domínio (`grupos_categoria`, `grupos_categoria_papel`, `tipos_uso_area`)
+continuam **sem** `conta_id`, compartilhados entre todas as contas — nunca customizados por cliente,
+diferente de `categorias_animal`/`subtipos_uso_area` (que já eram parcialmente customizáveis por
+fazenda antes desta migração, e agora ficam isoladas por conta também).
+
+**Decisão de sequenciamento importante, diferente do esboço inicial da conversa**: RLS (Row Level
+Security, originalmente cogitado como uma Fase 3 separada) entrou junto com esta Fase 1, não depois.
+Motivo: sem RLS, cada uma das dezenas de queries do app precisaria ganhar um `.eq('conta_id', ...)`
+manual — grande superfície pra esquecer um lugar, e um bug de filtro só na aplicação vira vazamento
+de dado entre clientes pagantes assim que existir mais de uma conta real. Com RLS ligado usando uma
+coluna `conta_id` com **valor padrão automático** (`default fn_conta_atual()`), o banco resolve
+sozinho tanto a escrita (nova linha herda a conta do usuário logado, sem o app precisar informar)
+quanto a leitura (usuário só enxerga linhas da própria conta) — nenhuma das ~30 funções/triggers já
+existentes precisou mudar (nenhuma usa `security definer`, então todas já respeitavam RLS
+automaticamente, rodando como SECURITY INVOKER) e **nenhuma tela do app precisou de código novo**.
+
+**`fn_conta_atual()`** (`security definer`, `set search_path = public`, `stable`) resolve
+`conta_id` a partir de `usuarios_app` pelo `auth.uid()` da sessão. `security definer` é necessário
+pra evitar recursão: a própria policy de `usuarios_app` também chama essa função, e sem
+`security definer` a consulta interna a `usuarios_app` disparia a própria RLS de novo, num ciclo —
+a função bypassa RLS só nessa consulta interna específica, nunca expõe dado além da conta do próprio
+usuário que está chamando. Cada tabela ganhou uma única policy (`for all using (conta_id =
+fn_conta_atual()) with check (conta_id = fn_conta_atual())`); `contas` usa a variação `id =
+fn_conta_atual()` (compara contra o próprio id da linha, não uma coluna `conta_id`).
+
+**Exceção — os 2 Route Handlers com cliente admin/service-role**: `app/api/usuarios/route.ts` e
+`app/api/usuarios/[id]/route.ts` usam `createAdminClient()` (chave `service_role`) pra gerenciar
+login via Admin API — esse cliente bypassa RLS de propósito, e por bypassar RLS também não se
+beneficia do `default fn_conta_atual()` (não há `auth.uid()` por trás de uma conexão service-role).
+`exigirDono()` nos dois arquivos passou a retornar também `contaId` (lido de `usuarios_app.conta_id`
+via o cliente de sessão normal, antes de trocar pro cliente admin), repassado explicitamente em todo
+insert de `usuarios_app`/`usuario_modulos` feito por esses dois arquivos — únicos 2 pontos do
+código que precisaram de ajuste nesta migração inteira.
+
+**`usuarios_app.conta_id` é nullable** (diferente de toda outra tabela, que é `not null`) — usuário
+de Suporte (equipe interna do fornecedor, coluna nova `usuarios_app.suporte boolean`, ainda sem
+nenhuma tela/comportamento) não pertence a nenhuma conta de cliente. Só a coluna por enquanto: o
+seletor de conta e a policy de bypass pra `suporte = true` são Fase 4, ainda não implementada.
+
+**Restrições únicas corrigidas pra "por conta" em vez de globais**: `fazendas.nome` era único
+globalmente (`uq_fazendas_conta_nome unique (conta_id, nome)` agora); `configuracoes` tinha um
+índice único sobre uma expressão constante forçando **uma linha no sistema inteiro**
+(`uq_configuracoes_singleton`) — agora é uma linha por conta (`uq_configuracoes_conta unique
+(conta_id)`), auto-criada pra toda conta nova por `fn_criar_configuracoes_conta` (trigger `after
+insert on contas`, mesmo princípio já usado pro módulo/pasto "Geral" de toda fazenda nova via
+`fn_criar_modulo_pasto_geral`).
+
+**Dificuldades reais no backfill** (migração rodada 3 vezes no Supabase até passar limpa — as duas
+primeiras tentativas fizeram rollback completo, confirmado via `select count(*) from contas;`
+retornando "relation does not exist" depois de cada uma):
+1. Um `UPDATE` em massa preenchendo `conta_id` em cada linha existente re-dispara os gatilhos de
+   negócio (ex.: "informe a safra de nascimento do lote de bezerros envolvido") mesmo só mudando uma
+   coluna sem relação nenhuma com essas regras — alguns lançamentos legados não passavam nessas
+   validações se re-checados hoje. Corrigido com `alter table X disable trigger user` /
+   `enable trigger user` ao redor de cada backfill (desliga só os gatilhos de negócio definidos pelo
+   usuário, não os gatilhos internos de integridade referencial do Postgres).
+2. `ck_peso_medio_obrigatorio` (CHECK constraint, não gatilho — `disable trigger` não a afeta) foi
+   adicionada `NOT VALID` na migração 028 de propósito, pra não validar retroativamente 2
+   lançamentos legados sem peso médio; o `UPDATE` em massa a re-dispara em cada linha tocada.
+   Corrigida descartando e recriando a constraint exatamente como estava (`NOT VALID`) só ao redor
+   do backfill de `movimentacoes_rebanho` — comportamento final idêntico ao de antes da migração.
+
+Nenhuma das duas exigiu recorrer à sugestão (rejeitada) de limpar movimentações de rebanho pra
+contornar o erro — as duas têm causa raiz estrutural (gatilho/constraint disparando de novo num
+UPDATE em massa) resolvida sem tocar em nenhum dado real.
+
+Verificado ponta a ponta no navegador depois da migração rodar limpa: Painel carregando com dados
+reais (leitura via RLS funcionando transparentemente pra sessão autenticada), listagem de
+Movimentações carregando, e um ciclo completo de escrita — criar um lançamento de Nascimento real
+pela UI, confirmar que apareceu na listagem (com safra auto-sugerida correta), e excluí-lo de volta
+— confirmando que tanto o `default fn_conta_atual()` quanto o `with check` de INSERT/UPDATE/DELETE
+da policy funcionam corretamente, e que os triggers de negócio já existentes (cálculo de peso total,
+sugestão de safra) continuam disparando normalmente sob RLS. Dados de teste revertidos ao final.
+
+`orion_agro_schema.sql` sincronizado com a migração inteira (`contas` logo no topo do arquivo,
+`conta_id` dobrado em cada `CREATE TABLE` relevante, `fn_conta_atual()`/RLS definidos logo após
+`usuarios_app`, seeds de categoria/subtipo do fim do arquivo ajustados pra referenciar a conta única
+que o próprio arquivo já semeia). Diferente da migração real (que precisou da dança de
+disable-trigger/backfill/enable-trigger por rodar contra dados já existentes), o schema consolidado
+representa uma instalação nova do zero — sem dado legado pra reconciliar, então `conta_id` entra
+direto como `not null` já na própria `CREATE TABLE`, sem nenhuma ginástica de ALTER TABLE.
