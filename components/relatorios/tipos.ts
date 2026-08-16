@@ -26,12 +26,14 @@ export type MovimentacaoRelatorio = {
   categoria_id: string | null
   categoria_destino_id: string | null
   cliente_fornecedor_id: string | null
+  proprietario_id: string | null
   fazenda: { nome: string } | null
   fazenda_origem: { nome: string } | null
   fazenda_destino: { nome: string } | null
   categoria: { nome: string; sexo: string; grupo: { nome: string } | null } | null
   categoria_destino: { nome: string } | null
   cliente: { nome: string } | null
+  proprietario: { nome: string } | null
   movimentacao_ajustes: { valor: number; item: { tipo: 'DESCONTO' | 'ACRESCIMO' } | null }[]
 }
 

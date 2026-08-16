@@ -102,6 +102,7 @@ type Categoria = {
 }
 type ClienteFornecedor = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
+type Proprietario = { id: string; nome: string; fazenda_id: string }
 type ItemAjuste = { id: string; nome: string; tipo: TipoAjuste }
 type AjusteLancado = { itemId: string; itemNome: string; valor: number }
 type LinhaCategoria = {
@@ -116,6 +117,9 @@ type LinhaCategoria = {
   // bezerro (ver categoriaEhBezerro). Sugerido a partir da data do
   // lançamento (regra julho-junho), sempre editável.
   safraNascimento: string
+  // proprietário do lote de gado dessa linha — só aparece quando a
+  // fazenda envolvida tem 2+ proprietários vinculados (ver Proprietario)
+  proprietarioId: string
 }
 
 // lote desmamado — cada linha puxa de um lote de nascimento específico
@@ -138,6 +142,7 @@ function novaLinhaCategoria(): LinhaCategoria {
     campoPreco: 'valor_arroba',
     valorPreco: '',
     safraNascimento: '',
+    proprietarioId: '',
   }
 }
 
@@ -221,6 +226,7 @@ type Movimentacao = {
   causa_morte: string | null
   subtipo_consumo_doacao: SubtipoConsumoDoacao | null
   safra_nascimento_ano_inicio: number | null
+  proprietario_id: string | null
   observacao: string | null
   fazenda_id: string | null
   fazenda_origem_id: string | null
@@ -238,6 +244,7 @@ type Movimentacao = {
   pasto: { nome: string } | null
   pasto_destino: { nome: string } | null
   cliente: { nome: string } | null
+  proprietario: { nome: string } | null
   movimentacao_ajustes: { item_id: string; valor: number; item: { nome: string; tipo: TipoAjuste } | null }[]
   grupo_lancamento_id: string | null
 }
@@ -255,6 +262,7 @@ export default function MovimentacoesPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
+  const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
   const [clientesFornecedores, setClientesFornecedores] = useState<ClienteFornecedor[]>([])
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([])
@@ -297,6 +305,9 @@ export default function MovimentacoesPage() {
   // bezerro
   const [safraNascimento, setSafraNascimento] = useState('')
   const [lotesDisponiveisSingular, setLotesDisponiveisSingular] = useState<LoteDisponivel[]>([])
+  // proprietário do lote de gado (formulário de linha única) — mesmo
+  // princípio de safraNascimento acima
+  const [proprietarioId, setProprietarioId] = useState('')
   // Desmame tem estrutura própria (categoria origem/destino fixas no
   // cabeçalho, linhas variando por lote de nascimento) — não reaproveita
   // LinhaCategoria/linhas
@@ -372,6 +383,14 @@ export default function MovimentacoesPage() {
 
   const pastosDestinoDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaDestinoId)
   const mostrarSeletorPastoDestino = isTransferencia && controlaPasto && pastosDestinoDisponiveis.length > 1
+
+  // proprietário do lote de gado: seletor só aparece quando a fazenda
+  // (de origem, em TRANSFERENCIA) tem 2+ proprietários vinculados —
+  // mesmo princípio do seletor de pasto, mas sem "Geral" — quando
+  // escondido, o campo simplesmente fica vazio (proprietário é sempre
+  // opcional, diferente de pasto).
+  const proprietariosDisponiveis = proprietarios.filter((p) => p.fazenda_id === fazendaOrigemParaPasto)
+  const mostrarSeletorProprietario = proprietariosDisponiveis.length > 1
 
   // nenhuma movimentação pode ser lançada numa fazenda que ainda não
   // teve o saldo inicial preenchido e confirmado — evita erro de conta
@@ -520,6 +539,25 @@ export default function MovimentacoesPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTransferencia, fazendaDestinoId, mostrarSeletorPastoDestino, pastos])
+
+  // proprietário: limpa a seleção (singular e por linha) quando a
+  // fazenda muda ou o proprietário escolhido deixa de estar entre os
+  // vinculados — sem fallback, já que o campo é sempre opcional
+  useEffect(() => {
+    if (!mostrarSeletorProprietario || !proprietariosDisponiveis.some((p) => p.id === proprietarioId)) {
+      setProprietarioId('')
+    }
+    setLinhas((prev) =>
+      prev.map((l) =>
+        mostrarSeletorProprietario && proprietariosDisponiveis.some((p) => p.id === l.proprietarioId)
+          ? l
+          : l.proprietarioId
+            ? { ...l, proprietarioId: '' }
+            : l
+      )
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaOrigemParaPasto, mostrarSeletorProprietario, proprietarios])
 
   useEffect(() => {
     if (!precisaChecarSaldo || !fazendaParaSaldo || !categoriaId || !data) {
@@ -677,8 +715,17 @@ export default function MovimentacoesPage() {
   }, [isLoteCategoria, precisaChecarSaldo, fazendaParaSaldo, data, JSON.stringify(linhas.map((l) => l.categoriaId))])
 
   async function carregarAuxiliares() {
-    const [{ data: f }, { data: c }, { data: p }, { data: cf }, { data: cfg }, { data: ia }, { data: fFiltro }, { data: cFiltro }] =
-      await Promise.all([
+    const [
+      { data: f },
+      { data: c },
+      { data: p },
+      { data: cf },
+      { data: cfg },
+      { data: ia },
+      { data: fFiltro },
+      { data: cFiltro },
+      { data: prop },
+    ] = await Promise.all([
         supabase
           .from('fazendas')
           .select('id, nome, saldo_inicial_confirmado')
@@ -702,6 +749,7 @@ export default function MovimentacoesPage() {
         // inativada depois
         supabase.from('fazendas').select('id, nome').order('nome'),
         supabase.from('categorias_animal').select('id, nome').order('nome'),
+        supabase.from('fazenda_proprietarios').select('fazenda_id, pessoa:pessoas!pessoa_id(id, nome)'),
       ])
     setFazendas(f || [])
     setCategorias((c as unknown as Categoria[]) || [])
@@ -711,6 +759,11 @@ export default function MovimentacoesPage() {
     setItensAjuste((ia as unknown as ItemAjuste[]) || [])
     setFazendasFiltro(fFiltro || [])
     setCategoriasFiltro(cFiltro || [])
+    setProprietarios(
+      ((prop || []) as any[])
+        .filter((r) => r.pessoa)
+        .map((r) => ({ id: r.pessoa.id, nome: r.pessoa.nome, fazenda_id: r.fazenda_id }))
+    )
   }
 
   async function carregarMovimentacoes() {
@@ -723,7 +776,7 @@ export default function MovimentacoesPage() {
         `
         id, data, tipo, quantidade, peso_medio_kg, peso_total_kg, peso_morto_kg, rendimento_carcaca_pct,
         valor_arroba, valor_cabeca, valor_kg, valor_total,
-        causa_morte, subtipo_consumo_doacao, safra_nascimento_ano_inicio, observacao, grupo_lancamento_id,
+        causa_morte, subtipo_consumo_doacao, safra_nascimento_ano_inicio, proprietario_id, observacao, grupo_lancamento_id,
         fazenda_id, fazenda_origem_id, fazenda_destino_id,
         categoria_id, categoria_destino_id, pasto_id, pasto_destino_id, cliente_fornecedor_id,
         fazenda:fazendas!fazenda_id(nome),
@@ -734,6 +787,7 @@ export default function MovimentacoesPage() {
         pasto:pastos!pasto_id(nome),
         pasto_destino:pastos!pasto_destino_id(nome),
         cliente:pessoas!cliente_fornecedor_id(nome),
+        proprietario:pessoas!proprietario_id(nome),
         movimentacao_ajustes(item_id, valor, item:itens_ajuste_financeiro!item_id(nome, tipo))
       `
       )
@@ -819,6 +873,7 @@ export default function MovimentacoesPage() {
     setLinhas([novaLinhaCategoria()])
     setSaldosLinhas({})
     setSafraNascimento('')
+    setProprietarioId('')
     setLinhasDesmame([novaLinhaDesmame()])
   }
 
@@ -942,6 +997,7 @@ export default function MovimentacoesPage() {
     setObservacao(m.observacao || '')
     setConfirmarMudancaSexo(false)
     setSafraNascimento(m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '')
+    setProprietarioId(m.proprietario_id || '')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -977,6 +1033,7 @@ export default function MovimentacoesPage() {
       campoPreco: campoComValor ? campoComValor.key : 'valor_arroba',
       valorPreco: campoComValor ? String(m[campoComValor.key]) : '',
       safraNascimento: m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '',
+      proprietarioId: m.proprietario_id || '',
     }
   }
 
@@ -1239,6 +1296,8 @@ export default function MovimentacoesPage() {
       payload.safra_nascimento_ano_inicio = null
     }
 
+    payload.proprietario_id = mostrarSeletorProprietario && proprietarioId ? proprietarioId : null
+
     if (editandoId) {
       setSalvando(true)
       const { data: check, error: checkError } = await supabase.rpc('fn_checar_edicao_movimentacao', {
@@ -1455,6 +1514,7 @@ export default function MovimentacoesPage() {
         pasto_id: pastoId,
         pasto_destino_id: isTransferencia ? pastoDestinoId : null,
         safra_nascimento_ano_inicio: linhaEhBezerro ? safraNascLinha : null,
+        proprietario_id: mostrarSeletorProprietario && linha.proprietarioId ? linha.proprietarioId : null,
         grupo_lancamento_id: grupoId,
       }
       CAMPOS_PRECO.forEach((c) => {
@@ -1771,6 +1831,7 @@ export default function MovimentacoesPage() {
       partes.push(`safra ${formatSafra(m.safra_nascimento_ano_inicio)}`)
     }
     if (m.pasto?.nome && m.pasto.nome !== 'Geral') partes.push(`pasto: ${m.pasto.nome}`)
+    if (m.proprietario?.nome) partes.push(`propriet.: ${m.proprietario.nome}`)
     return partes.join(' · ')
   }
 
@@ -2252,6 +2313,24 @@ export default function MovimentacoesPage() {
             </div>
           ))}
 
+        {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && (
+          <div>
+            <label className="block text-sm mb-1">Proprietário do lote</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={proprietarioId}
+              onChange={(e) => setProprietarioId(e.target.value)}
+            >
+              <option value="">Sem proprietário atribuído</option>
+              {proprietariosDisponiveis.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {isVendaAbate && (
           <div>
             <label className="block text-sm mb-1">
@@ -2413,6 +2492,23 @@ export default function MovimentacoesPage() {
                     </div>
                   )
                 })()}
+                {mostrarSeletorProprietario && (
+                  <div>
+                    <label className="block text-xs mb-1">Proprietário</label>
+                    <select
+                      className="border rounded px-2 py-1 w-full text-sm"
+                      value={linha.proprietarioId}
+                      onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
+                    >
+                      <option value="">Sem proprietário atribuído</option>
+                      {proprietariosDisponiveis.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {isVendaAbate && (
                   <div>
                     <label className="block text-xs mb-1">

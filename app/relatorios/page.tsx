@@ -36,13 +36,14 @@ const SELECT_MOVIMENTACAO = `
   id, data, tipo, quantidade, peso_medio_kg, peso_total_kg, peso_morto_kg, rendimento_carcaca_pct,
   valor_arroba, valor_cabeca, valor_kg, valor_total, causa_morte, subtipo_consumo_doacao,
   safra_nascimento_ano_inicio, observacao,
-  fazenda_id, fazenda_origem_id, fazenda_destino_id, categoria_id, categoria_destino_id, cliente_fornecedor_id,
+  fazenda_id, fazenda_origem_id, fazenda_destino_id, categoria_id, categoria_destino_id, cliente_fornecedor_id, proprietario_id,
   fazenda:fazendas!fazenda_id(nome),
   fazenda_origem:fazendas!fazenda_origem_id(nome),
   fazenda_destino:fazendas!fazenda_destino_id(nome),
   categoria:categorias_animal!categoria_id(nome, sexo, grupo:grupos_categoria(nome)),
   categoria_destino:categorias_animal!categoria_destino_id(nome),
   cliente:pessoas!cliente_fornecedor_id(nome),
+  proprietario:pessoas!proprietario_id(nome),
   movimentacao_ajustes(valor, item:itens_ajuste_financeiro!item_id(tipo))
 `
 
@@ -59,6 +60,9 @@ export default function RelatoriosPage() {
     alternarFazenda,
     alternarTodas,
     todasSelecionadas,
+    proprietarios,
+    proprietarioIds,
+    alternarProprietario,
     modoFiltro,
     setModoFiltro,
     mes,
@@ -123,6 +127,9 @@ export default function RelatoriosPage() {
     if (categoriaId) {
       query = query.or(`categoria_id.eq.${categoriaId},categoria_destino_id.eq.${categoriaId}`)
     }
+    if (proprietarioIds.length > 0) {
+      query = query.in('proprietario_id', proprietarioIds)
+    }
 
     query.order('data', { ascending: true }).then(({ data, error }) => {
       if (cancelado) return
@@ -138,7 +145,7 @@ export default function RelatoriosPage() {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tipoSelecionado, fazendaIds, categoriaId, dataInicio, dataFim])
+  }, [tipoSelecionado, fazendaIds, categoriaId, proprietarioIds, dataInicio, dataFim])
 
   const rotuloPeriodo =
     modoFiltro === 'mes'
@@ -220,6 +227,20 @@ export default function RelatoriosPage() {
             ))}
           </select>
         </div>
+
+        {proprietarios.length > 1 && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietário</label>
+            <div className="max-h-32 w-48 space-y-1 overflow-y-auto rounded-control border border-border p-2">
+              {proprietarios.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 text-sm text-text-primary">
+                  <input type="checkbox" checked={proprietarioIds.includes(p.id)} onChange={() => alternarProprietario(p.id)} />
+                  {p.nome}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-text-secondary">Período</label>

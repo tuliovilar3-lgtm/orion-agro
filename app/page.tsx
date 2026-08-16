@@ -78,6 +78,9 @@ function PainelDashboard() {
     alternarFazenda,
     alternarTodas,
     todasSelecionadas,
+    proprietarios,
+    proprietarioIds,
+    alternarProprietario,
     modoFiltro,
     setModoFiltro,
     mes,
@@ -172,7 +175,12 @@ function PainelDashboard() {
     let cancelado = false
     setLoadingFluxo(true)
     supabase
-      .rpc('fn_relatorio_movimentacao_rebanho', { p_fazenda_ids: fazendaIds, p_data_inicio: dataInicio, p_data_fim: dataFim })
+      .rpc('fn_relatorio_movimentacao_rebanho', {
+        p_fazenda_ids: fazendaIds,
+        p_data_inicio: dataInicio,
+        p_data_fim: dataFim,
+        p_proprietario_ids: proprietarioIds.length > 0 ? proprietarioIds : null,
+      })
       .then(({ data, error }) => {
         if (cancelado) return
         if (!error) setFluxoLinhas(data || [])
@@ -182,7 +190,7 @@ function PainelDashboard() {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaIds, dataInicio, dataFim, periodoInvalido])
+  }, [fazendaIds, dataInicio, dataFim, periodoInvalido, proprietarioIds])
 
   useEffect(() => {
     supabase
@@ -616,6 +624,20 @@ function PainelDashboard() {
           )}
           {periodoInvalido && <p className="mt-1 text-xs text-error">A data inicial não pode ser depois da final.</p>}
         </div>
+
+        {proprietarios.length > 1 && (
+          <div className="mt-3">
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietário</label>
+            <div className="flex max-h-24 flex-wrap gap-x-4 gap-y-1 overflow-y-auto rounded-control border border-border p-2">
+              {proprietarios.map((p) => (
+                <label key={p.id} className="flex items-center gap-1.5 text-sm text-text-primary">
+                  <input type="checkbox" checked={proprietarioIds.includes(p.id)} onChange={() => alternarProprietario(p.id)} />
+                  {p.nome}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         {periodoInvalido ? (
           <p className="mt-4 text-sm text-error">Corrija o período antes de continuar.</p>

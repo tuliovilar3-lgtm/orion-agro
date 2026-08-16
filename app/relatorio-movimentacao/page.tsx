@@ -83,6 +83,9 @@ export default function RelatorioMovimentacaoPage() {
     alternarFazenda,
     alternarTodas,
     todasSelecionadas,
+    proprietarios,
+    proprietarioIds,
+    alternarProprietario,
     modoFiltro,
     setModoFiltro,
     mes,
@@ -121,6 +124,7 @@ export default function RelatorioMovimentacaoPage() {
         p_fazenda_ids: fazendaIds,
         p_data_inicio: dataInicio,
         p_data_fim: dataFim,
+        p_proprietario_ids: proprietarioIds.length > 0 ? proprietarioIds : null,
       })
       .then(({ data, error }) => {
         if (error) {
@@ -131,7 +135,7 @@ export default function RelatorioMovimentacaoPage() {
         setLoading(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaIds, dataInicio, dataFim])
+  }, [fazendaIds, dataInicio, dataFim, proprietarioIds])
 
   const linhasVisiveis = linhas.filter((l) => !linhaEstaZerada(l))
 
@@ -206,6 +210,19 @@ export default function RelatorioMovimentacaoPage() {
             )}
           </div>
         </div>
+        {proprietarios.length > 1 && (
+          <div>
+            <label className="block text-sm mb-1">Proprietário</label>
+            <div className="border rounded p-2 w-56 max-h-32 overflow-y-auto space-y-1">
+              {proprietarios.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={proprietarioIds.includes(p.id)} onChange={() => alternarProprietario(p.id)} />
+                  {p.nome}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <label className="block text-sm mb-1">Período</label>
           <div className="flex flex-wrap gap-3 mb-1 text-sm">

@@ -1,10 +1,11 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { anoCalendarioAtual, anoInicioSafraAtual, periodoAno, periodoSafra, ultimoDiaDoMes } from '@/lib/periodo'
 
 type Fazenda = { id: string; nome: string }
+type Proprietario = { id: string; nome: string }
 type ModoFiltro = 'mes' | 'safra' | 'ano' | 'periodo'
 
 type FiltroGlobalValue = {
@@ -14,6 +15,16 @@ type FiltroGlobalValue = {
   alternarFazenda: (id: string) => void
   alternarTodas: () => void
   todasSelecionadas: boolean
+  // proprietários vinculados às fazendas atualmente selecionadas (união,
+  // sem duplicar quem está em mais de uma). proprietarioIds vazio =
+  // "todos" (sem filtro) — diferente de fazendaIds, onde vazio filtraria
+  // tudo fora, já que proprietário é sempre opcional numa movimentação
+  // (a maioria não tem nenhum atribuído) e não faria sentido esconder
+  // esses lançamentos por padrão.
+  proprietarios: Proprietario[]
+  proprietarioIds: string[]
+  setProprietarioIds: (ids: string[]) => void
+  alternarProprietario: (id: string) => void
   modoFiltro: ModoFiltro
   setModoFiltro: (m: ModoFiltro) => void
   mes: string
@@ -42,6 +53,10 @@ const STORAGE_KEY = 'orion.filtroGlobal'
 export function FiltroGlobalProvider({ children }: { children: React.ReactNode }) {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [fazendaIds, setFazendaIdsState] = useState<string[]>([])
+  // dados crus de fazenda_proprietarios (todas, sem filtro) — a lista
+  // exposta (proprietarios) é derivada disso cruzando com fazendaIds
+  const [fazendaProprietarios, setFazendaProprietarios] = useState<{ fazenda_id: string; pessoa_id: string; nome: string }[]>([])
+  const [proprietarioIds, setProprietarioIdsState] = useState<string[]>([])
   const [modoFiltro, setModoFiltroState] = useState<ModoFiltro>('safra')
   const [mes, setMesState] = useState(() => new Date().toISOString().slice(0, 7))
   const [safraAnoInicio, setSafraAnoInicioState] = useState(() => anoInicioSafraAtual())
@@ -56,13 +71,17 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
   // se nada foi salvo ainda (primeira visita), começa com todas marcadas,
   // mesmo comportamento que cada página já tinha isoladamente
   useEffect(() => {
-    supabase
-      .from('fazendas')
-      .select('id, nome')
-      .order('nome')
-      .then(({ data }) => {
+    Promise.all([
+      supabase.from('fazendas').select('id, nome').order('nome'),
+      supabase.from('fazenda_proprietarios').select('fazenda_id, pessoa:pessoas!pessoa_id(id, nome)'),
+    ]).then(([{ data }, { data: fp }]) => {
         const lista = data || []
         setFazendas(lista)
+        setFazendaProprietarios(
+          ((fp || []) as any[])
+            .filter((r) => r.pessoa)
+            .map((r) => ({ fazenda_id: r.fazenda_id, pessoa_id: r.pessoa.id, nome: r.pessoa.nome }))
+        )
 
         let salvo: Record<string, unknown> | null = null
         try {
@@ -75,6 +94,7 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
         const idsValidos = idsSalvos.filter((id) => lista.some((f) => f.id === id))
         setFazendaIdsState(idsValidos.length > 0 ? idsValidos : lista.map((f) => f.id))
 
+        if (Array.isArray(salvo?.proprietarioIds)) setProprietarioIdsState(salvo!.proprietarioIds as string[])
         if (typeof salvo?.modoFiltro === 'string') setModoFiltroState(salvo.modoFiltro as ModoFiltro)
         if (typeof salvo?.mes === 'string') setMesState(salvo.mes)
         if (typeof salvo?.safraAnoInicio === 'number') setSafraAnoInicioState(salvo.safraAnoInicio)
@@ -93,9 +113,28 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
     if (!hidratado) return
     window.localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ fazendaIds, modoFiltro, mes, safraAnoInicio, anoCalendarioSelecionado, dataInicioCustom, dataFimCustom })
+      JSON.stringify({
+        fazendaIds,
+        proprietarioIds,
+        modoFiltro,
+        mes,
+        safraAnoInicio,
+        anoCalendarioSelecionado,
+        dataInicioCustom,
+        dataFimCustom,
+      })
     )
-  }, [hidratado, fazendaIds, modoFiltro, mes, safraAnoInicio, anoCalendarioSelecionado, dataInicioCustom, dataFimCustom])
+  }, [
+    hidratado,
+    fazendaIds,
+    proprietarioIds,
+    modoFiltro,
+    mes,
+    safraAnoInicio,
+    anoCalendarioSelecionado,
+    dataInicioCustom,
+    dataFimCustom,
+  ])
 
   function alternarFazenda(id: string) {
     setFazendaIdsState((prev) => (prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]))
@@ -106,6 +145,29 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
   }
 
   const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
+
+  // união dos proprietários vinculados às fazendas selecionadas — quem
+  // está em mais de uma fazenda aparece uma vez só
+  const proprietarios = useMemo(() => {
+    const porId = new Map<string, string>()
+    for (const fp of fazendaProprietarios) {
+      if (fazendaIds.includes(fp.fazenda_id)) porId.set(fp.pessoa_id, fp.nome)
+    }
+    return [...porId.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
+  }, [fazendaProprietarios, fazendaIds])
+
+  // poda seleções que deixaram de existir na lista atual (ex.: usuário
+  // desmarcou a fazenda cujo proprietário estava selecionado)
+  useEffect(() => {
+    setProprietarioIdsState((prev) => {
+      const podado = prev.filter((id) => proprietarios.some((p) => p.id === id))
+      return podado.length === prev.length ? prev : podado
+    })
+  }, [proprietarios])
+
+  function alternarProprietario(id: string) {
+    setProprietarioIdsState((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]))
+  }
   const hoje = new Date().toISOString().slice(0, 10)
   const safra = periodoSafra(safraAnoInicio)
   const anoCalendario = periodoAno(anoCalendarioSelecionado)
@@ -135,6 +197,10 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
     alternarFazenda,
     alternarTodas,
     todasSelecionadas,
+    proprietarios,
+    proprietarioIds,
+    setProprietarioIds: setProprietarioIdsState,
+    alternarProprietario,
     modoFiltro,
     setModoFiltro: setModoFiltroState,
     mes,

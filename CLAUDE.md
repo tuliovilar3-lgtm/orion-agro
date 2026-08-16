@@ -2008,3 +2008,117 @@ sem gravar nada. Arrastar um vértice de verdade via clique-e-arraste não foi p
 ambiente de teste automatizado (a ferramenta de screenshot não funciona sem o painel de preview
 visível), mas o mecanismo de drag em si é código nativo do `leaflet-draw`, não deste projeto — só a
 leitura/gravação ao salvar (código novo) foi validada ponta a ponta.
+
+## Proprietário do lote de gado (migração 044)
+
+Em algumas fazendas mais de um proprietário tem animais na mesma fazenda (parceria, arrendamento,
+sociedade entre parentes) — diferente do proprietário da terra (`fazendas.proprietario_id`, singular,
+cadastral, já existente desde a Fase A/C da reorganização de Fazendas). Implementado como mais uma
+dimensão ortogonal do ledger de movimentações, seguindo exatamente o mesmo molde já usado duas vezes
+antes (pasto, safra de nascimento): coluna própria em `movimentacoes_rebanho`, saldo por
+`fn_saldo_categoria_proprietario(fazenda, categoria, proprietario, data)`, trajetória de edição/
+exclusão própria (`fn_delta_para_par_proprietario`/`fn_checar_saldo_proprietario_futuro`, mesma
+receita de `fn_delta_para_par_lote`/`fn_checar_saldo_lote_futuro`), e checagem de saldo insuficiente
+própria dentro de `fn_validar_saldo_categoria` — defesa em profundidade, mesmo princípio já usado pra
+pasto e lote de nascimento.
+
+**Decisões fechadas com o usuário antes de implementar** (discutidas como opinião técnica primeiro,
+sem implementar até confirmação explícita — pedido do usuário: "me dê sua opinião técnica sincera sem
+implementar nada ainda"):
+- **Não cruza com pasto** — o gado de um proprietário pode se misturar no mesmo pasto de outro, mesmo
+  princípio já usado pra não cruzar pasto×safra (complexidade desproporcional sem necessidade real de
+  negócio confirmada).
+- **Precisa alimentar separação financeira**, não é só etiqueta informativa — mas isso já cai de graça
+  na arquitetura existente: o lançamento em lote já é linha-a-linha (categoria+quantidade+peso+preço
+  por linha, com desconto/acréscimo já rateado por linha), então `proprietario_id` como mais um campo
+  por linha (igual `safraNascimento` já é hoje) já resolve o valor por proprietário sem nenhuma lógica
+  nova de rateio.
+- **Totalmente opcional** (nullable, sem exigência condicional como safra tem pra bezerro) — a maioria
+  das fazendas continua com 0 ou 1 proprietário vinculado, então o campo nunca aparece pra elas.
+- **Filtro nos relatórios, sem aba "Resumo por Proprietário" dedicada** — o usuário avaliou que
+  filtrar já cobre "o que esse proprietário fez no período" (caso de uso mais comum); comparação lado
+  a lado entre proprietários fica coberta por deixar Proprietário como coluna visível nas listagens
+  (não por uma tela nova).
+
+**`fazenda_proprietarios`** (fazenda_id, pessoa_id): quais pessoas (papel PROPRIETARIO) podem ser
+atribuídas como dono de um lote de gado numa fazenda específica — separado do
+`fazendas.proprietario_id` singular. Gerenciado direto no formulário de Cadastrar/Editar Fazenda
+(`CadastrarFazendaModal.tsx`), como uma seção nova "Proprietários do gado nesta fazenda" logo abaixo
+do campo Proprietário (dono da terra) — checkboxes sobre a mesma lista de pessoas com papel
+PROPRIETARIO já carregada pro seletor de dono da terra, sem chamada nova ao banco. **Se o usuário não
+marcar nada, o dono da terra vira o único proprietário de gado por padrão** (`proprietariosFinal =
+proprietariosGadoIds.size > 0 ? [...proprietariosGadoIds] : [proprietarioId]`) — decisão deliberada
+pra que uma fazenda com um dono só (a maioria) não exija nenhum passo extra: o seletor de proprietário
+no lançamento simplesmente não aparece (só aparece com 2+ vinculados). Salvar sincroniza a lista
+inteira por "apaga e reinsere" (mesmo princípio já usado em `pessoa_papeis`/`movimentacao_ajustes`).
+
+**`movimentacoes_rebanho.proprietario_id`** (nullable, referencia `pessoas`): campo por linha no
+lançamento em lote (`LinhaCategoria.proprietarioId`, ao lado de `safraNascimento`) e campo próprio no
+formulário de edição avulsa (`proprietarioId` singular, mesmo padrão de `safraNascimento` singular já
+usado pra editar uma movimentação fora de um grupo). Seletor (`<select>` com "Sem proprietário
+atribuído" + a lista de `fazenda_proprietarios` da fazenda envolvida) só aparece quando
+`proprietariosDisponiveis.length > 1` (mesma fazenda de origem usada pro pasto — `fazendaOrigemParaPasto`,
+reaproveitada sem duplicar lógica) — mesma regra de visibilidade condicional já usada pra pasto/safra.
+**Fica de fora, de propósito**: Mudança de Categoria (não participa do saldo por proprietário — mesmo
+tratamento que já tinha pra safra) e Desmame (estrutura própria, `LinhaDesmame`, sem esse campo nesta
+rodada — decisão de escopo, não limitação técnica). `fn_validar_proprietario_pertence_fazenda`
+(trigger, mesmo princípio de `fn_validar_pasto_pertence_fazenda`) garante que o proprietário
+selecionado está de fato vinculado à fazenda do lançamento antes de aceitar o insert/update.
+
+**Exibição**: `detalhesMovimentacao()` em `app/movimentacoes/page.tsx` acrescenta `propriet.: Nome`
+no fim da linha de detalhe (mesmo lugar onde safra/pasto já aparecem) — cobre tanto o card avulso
+quanto cada linha dentro de um card agrupado, sem duplicar lógica de exibição.
+
+**Filtro global sincronizado**: `FiltroGlobalContext` ganha `proprietarios`/`proprietarioIds`/
+`alternarProprietario`, seguindo o mesmo padrão já usado pra fazenda/período — mas com semântica
+diferente de fazenda: `proprietarioIds` vazio significa **"todos" (sem filtro)**, não "nenhum",
+porque proprietário é sempre opcional numa movimentação (a maioria não tem nenhum atribuído) e
+esconder esses lançamentos por padrão seria o comportamento errado. `proprietarios` é a união dos
+proprietários vinculados às fazendas atualmente selecionadas (`fazendaProprietarios` cru, cruzado com
+`fazendaIds` via `useMemo`), recalculada reativamente; uma seleção que deixa de existir (ex.: usuário
+desmarca a fazenda cujo proprietário estava selecionado) é podada automaticamente. O filtro só
+aparece na UI quando há 2+ proprietários no conjunto selecionado.
+
+**Onde o filtro foi aplicado — e onde não foi, por decisão técnica**:
+- **Relatórios de Movimentações** (`app/relatorios/page.tsx`): filtro direto (`.in('proprietario_id',
+  proprietarioIds)` quando não vazio) — a query já busca linhas cruas de `movimentacoes_rebanho`, sem
+  RPC agregada, então o filtro é imediato.
+- **Resumo de Movimentação de Rebanho** e a seção "Movimentações do período" do **Painel**: as duas
+  telas consomem a mesma RPC, `fn_relatorio_movimentacao_rebanho`, que ganhou um parâmetro novo
+  opcional `p_proprietario_ids uuid[] default null` (precisou de `drop function` antes do `create`,
+  já que mudou de assinatura — mesmo princípio já usado quando `fn_saldo_categoria_safra_mes` virou
+  `fn_saldo_categoria_safra` na migração 031). Quando o filtro está ativo, `estoque_inicial`/
+  `estoque_final` somam `fn_saldo_categoria_proprietario` sobre o produto cartesiano fazendas×
+  proprietários selecionados (em vez de `fn_saldo_categoria` por fazenda inteira), e cada
+  entrada/saída por tipo ganha `and (p_proprietario_ids is null or m.proprietario_id =
+  any(p_proprietario_ids))`.
+- **Relatório de Lotação**: **deliberadamente fora do filtro** — lotação cruza rebanho com área
+  (`(peso vivo / 450) / área em Pecuária`), e área não tem dimensão de proprietário nenhuma; filtrar
+  o rebanho por um dono só enquanto a área continua sendo a da fazenda inteira produziria um número
+  de lotação matematicamente enganoso (numerador de um proprietário, denominador de todos). Mesmo
+  raciocínio vale pros KPIs "Distribuição atual do rebanho"/"Lotação atual" do Painel (usam
+  `fn_resumo_rebanho_atual`, fotografia de hoje sem período) — não filtrados por proprietário; só a
+  seção "Movimentações do período" do Painel (que já é period-based e não mistura com área) recebeu o
+  filtro.
+
+**Gap encontrado e corrigido durante o teste**: `fn_validar_delete_pessoa` (já existente desde a Fase
+B/C) checava `movimentacoes_rebanho.cliente_fornecedor_id` e `fazendas.proprietario_id`, mas não as
+duas referências novas (`movimentacoes_rebanho.proprietario_id`, `fazenda_proprietarios.pessoa_id`) —
+sem o ajuste, excluir uma pessoa vinculada como proprietário de gado bateria numa violação de FK crua
+em vez da mensagem amigável já usada pros outros vínculos. Corrigido na mesma migração 044, mesmo
+princípio de "inative-a em vez disso" já usado em todo o resto do sistema.
+
+Verificado no navegador (`FAZENDA TESTE`): vincular um segundo proprietário de gado a uma fazenda de
+teste ("Sócio Teste", criado via "+ Novo" no cadastro de fazenda) fez o seletor de proprietário
+aparecer no lançamento — confirmado que fica escondido com só 1 vinculado (comportamento padrão de
+qualquer fazenda) e aparece com 2+; lançar um Nascimento atribuído a "Sócio Teste" mostrou
+`propriet.: Sócio Teste` na listagem; editar essa movimentação confirmou o valor pré-selecionado
+corretamente no formulário avulso; o filtro em Relatórios de Movimentações (raw query) reduziu "Total
+nascido" de 13 para 1 ao marcar só "Sócio Teste"; o mesmo filtro persistido via `localStorage`
+reduziu "Movimentações do período" pra `+1 Nascimentos` tanto no Resumo de Movimentação quanto no
+Painel (RPC compartilhada funcionando nos dois lugares), enquanto os KPIs de hoje do Painel (Total de
+cabeças, Lotação atual) permaneceram no valor cheio, sem filtro, confirmando a decisão de escopo.
+Dados de teste totalmente revertidos ao final: proprietário do lote limpo da movimentação de teste,
+vínculo em `fazenda_proprietarios` removido, `fazendas.proprietario_id` restaurado pro dono original
+("Túlio" — alterado sem querer durante o teste, já que criar um proprietário novo via "+ Novo"
+auto-seleciona ele no campo de dono da terra também), e a pessoa "Sócio Teste" excluída.

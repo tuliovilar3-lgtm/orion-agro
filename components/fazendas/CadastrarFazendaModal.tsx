@@ -81,6 +81,16 @@ export default function CadastrarFazendaModal({
   const [novoProprietarioNome, setNovoProprietarioNome] = useState('')
   const [salvandoProprietario, setSalvandoProprietario] = useState(false)
 
+  // proprietários do GADO nessa fazenda — diferente de proprietarioId
+  // acima (dono da terra, cadastral, único). Algumas fazendas têm mais
+  // de um dono de gado (parceria, arrendamento, sociedade entre
+  // parentes) — essa lista alimenta o seletor de proprietário nos
+  // lançamentos de movimentação. Vazio == nenhum foi explicitamente
+  // marcado ainda; nesse caso, ao salvar, o dono da terra vira o único
+  // proprietário de gado por padrão (fazenda com um dono só não exige
+  // nenhum passo extra).
+  const [proprietariosGadoIds, setProprietariosGadoIds] = useState<Set<string>>(new Set())
+
   useEffect(() => {
     supabase
       .from('pessoa_papeis')
@@ -95,6 +105,17 @@ export default function CadastrarFazendaModal({
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!fazendaId) return
+    supabase
+      .from('fazenda_proprietarios')
+      .select('pessoa_id')
+      .eq('fazenda_id', fazendaId)
+      .then(({ data }) => {
+        setProprietariosGadoIds(new Set((data || []).map((r) => r.pessoa_id)))
+      })
+  }, [fazendaId, supabase])
 
   useEffect(() => {
     if (!fazendaId) return
@@ -196,23 +217,49 @@ export default function CadastrarFazendaModal({
         : null,
     }
 
+    let idSalvo: string
     if (editando) {
       const { error } = await supabase.from('fazendas').update(payload).eq('id', fazendaId)
-      setSalvando(false)
       if (error) {
+        setSalvando(false)
         alert('Erro ao salvar: ' + error.message)
         return
       }
-      onSaved(fazendaId as string)
+      idSalvo = fazendaId as string
     } else {
       const { data: nova, error } = await supabase.from('fazendas').insert(payload).select('id').single()
-      setSalvando(false)
       if (error) {
+        setSalvando(false)
         alert('Erro ao salvar: ' + error.message)
         return
       }
-      onSaved(nova.id)
+      idSalvo = nova.id
     }
+
+    // proprietários do gado: se nenhum foi marcado explicitamente, o
+    // dono da terra vira o único proprietário de gado por padrão — a
+    // maioria das fazendas tem um dono só e não precisa de nenhum passo
+    // extra pra o seletor de proprietário funcionar nos lançamentos
+    const proprietariosFinal = proprietariosGadoIds.size > 0 ? [...proprietariosGadoIds] : [proprietarioId]
+    await supabase.from('fazenda_proprietarios').delete().eq('fazenda_id', idSalvo)
+    const { error: errorProprietarios } = await supabase
+      .from('fazenda_proprietarios')
+      .insert(proprietariosFinal.map((pessoaId) => ({ fazenda_id: idSalvo, pessoa_id: pessoaId })))
+    setSalvando(false)
+    if (errorProprietarios) {
+      alert('Erro ao salvar proprietários do gado: ' + errorProprietarios.message)
+      return
+    }
+    onSaved(idSalvo)
+  }
+
+  function alternarProprietarioGado(pessoaId: string) {
+    setProprietariosGadoIds((prev) => {
+      const novo = new Set(prev)
+      if (novo.has(pessoaId)) novo.delete(pessoaId)
+      else novo.add(pessoaId)
+      return novo
+    })
   }
 
   return (
@@ -259,6 +306,26 @@ export default function CadastrarFazendaModal({
                     >
                       + Novo
                     </button>
+                  </div>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietários do gado nesta fazenda</label>
+                  <p className="mb-2 text-xs text-text-muted">
+                    Por padrão só o proprietário da terra acima. Marque mais nomes se houver mais de um dono de gado
+                    nesta fazenda (parceria, arrendamento) — isso libera um seletor de proprietário nos lançamentos.
+                  </p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                    {pessoas.map((p) => (
+                      <label key={p.id} className="flex items-center gap-1.5 text-sm text-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={proprietariosGadoIds.has(p.id)}
+                          onChange={() => alternarProprietarioGado(p.id)}
+                        />
+                        {p.nome}
+                      </label>
+                    ))}
+                    {pessoas.length === 0 && <p className="text-sm text-text-muted">Nenhum proprietário cadastrado ainda.</p>}
                   </div>
                 </div>
                 <div>
