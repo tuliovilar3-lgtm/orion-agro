@@ -6,7 +6,11 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { Geometry } from 'geojson'
 import { ICONE_SRC, ICONE_TIER, TIER_SIZE_PX, type CodigoIconeCategoria } from '@/lib/categoria-icones'
-import { formatQuantidade, formatPeso } from '@/lib/format'
+import { formatQuantidade, formatPeso, formatArea, formatLotacao } from '@/lib/format'
+
+// 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção usada no
+// Painel e no Relatório de Lotação
+const KG_POR_UA = 450
 
 export type CategoriaDistribuicao = {
   codigo: CodigoIconeCategoria
@@ -130,6 +134,10 @@ export default function MapaDistribuicaoRebanho({
         ))}
         {pastosComGeometria.map((p) => {
           const selecionado = p.id === pastoSelecionadoId
+          const totalQuantidade = p.categorias.reduce((s, c) => s + c.quantidade, 0)
+          const pesoVivoTotal = p.categorias.reduce((s, c) => s + (c.pesoMedio ?? 0) * c.quantidade, 0)
+          const pesoMedio = totalQuantidade > 0 ? pesoVivoTotal / totalQuantidade : null
+          const lotacao = p.areaHa && p.areaHa > 0 && totalQuantidade > 0 ? pesoVivoTotal / KG_POR_UA / p.areaHa : null
           return (
             <GeoJSON
               key={`${p.id}-${selecionado}`}
@@ -138,7 +146,19 @@ export default function MapaDistribuicaoRebanho({
               eventHandlers={{ click: () => onSelecionarPasto?.(p.id) }}
             >
               <Tooltip direction="top" sticky>
-                <span className="font-semibold">{p.nome}</span> — {p.fazendaNome}
+                <div>
+                  <div className="font-semibold">{p.nome}</div>
+                  <div>{p.fazendaNome}</div>
+                  <div>Área útil: {p.areaHa != null ? `${formatArea(p.areaHa)} ha` : '—'}</div>
+                  {totalQuantidade > 0 ? (
+                    <div>
+                      {formatQuantidade(totalQuantidade)} cab. · peso médio {formatPeso(pesoMedio)} kg
+                      {lotacao != null ? ` · ${formatLotacao(lotacao)} UA/ha` : ''}
+                    </div>
+                  ) : (
+                    <div>Sem rebanho</div>
+                  )}
+                </div>
               </Tooltip>
             </GeoJSON>
           )

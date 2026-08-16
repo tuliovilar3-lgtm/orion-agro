@@ -222,7 +222,12 @@ function PainelDashboard() {
       const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
       const pastosBase = new Map<string, PastoBaseInfo>()
       for (const p of (pastosResp.data as any[]) || []) {
+        // só pastos das fazendas selecionadas no filtro — a query não
+        // filtra isso no servidor (embutido em join não é trivial via
+        // supabase-js), então filtra aqui antes de semear o mapa
+        if (!fazendaIds.includes(p.modulo?.fazenda_id)) continue
         pastosBase.set(p.id, {
+          nome: p.nome,
           areaHa: p.area_ha,
           cor: p.cor || '#1C8C7C',
           geometria: p.geometria ?? null,
@@ -634,7 +639,8 @@ function DetalhePastoDistribuicao({ pasto }: { pasto: PastoDistribuicao | null }
 
   const totalQuantidade = pasto.categorias.reduce((s, c) => s + c.quantidade, 0)
   const pesoVivoTotal = pasto.categorias.reduce((s, c) => s + (c.pesoMedio ?? 0) * c.quantidade, 0)
-  const lotacao = pasto.areaHa && pasto.areaHa > 0 ? pesoVivoTotal / KG_POR_UA / pasto.areaHa : null
+  const lotacao =
+    pasto.areaHa && pasto.areaHa > 0 && totalQuantidade > 0 ? pesoVivoTotal / KG_POR_UA / pasto.areaHa : null
   const categoriasOrdenadas = [...pasto.categorias].sort((a, b) => b.quantidade - a.quantidade)
 
   return (
@@ -661,20 +667,24 @@ function DetalhePastoDistribuicao({ pasto }: { pasto: PastoDistribuicao | null }
         </div>
       </div>
 
-      <div className="mt-2 space-y-2">
-        {categoriasOrdenadas.map((c) => (
-          <div key={c.codigo + c.nome} className="flex items-center gap-2.5">
-            <img src={ICONE_SRC[c.codigo]} alt="" className="h-7 w-7 shrink-0 object-contain" />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-text-primary">{c.nome}</div>
-              <div className="text-xs text-text-muted">peso médio {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}</div>
+      {categoriasOrdenadas.length === 0 ? (
+        <p className="mt-2 text-center text-xs text-text-muted">Sem rebanho nesse pasto</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {categoriasOrdenadas.map((c) => (
+            <div key={c.codigo + c.nome} className="flex items-center gap-2.5">
+              <img src={ICONE_SRC[c.codigo]} alt="" className="h-7 w-7 shrink-0 object-contain" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-text-primary">{c.nome}</div>
+                <div className="text-xs text-text-muted">peso médio {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}</div>
+              </div>
+              <div className="shrink-0 font-semibold tabular-nums text-text-primary">
+                {formatQuantidade(c.quantidade)} cab.
+              </div>
             </div>
-            <div className="shrink-0 font-semibold tabular-nums text-text-primary">
-              {formatQuantidade(c.quantidade)} cab.
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

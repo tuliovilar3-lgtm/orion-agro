@@ -17,6 +17,7 @@ export type LinhaPastoRaw = {
 }
 
 export type PastoBaseInfo = {
+  nome: string
   areaHa: number | null
   cor: string
   geometria: Geometry | null
@@ -31,6 +32,21 @@ export function montarDistribuicaoPorPasto(
   categoriasInfo: Map<string, CategoriaAnimalInfo>
 ): PastoDistribuicao[] {
   const porPasto = new Map<string, PastoDistribuicao>()
+
+  // semeia todos os pastos conhecidos primeiro (mesmo sem nenhum animal
+  // hoje) — sem isso o mapa só desenhava o contorno de quem tem rebanho,
+  // escondendo os pastos vazios em vez de mostrar que estão livres
+  for (const [id, base] of pastosBase) {
+    porPasto.set(id, {
+      id,
+      nome: base.nome,
+      fazendaNome: base.fazendaNome,
+      areaHa: base.areaHa,
+      geometria: base.geometria,
+      cor: base.cor,
+      categorias: [],
+    })
+  }
 
   for (const l of linhas) {
     const base = pastosBase.get(l.pasto_id)

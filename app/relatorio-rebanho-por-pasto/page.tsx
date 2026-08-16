@@ -118,12 +118,19 @@ export default function RelatorioRebanhoPorPastoPage() {
       .then(({ data }) => setFazendaGeometria((data?.geometria as Geometry | null) ?? null))
     supabase
       .from('pastos')
-      .select('id, nome, area_ha, cor, geometria, modulo:modulos!modulo_id(fazenda_id)')
+      .select('id, nome, area_ha, cor, geometria, ativo, modulo:modulos!modulo_id(fazenda_id)')
+      .eq('ativo', true)
       .then(({ data }) => {
         const mapa = new Map<string, PastoBaseInfo>()
         for (const p of (data as any[]) || []) {
           if (p.modulo?.fazenda_id !== fazendaId) continue
-          mapa.set(p.id, { areaHa: p.area_ha, cor: p.cor || '#1C8C7C', geometria: p.geometria ?? null, fazendaNome: '' })
+          mapa.set(p.id, {
+            nome: p.nome,
+            areaHa: p.area_ha,
+            cor: p.cor || '#1C8C7C',
+            geometria: p.geometria ?? null,
+            fazendaNome: '',
+          })
         }
         setPastosBase(mapa)
       })
