@@ -10,6 +10,7 @@ import ModuloGate from '@/components/ModuloGate'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
 import {
   montarDistribuicaoPorPasto,
+  corPorModuloId,
   type CategoriaAnimalInfo,
   type LinhaPastoRaw,
   type PastoBaseInfo,
@@ -116,24 +117,31 @@ export default function RelatorioRebanhoPorPastoPage() {
       .eq('id', fazendaId)
       .single()
       .then(({ data }) => setFazendaGeometria((data?.geometria as Geometry | null) ?? null))
-    supabase
-      .from('pastos')
-      .select('id, nome, area_ha, cor, geometria, ativo, modulo:modulos!modulo_id(fazenda_id)')
-      .eq('ativo', true)
-      .then(({ data }) => {
-        const mapa = new Map<string, PastoBaseInfo>()
-        for (const p of (data as any[]) || []) {
-          if (p.modulo?.fazenda_id !== fazendaId) continue
-          mapa.set(p.id, {
-            nome: p.nome,
-            areaHa: p.area_ha,
-            cor: p.cor || '#1C8C7C',
-            geometria: p.geometria ?? null,
-            fazendaNome: '',
-          })
-        }
-        setPastosBase(mapa)
-      })
+    Promise.all([
+      supabase
+        .from('pastos')
+        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id)')
+        .eq('ativo', true),
+      supabase.from('modulos').select('id, fazenda_id, ordem').eq('fazenda_id', fazendaId),
+    ]).then(([pastosResp, modulosResp]) => {
+      // mesma regra de cor automática de GestaoAreasPanel — pasto sem cor
+      // própria usa a cor categórica do módulo, não uma cor fixa pra todos
+      const corPorModulo = corPorModuloId(
+        ((modulosResp.data as any[]) || []).map((m) => ({ id: m.id, fazendaId: m.fazenda_id, ordem: m.ordem }))
+      )
+      const mapa = new Map<string, PastoBaseInfo>()
+      for (const p of (pastosResp.data as any[]) || []) {
+        if (p.modulo?.fazenda_id !== fazendaId) continue
+        mapa.set(p.id, {
+          nome: p.nome,
+          areaHa: p.area_ha,
+          cor: p.cor || corPorModulo.get(p.modulo_id) || '#1C8C7C',
+          geometria: p.geometria ?? null,
+          fazendaNome: '',
+        })
+      }
+      setPastosBase(mapa)
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 

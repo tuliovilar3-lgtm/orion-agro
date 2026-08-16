@@ -5,6 +5,7 @@
 import type { Geometry } from 'geojson'
 import type { Era } from '@/lib/faixa-etaria'
 import { iconeParaCategoria, type CodigoIconeCategoria } from '@/lib/categoria-icones'
+import { corCategorica } from '@/lib/relatorio-cores'
 import type { CategoriaDistribuicao, PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
 
 export type LinhaPastoRaw = {
@@ -25,6 +26,27 @@ export type PastoBaseInfo = {
 }
 
 export type CategoriaAnimalInfo = { papel: string; sexo: 'MACHO' | 'FEMEA'; era: Era }
+
+// mesma regra de cor automática já usada em GestaoAreasPanel (pasto sem
+// cor customizada usa a cor categórica do módulo, pela posição do módulo
+// na fazenda) — reaproveitada aqui pro mapa de distribuição não pintar
+// todo pasto sem cor própria da mesma cor. Índice reinicia por fazenda
+// (cada fazenda tem sua própria sequência de módulos, igual à aba
+// Gestão de Áreas, que só vê os módulos de uma fazenda por vez).
+export function corPorModuloId(modulos: { id: string; fazendaId: string; ordem: number }[]): Map<string, string> {
+  const porFazenda = new Map<string, { id: string; ordem: number }[]>()
+  for (const m of modulos) {
+    const lista = porFazenda.get(m.fazendaId) ?? []
+    lista.push({ id: m.id, ordem: m.ordem })
+    porFazenda.set(m.fazendaId, lista)
+  }
+  const resultado = new Map<string, string>()
+  for (const lista of porFazenda.values()) {
+    lista.sort((a, b) => a.ordem - b.ordem)
+    lista.forEach((m, i) => resultado.set(m.id, corCategorica(i)))
+  }
+  return resultado
+}
 
 export function montarDistribuicaoPorPasto(
   linhas: LinhaPastoRaw[],

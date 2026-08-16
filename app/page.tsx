@@ -20,6 +20,7 @@ import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRe
 import { ICONE_SRC } from '@/lib/categoria-icones'
 import {
   montarDistribuicaoPorPasto,
+  corPorModuloId,
   type CategoriaAnimalInfo,
   type LinhaPastoRaw,
   type PastoBaseInfo,
@@ -205,8 +206,9 @@ function PainelDashboard() {
     Promise.all([
       supabase
         .from('pastos')
-        .select('id, nome, area_ha, cor, geometria, ativo, modulo:modulos!modulo_id(fazenda_id)')
+        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id)')
         .eq('ativo', true),
+      supabase.from('modulos').select('id, fazenda_id, ordem'),
       supabase.from('fazendas').select('id, nome, geometria').in('id', fazendaIds),
       supabase.from('categorias_animal').select('id, sexo, era, papel:grupos_categoria_papel(nome)'),
       Promise.all(
@@ -216,10 +218,15 @@ function PainelDashboard() {
             .then((r) => (r.data as LinhaPastoRaw[]) || [])
         )
       ),
-    ]).then(([pastosResp, fazendasResp, categoriasResp, resultadosPorFazenda]) => {
+    ]).then(([pastosResp, modulosResp, fazendasResp, categoriasResp, resultadosPorFazenda]) => {
       if (cancelado) return
 
       const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
+      // mesma regra de cor automática de GestaoAreasPanel — pasto sem cor
+      // própria usa a cor categórica do módulo, não uma cor fixa pra todos
+      const corPorModulo = corPorModuloId(
+        ((modulosResp.data as any[]) || []).map((m) => ({ id: m.id, fazendaId: m.fazenda_id, ordem: m.ordem }))
+      )
       const pastosBase = new Map<string, PastoBaseInfo>()
       for (const p of (pastosResp.data as any[]) || []) {
         // só pastos das fazendas selecionadas no filtro — a query não
@@ -229,7 +236,7 @@ function PainelDashboard() {
         pastosBase.set(p.id, {
           nome: p.nome,
           areaHa: p.area_ha,
-          cor: p.cor || '#1C8C7C',
+          cor: p.cor || corPorModulo.get(p.modulo_id) || '#1C8C7C',
           geometria: p.geometria ?? null,
           fazendaNome: nomeFazendaPorId.get(p.modulo?.fazenda_id) ?? '',
         })
