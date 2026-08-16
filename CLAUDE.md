@@ -1844,3 +1844,167 @@ a barra de abas do Modo Campo) só com Painel + os 2 relatórios liberados, e ac
 nenhuma tela de escrita mesmo sem nenhum bloqueio novo dentro delas. Accordion recolhido por padrão
 e opção "Consulta (só relatórios)" no `<select>` confirmados visualmente pelo usuário na sua própria
 sessão de administrador. Usuário de teste revertido a `ativo = false`/`modo = 'GESTAO'` ao final.
+
+## Redefinir senha, excluir usuário e alterar minha senha (self-service)
+
+Pedido do usuário: funcionário que esquece a senha precisa de uma forma de recuperar acesso, e
+funcionário que sai da fazenda precisa poder ser removido de vez (em vez de só acumular como
+"Inativo" pra sempre). Três peças, já que "senha padrão, depois o usuário troca" só funciona de
+verdade se existir uma tela pra trocar depois de logado — não existia nenhuma até agora.
+
+**Redefinir senha (administrador → funcionário)**: botão "Redefinir senha" por usuário não-dono em
+`app/usuarios/page.tsx`, ao lado de "Inativar"/"Excluir". `PATCH /api/usuarios/[id]` ganhou um campo
+novo no corpo, `resetSenha: true` — quando presente, chama só
+`admin.auth.admin.updateUserById(id, { password: SENHA_PADRAO })` (constante `'123456'`, mesmo
+cliente admin/service-role já usado pra criar usuário) e retorna, sem tocar nos outros campos do
+PATCH (nome/ativo/modo/módulos continuam como uma chamada separada, sem se misturar com essa). Uma
+mensagem inline (`bg-success-bg`, mesmo padrão de confirmação já usado no resto do app) confirma
+"Senha redefinida para 123456 — avise a pessoa pra trocar depois de entrar", some sozinha depois de
+alguns segundos.
+
+**Excluir usuário (hard delete)**: botão "Excluir" com confirmação inline (`error`/"Sim,
+excluir"/"Cancelar", nunca `window.confirm()` — mesmo padrão já usado em módulo/pasto/pessoa/
+fazenda). `DELETE /api/usuarios/[id]` bloqueia se o alvo for o dono (`usuarios_app.dono`, checado
+antes de qualquer coisa) e, se não for, chama só `admin.auth.admin.deleteUser(id)` — **sem** nenhuma
+limpeza manual de `usuarios_app`/`usuario_modulos`: as duas FKs (`usuarios_app.id → auth.users`,
+`usuario_modulos.usuario_id → usuarios_app`) já são `on delete cascade` desde a migração 042, então
+apagar o login em `auth.users` já apaga o resto sozinho. Diferente de fazenda/pessoa/pasto/módulo,
+não existe checagem de "está referenciado em outra tabela" — nenhuma tabela real do sistema
+referencia `usuarios_app` como FK (as colunas `created_by`/`usuario_id` do rascunho antigo de
+`usuarios`/`usuario_fazenda`, documentado em "Modelo de acesso e login" acima, nunca foram escritas
+por código nenhum), então excluir é sempre seguro e imediato — sem a mensagem de erro-do-banco que
+os outros "excluir" repassam quando bloqueados.
+
+**Alterar minha senha (self-service, qualquer usuário logado)**: modal novo,
+`components/AlterarSenhaModal.tsx` — dois campos (nova senha + confirmar), valida coincidência no
+cliente antes de chamar `supabase.auth.updateUser({ password })` (client-side, sessão do próprio
+usuário — não precisa do cliente admin nem de nenhuma Route Handler, já que a pessoa só pode alterar
+a própria senha). Acionado por um botão novo (ícone de chave, `ICONS.senha` em
+`lib/nav-icons.tsx`) ao lado do "Sair" — presente nos **dois** layouts de navegação
+(`components/Sidebar.tsx` e `components/campo/ModoCampoShell.tsx`), já que um usuário pode estar em
+Modo Campo ou Modo Gestão/Consulta e precisa da mesma opção nos dois. Sem essa peça, "senha padrão,
+depois troca" seria só metade implementado — o administrador reseta, mas o funcionário nunca teria
+como trocar de fato.
+
+Verificado: com o navegador local logado como o funcionário de teste "Teste 1"
+(`tuliovilar3@hotmail.com`), "Alterar minha senha" rejeitou senhas diferentes ("As senhas não
+coincidem"), aceitou uma troca válida (confirmado com `supabase.auth.updateUser` retornando sucesso)
+e a senha foi revertida pra `123456` ao final via chamada direta ao Admin API (mesmo mecanismo do
+botão "Redefinir senha", usado aqui só pra restaurar o estado de teste). Pra testar "Redefinir
+senha"/"Excluir" — que só aparecem pra quem é administrador — o usuário autorizou marcar
+temporariamente `usuarios_app.dono = true` no "Teste 1" (revertido pra `false` ao final); com esse
+acesso, criei um usuário descartável "Teste Delete", cliquei "Redefinir senha" nele (confirmado por
+login bem-sucedido com `123456` logo em seguida) e depois "Excluir" com confirmação inline
+(confirmado por query direta: zero linhas em `usuarios_app` e `auth.users` retornando "User not
+found" pro mesmo id — cascade funcionou sem nenhuma linha órfã). Estado final do banco conferido
+idêntico ao inicial (dono/ativo/modo de Túlio Vilar, Teste 1 e Teste 2 sem alteração líquida).
+
+## Mapa de distribuição do rebanho por pasto (Painel + Rebanho por pasto) + edição de contorno por vértice
+
+Pedido do usuário depois de ver um mockup revisado em várias rodadas (ícones reais de Nelore, cores
+extraídas dos PNGs, mapeamento categoria→ícone confirmado, escala de tamanho ajustada por
+legibilidade em vez de proporção anatômica estrita). Três entregas: mapa com ícones no Painel, o
+mesmo mapa + métricas novas em "Rebanho por pasto", e edição de contorno vértice a vértice em Gestão
+de Áreas (antes só dava pra "desenhar de novo e substituir").
+
+**Ícones reais**: os 7 PNGs (fundo transparente, silhueta realista) ficam em
+`public/icones-categoria/` (`touro.png`, `vaca.png`, `boi.png`, `garrote.png`, `novilha.png`,
+`bezerro.png`, `bezerra.png`) — vieram de uma pasta local do usuário, copiados uma vez, sem processo
+de geração (diferente dos ícones do PWA, que foram rasterizados de um SVG). `lib/categoria-icones.ts`
+centraliza o mapeamento:
+
+- **Por papel** (a maioria das categorias): `Bezerras Mamando`→bezerra, `Bezerros Mamando`→bezerro,
+  `Novilhas`→novilha (todas as eras, inclusive `Novilha Descarte`), `Touros`→touro,
+  `Matrizes em Reprodução`/`Matrizes Descarte`→vaca.
+- **`Garrotes e Bois`** é o único papel que muda de ícone internamente: garrote quando a era é
+  `08-12`/`12-24`, boi quando é `24-36`/`36+` — é a mesma linhagem (macho castrado), só que "Boi" é a
+  categoria adulta dela, sem nenhuma relação com "Touro" (que é um papel próprio, reprodutor).
+- **`Outros`** (sexo livre, sem ícone dedicado) cai num fallback só por sexo + era, ignorando o papel
+  (que nesse caso não diz nada sozinho): `00-08`→bezerro/bezerra, `08-12`/`12-24`→garrote/novilha,
+  `24-36`/`36+`→boi/vaca. Touro fica de fora desse fallback de propósito — só quem está de fato no
+  papel `Touros` vira ícone de touro.
+
+`TIER_SIZE_PX` (adulto 40px, jovem 37px, bezerro 33px) foi ajustado várias vezes com o usuário — a
+diferença entre os três acabou bem mais sutil do que uma proporção anatômica real sugeriria (uma
+proporção estrita por altura de cernelha deixava jovem/bezerro pequenos demais pra reconhecer a
+forma num marcador de mapa), decisão explícita de legibilidade sobre fidelidade.
+
+**`components/fazendas/MapaDistribuicaoRebanho.tsx`**: componente novo, somente leitura (sem
+`onDesenhado`, diferente de `MapaPastos.tsx`) — satélite Esri, contorno de fazenda(s) tracejado,
+polígonos de pasto coloridos (clicáveis, com `<Tooltip>` nativo do react-leaflet), e um `<Marker>`
+por categoria presente em cada pasto usando `L.icon` com o PNG real. Posição de cada ícone dentro do
+pasto é calculada sem nenhuma lib nova: centróide = média aritmética dos vértices do anel externo do
+polígono (não é o centróide de área verdadeiro, só uma aproximação suficiente pra um pasto pequeno),
+e quando há mais de uma categoria elas se distribuem num pequeno anel ao redor do centróide
+(`raioIcones` = 16% da menor dimensão do bounding box), com uma correção simples de `cos(latitude)`
+pra compensar a distorção de longitude em latitudes distantes do equador. `<Tooltip>` em cada ícone
+mostra a categoria em destaque + quantidade + peso médio no hover, sem precisar de tooltip customizado
+com mouse-tracking.
+
+**`lib/distribuicao-pasto.ts`**: função pura `montarDistribuicaoPorPasto(linhas, pastosBase,
+categoriasInfo)` que agrupa o retorno cru de `fn_relatorio_rebanho_por_pasto` (mesma função já usada
+pelo relatório) por pasto e por ícone — duas categorias do sistema que caem no mesmo ícone (ex.:
+Garrote 08-12 e Garrote 12-24) somam quantidade e recalculam peso médio ponderado no mesmo marcador,
+em vez de duplicar ícone. Reaproveitada pelas duas telas (Painel e Rebanho por pasto) sem duplicar a
+lógica de agrupamento — só a busca dos dados (`pastosBase`/`categoriasInfo`/linhas) é feita
+separadamente em cada página, seguindo o padrão já estabelecido (ex.: "Lotação atual por pasto" em
+Relatório de Lotação já buscava pastos+`fn_relatorio_rebanho_por_pasto` por fazenda do mesmo jeito).
+
+**Painel** (`app/page.tsx`): seção nova "Mapa do rebanho por pasto", condicional a
+`configuracoes.controla_pasto` (mesmo princípio de todo o resto do controle por pasto — sem isso só
+existe o pasto "Geral", que também pode ter contorno e aparecer no mapa, mas a seção não teria
+propósito). Busca `pastos` (com `geometria`/`area_ha`/`cor`) + `categorias_animal` (papel/sexo/era) +
+`fazendas.geometria` das fazendas selecionadas + `fn_relatorio_rebanho_por_pasto` uma vez por fazenda
+selecionada (fotografia de **hoje**, igual ao resto do Painel, não do período filtrado — a mesma
+distinção já documentada pra "Lotação atual" vs. os gráficos do período). Painel de detalhe ao lado
+do mapa (`DetalhePastoDistribuicao`) mostra área útil/rebanho/lotação + lista de categorias com ícone,
+nome, peso médio e quantidade — clicar num pasto ou ícone do mapa seleciona o pasto que aparece nesse
+painel; sem seleção, mostra o primeiro pasto com contorno.
+
+**Rebanho por pasto** (`app/relatorio-rebanho-por-pasto/page.tsx`): o mesmo mapa aparece acima da
+tabela (só quando algum pasto tem contorno — `temPastoComContorno`), reaproveitando exatamente os
+mesmos `linhas` que a tabela já usa (sem chamada adicional ao banco pro mapa). Cada card de pasto no
+`rowSpan` da coluna "Pasto" ganhou três linhas novas abaixo da quantidade — peso médio (ponderado,
+mesmo cálculo que já existia pro total geral, agora também por pasto), área e lotação (UA/ha,
+`(peso vivo total / 450) / área_ha`) — tanto na tabela (`md:` acima) quanto nos cards (mobile).
+Clicar numa linha de pasto na tabela ou no mapa sincroniza a seleção nos dois sentidos
+(`pastoSelecionadoMapaId`), com destaque `bg-brand-100` na linha correspondente.
+
+**Edição de contorno por vértice** (`components/fazendas/MapaPastos.tsx`): descoberta de
+implementação — o `leaflet-draw` já anexa um `editing` (`L.Edit.Poly`) a **qualquer** `L.Polygon`
+assim que o pacote é importado, sem precisar do `FeatureGroup`/toolbar completo que a limitação
+anterior (documentada na Fase 1 do mapa) tentava evitar. Um componente novo,
+`EdicaoVerticesPasto`, monta o pasto em edição como um `L.Polygon` **imperativo** (via `L.geoJSON(...).getLayers()[0]`,
+fora do fluxo declarativo de `<GeoJSON>`) e chama `layer.editing.enable()` — isso sozinho já dá os
+vértices arrastáveis nativos do Leaflet, sem tocar em nenhum outro pasto. O pasto em edição
+(`pastoEmEdicaoId`, prop nova) é excluído da lista de `<GeoJSON>` declarativas enquanto dura a
+edição, e a ferramenta de "desenhar novo pasto" (`ControleDesenho`) some da toolbar nesse período —
+as duas formas de alterar geometria nunca ficam disponíveis ao mesmo tempo.
+
+`MapaPastos` virou um `forwardRef` (`MapaPastosHandle` exportado) — `obterGeometriaEditada()` lê a
+camada em edição (guardada num ref compartilhado, `layerEmEdicaoRef`, passado pro componente filho) e
+devolve `{ geometria, areaHa }` já recalculado via `calcularAreaHa` (mesma função de sempre, de
+`lib/kml.ts`), sem o componente precisar saber nada de Supabase — mantém o princípio já documentado
+de "componente burro" (Fase 1 do mapa). `GestaoAreasPanel.tsx` ganha o estado (`pastoEmEdicaoId`,
+`salvandoEdicaoVertices`) e os botões: um ícone de lápis ("Editar contorno") por pasto na lista, só
+habilitado se o pasto tiver `geometria` e nenhum outro pasto já estiver em edição; ao clicar, o
+mesmo card de detalhe que já mostrava "Área: X ha" abaixo do mapa vira um card de edição
+(`Salvar contorno`/`Cancelar`), reaproveitando a mesma posição na tela. Salvar chama
+`obterGeometriaEditada()` via ref e faz um `update` simples em `pastos` (mesmo formato de
+`geometria`/`area_ha` já usado no fluxo de "substituir pasto existente" via desenho) — a
+reconciliação de área (`fn_validar_area_pasto`) roda igual, sem nenhuma exceção pro caminho de
+edição por vértice.
+
+Verificado no navegador (`FAZENDA TESTE`, pasto "Piquete 1"): Painel mostrando o mapa com os números
+reais de hoje (924 cabeças totais, pasto "Piquete 1" com 33 cabeças/3 categorias batendo com o banco);
+"Rebanho por pasto" com o mesmo mapa e as 3 métricas novas por pasto (peso médio/área/lotação
+conferidos manualmente pela fórmula); ícones carregando de verdade (`naturalWidth: 2000`,
+`complete: true`) nos dois lugares. Edição de vértice: entrar em modo de edição escondeu a
+ferramenta "Desenhar polígono" e mostrou 30 marcadores `leaflet-editing-icon` (vértices + pontos
+médios) arrastáveis sobre o contorno real; "Salvar contorno" gravou a geometria de volta no banco
+(área recalculada bateu com o valor original, 0,76 ha, confirmando o round-trip
+Leaflet→GeoJSON→`calcularAreaHa`→Supabase sem perda de precisão); "Cancelar" saiu do modo de edição
+sem gravar nada. Arrastar um vértice de verdade via clique-e-arraste não foi possível simular neste
+ambiente de teste automatizado (a ferramenta de screenshot não funciona sem o painel de preview
+visível), mas o mecanismo de drag em si é código nativo do `leaflet-draw`, não deste projeto — só a
+leitura/gravação ao salvar (código novo) foi validada ponta a ponta.

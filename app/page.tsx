@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import dynamic from 'next/dynamic'
+import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatArea, formatLotacao, formatPeso, formatQuantidade } from '@/lib/format'
@@ -14,6 +16,19 @@ import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import { useAuth } from '@/contexts/AuthContext'
 import InicioCampo from '@/components/campo/InicioCampo'
+import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
+import { ICONE_SRC } from '@/lib/categoria-icones'
+import {
+  montarDistribuicaoPorPasto,
+  type CategoriaAnimalInfo,
+  type LinhaPastoRaw,
+  type PastoBaseInfo,
+} from '@/lib/distribuicao-pasto'
+
+// leaflet acessa `window` na importação — precisa ficar fora do SSR
+const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/MapaDistribuicaoRebanho'), {
+  ssr: false,
+})
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
@@ -91,6 +106,12 @@ function PainelDashboard() {
   const [fluxoLinhas, setFluxoLinhas] = useState<LinhaFluxoRebanho[]>([])
   const [loadingFluxo, setLoadingFluxo] = useState(true)
 
+  const [controlaPasto, setControlaPasto] = useState(false)
+  const [pastosDistribuicao, setPastosDistribuicao] = useState<PastoDistribuicao[]>([])
+  const [fazendasGeometriaMapa, setFazendasGeometriaMapa] = useState<Geometry[]>([])
+  const [loadingMapa, setLoadingMapa] = useState(false)
+  const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
+
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
 
@@ -161,6 +182,72 @@ function PainelDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaIds, dataInicio, dataFim, periodoInvalido])
+
+  useEffect(() => {
+    supabase
+      .from('configuracoes')
+      .select('controla_pasto')
+      .single()
+      .then(({ data }) => setControlaPasto(data?.controla_pasto ?? false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!controlaPasto || fazendaIds.length === 0) {
+      setPastosDistribuicao([])
+      setFazendasGeometriaMapa([])
+      return
+    }
+    let cancelado = false
+    setLoadingMapa(true)
+    setPastoSelecionadoMapaId(null)
+
+    Promise.all([
+      supabase
+        .from('pastos')
+        .select('id, nome, area_ha, cor, geometria, ativo, modulo:modulos!modulo_id(fazenda_id)')
+        .eq('ativo', true),
+      supabase.from('fazendas').select('id, nome, geometria').in('id', fazendaIds),
+      supabase.from('categorias_animal').select('id, sexo, era, papel:grupos_categoria_papel(nome)'),
+      Promise.all(
+        fazendaIds.map((fId) =>
+          supabase
+            .rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fId, p_data: hoje })
+            .then((r) => (r.data as LinhaPastoRaw[]) || [])
+        )
+      ),
+    ]).then(([pastosResp, fazendasResp, categoriasResp, resultadosPorFazenda]) => {
+      if (cancelado) return
+
+      const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
+      const pastosBase = new Map<string, PastoBaseInfo>()
+      for (const p of (pastosResp.data as any[]) || []) {
+        pastosBase.set(p.id, {
+          areaHa: p.area_ha,
+          cor: p.cor || '#1C8C7C',
+          geometria: p.geometria ?? null,
+          fazendaNome: nomeFazendaPorId.get(p.modulo?.fazenda_id) ?? '',
+        })
+      }
+
+      const categoriasInfo = new Map<string, CategoriaAnimalInfo>()
+      for (const c of (categoriasResp.data as any[]) || []) {
+        categoriasInfo.set(c.id, { papel: c.papel?.nome ?? '', sexo: c.sexo, era: c.era })
+      }
+
+      const linhas = resultadosPorFazenda.flat()
+      setPastosDistribuicao(montarDistribuicaoPorPasto(linhas, pastosBase, categoriasInfo))
+      setFazendasGeometriaMapa(
+        (fazendasResp.data || []).map((f: any) => f.geometria).filter((g: Geometry | null): g is Geometry => !!g)
+      )
+      setLoadingMapa(false)
+    })
+
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlaPasto, fazendaIds])
 
   const totalCabecas = resumo.reduce((s, r) => s + r.quantidade, 0)
   const pesoMedioGeral = mediaPonderada(resumo.map((r) => ({ valor: r.peso_medio_kg, peso: r.quantidade })))
@@ -403,6 +490,41 @@ function PainelDashboard() {
         </>
       )}
 
+      {controlaPasto && fazendaIds.length > 0 && (
+        <div className="mt-8">
+          <h2 className="mb-1 text-sm font-semibold text-text-primary">Mapa do rebanho por pasto</h2>
+          <p className="mb-3 text-xs text-text-secondary">
+            Distribuição de hoje — clique num pasto ou num ícone pra ver o detalhe.
+          </p>
+          {loadingMapa ? (
+            <div className="h-[480px] animate-pulse rounded-control bg-border" />
+          ) : pastosDistribuicao.filter((p) => p.geometria).length === 0 ? (
+            <div className="rounded-card border border-dashed border-border bg-surface px-6 py-10 text-center">
+              <p className="font-semibold text-text-primary">Nenhum pasto com contorno desenhado ainda</p>
+              <p className="mx-auto mt-1.5 max-w-sm text-sm text-text-secondary">
+                Desenhe ou importe o contorno dos pastos em Fazendas → Gestão de Áreas pra ver o mapa aqui.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <MapaDistribuicaoRebanho
+                fazendasGeometria={fazendasGeometriaMapa}
+                pastos={pastosDistribuicao}
+                pastoSelecionadoId={pastoSelecionadoMapaId}
+                onSelecionarPasto={setPastoSelecionadoMapaId}
+              />
+              <DetalhePastoDistribuicao
+                pasto={
+                  pastosDistribuicao.find((p) => p.id === pastoSelecionadoMapaId) ??
+                  pastosDistribuicao.find((p) => p.geometria) ??
+                  null
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-8 rounded-card border border-border bg-surface p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-text-primary">Movimentações do período</h2>
@@ -496,6 +618,62 @@ function PainelDashboard() {
             />
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function DetalhePastoDistribuicao({ pasto }: { pasto: PastoDistribuicao | null }) {
+  if (!pasto) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-control border border-dashed border-border bg-surface p-4 text-center text-sm text-text-secondary">
+        Selecione um pasto no mapa
+      </div>
+    )
+  }
+
+  const totalQuantidade = pasto.categorias.reduce((s, c) => s + c.quantidade, 0)
+  const pesoVivoTotal = pasto.categorias.reduce((s, c) => s + (c.pesoMedio ?? 0) * c.quantidade, 0)
+  const lotacao = pasto.areaHa && pasto.areaHa > 0 ? pesoVivoTotal / KG_POR_UA / pasto.areaHa : null
+  const categoriasOrdenadas = [...pasto.categorias].sort((a, b) => b.quantidade - a.quantidade)
+
+  return (
+    <div className="rounded-control border border-border bg-surface p-4 text-sm">
+      <p className="font-semibold text-text-primary">{pasto.nome}</p>
+      <p className="text-xs text-text-secondary">{pasto.fazendaNome}</p>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 border-y border-border py-3 text-center">
+        <div>
+          <div className="text-[11px] text-text-secondary">Área útil</div>
+          <div className="font-bold tabular-nums text-text-primary">
+            {pasto.areaHa != null ? formatArea(pasto.areaHa) : '—'}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] text-text-secondary">Rebanho</div>
+          <div className="font-bold tabular-nums text-text-primary">{formatQuantidade(totalQuantidade)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] text-text-secondary">Lotação</div>
+          <div className="font-bold tabular-nums text-text-primary">
+            {lotacao != null ? formatLotacao(lotacao) : '—'}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-2">
+        {categoriasOrdenadas.map((c) => (
+          <div key={c.codigo + c.nome} className="flex items-center gap-2.5">
+            <img src={ICONE_SRC[c.codigo]} alt="" className="h-7 w-7 shrink-0 object-contain" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-text-primary">{c.nome}</div>
+              <div className="text-xs text-text-muted">peso médio {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}</div>
+            </div>
+            <div className="shrink-0 font-semibold tabular-nums text-text-primary">
+              {formatQuantidade(c.quantidade)} cab.
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

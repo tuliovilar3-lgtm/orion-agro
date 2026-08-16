@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -17,16 +17,54 @@ export type PastoMapa = {
   cor: string
 }
 
+export type MapaPastosHandle = {
+  obterGeometriaEditada: () => { geometria: Geometry; areaHa: number } | null
+}
+
+// pasto em edição de vértice: renderizado como L.Polygon imperativo (fora
+// do fluxo declarativo de <GeoJSON>) com a edição nativa do leaflet-draw
+// habilitada direto na camada (layer.editing, disponível em qualquer
+// L.Polygon assim que 'leaflet-draw' é importado — não precisa do
+// FeatureGroup/toolbar completo, só isso já dá os vértices arrastáveis).
+// Só o primeiro polígono é editável se a geometria for um MultiPolygon
+// (feature rara aqui — os pastos são sempre desenhados como Polygon único).
+function EdicaoVerticesPasto({
+  pasto,
+  layerRef,
+}: {
+  pasto: PastoMapa
+  layerRef: React.MutableRefObject<L.Polygon | null>
+}) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (!pasto.geometria) return
+    const grupo = L.geoJSON(pasto.geometria as any, {
+      style: { color: pasto.cor, weight: 3, fillColor: pasto.cor, fillOpacity: 0.35 },
+    })
+    const layer = grupo.getLayers()[0] as L.Polygon
+    layer.addTo(map)
+    ;(layer as any).editing.enable()
+    layerRef.current = layer
+    return () => {
+      map.removeLayer(layer)
+      layerRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, pasto.id])
+
+  return null
+}
+
 const ICONE_EXPANDIR =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>'
 const ICONE_RECOLHER =
   '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>'
 
-// só a ferramenta de desenhar polígono — sem edição de vértice nativa
-// nesta fase: "editar" um contorno é desenhar de novo e escolher qual
-// pasto ele substitui (ver ConfirmacaoDesenho no painel que usa este
-// componente) — evita o conflito entre o FeatureGroup exigido pelo
-// leaflet-draw pra edição e as camadas declarativas do react-leaflet
+// só a ferramenta de desenhar polígono novo — a edição de um contorno já
+// existente é feita por vértice (ver EdicaoVerticesPasto acima), não por
+// aqui; as duas coisas nunca ficam ativas ao mesmo tempo (GestaoAreasPanel
+// não deixa iniciar um desenho novo enquanto pastoEmEdicaoId está setado)
 function ControleDesenho({ onDesenhado }: { onDesenhado: (geometria: Geometry, areaHa: number) => void }) {
   const map = useMap()
 
@@ -131,21 +169,32 @@ function AjustarZoom({ geometrias }: { geometrias: Geometry[] }) {
   return null
 }
 
-export default function MapaPastos({
-  fazendaGeometria,
-  pastos,
-  pastoDestacadoId,
-  onDesenhado,
-  onClicarPasto,
-}: {
-  fazendaGeometria: Geometry | null
-  pastos: PastoMapa[]
-  pastoDestacadoId?: string | null
-  onDesenhado: (geometria: Geometry, areaHa: number) => void
-  onClicarPasto: (pastoId: string) => void
-}) {
+const MapaPastos = forwardRef<
+  MapaPastosHandle,
+  {
+    fazendaGeometria: Geometry | null
+    pastos: PastoMapa[]
+    pastoDestacadoId?: string | null
+    pastoEmEdicaoId?: string | null
+    onDesenhado: (geometria: Geometry, areaHa: number) => void
+    onClicarPasto: (pastoId: string) => void
+  }
+>(function MapaPastos(
+  { fazendaGeometria, pastos, pastoDestacadoId, pastoEmEdicaoId, onDesenhado, onClicarPasto },
+  ref
+) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [telaCheia, setTelaCheia] = useState(false)
+  const layerEmEdicaoRef = useRef<L.Polygon | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    obterGeometriaEditada() {
+      const layer = layerEmEdicaoRef.current
+      if (!layer) return null
+      const geojson = (layer as any).toGeoJSON()
+      return { geometria: geojson.geometry as Geometry, areaHa: calcularAreaHa(geojson.geometry) }
+    },
+  }))
 
   useEffect(() => {
     function aoMudarTelaCheia() {
@@ -190,7 +239,7 @@ export default function MapaPastos({
           />
         )}
         {pastos
-          .filter((p) => p.geometria)
+          .filter((p) => p.geometria && p.id !== pastoEmEdicaoId)
           .map((p) => {
             const destacado = p.id === pastoDestacadoId
             return (
@@ -202,11 +251,20 @@ export default function MapaPastos({
               />
             )
           })}
+        {pastoEmEdicaoId &&
+          (() => {
+            const pasto = pastos.find((p) => p.id === pastoEmEdicaoId)
+            return pasto?.geometria ? (
+              <EdicaoVerticesPasto key={pasto.id} pasto={pasto} layerRef={layerEmEdicaoRef} />
+            ) : null
+          })()}
         <AjustarZoom geometrias={todasGeometrias} />
-        <ControleDesenho onDesenhado={onDesenhado} />
+        {!pastoEmEdicaoId && <ControleDesenho onDesenhado={onDesenhado} />}
         <ControleTelaCheia ativo={telaCheia} onToggle={alternarTelaCheia} />
         <InvalidarTamanho gatilho={telaCheia} />
       </MapContainer>
     </div>
   )
-}
+})
+
+export default MapaPastos

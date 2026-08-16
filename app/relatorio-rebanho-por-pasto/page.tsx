@@ -1,10 +1,28 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import dynamic from 'next/dynamic'
+import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
-import { formatQuantidade, formatPeso as formatPesoValor } from '@/lib/format'
+import { formatQuantidade, formatPeso as formatPesoValor, formatArea, formatLotacao } from '@/lib/format'
 import ModuloGate from '@/components/ModuloGate'
+import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
+import {
+  montarDistribuicaoPorPasto,
+  type CategoriaAnimalInfo,
+  type LinhaPastoRaw,
+  type PastoBaseInfo,
+} from '@/lib/distribuicao-pasto'
+
+// leaflet acessa `window` na importação — precisa ficar fora do SSR
+const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/MapaDistribuicaoRebanho'), {
+  ssr: false,
+})
+
+// 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção usada no
+// Painel e no Relatório de Lotação
+const KG_POR_UA = 450
 
 type Fazenda = { id: string; nome: string }
 
@@ -23,6 +41,9 @@ type PastoAgrupado = {
   pasto_nome: string
   linhas: LinhaRelatorio[]
   totalQuantidade: number
+  pesoMedio: number | null
+  areaHa: number | null
+  lotacao: number | null
 }
 
 function formatPeso(kg: number | null) {
@@ -47,6 +68,11 @@ export default function RelatorioRebanhoPorPastoPage() {
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
+  const [pastosBase, setPastosBase] = useState<Map<string, PastoBaseInfo>>(new Map())
+  const [categoriasInfo, setCategoriasInfo] = useState<Map<string, CategoriaAnimalInfo>>(new Map())
+  const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
+  const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
+
   const supabase = createClient()
 
   useEffect(() => {
@@ -61,6 +87,48 @@ export default function RelatorioRebanhoPorPastoPage() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // categorias não mudam por fazenda — carrega uma vez só
+  useEffect(() => {
+    supabase
+      .from('categorias_animal')
+      .select('id, sexo, era, papel:grupos_categoria_papel(nome)')
+      .then(({ data }) => {
+        const mapa = new Map<string, CategoriaAnimalInfo>()
+        for (const c of (data as any[]) || []) {
+          mapa.set(c.id, { papel: c.papel?.nome ?? '', sexo: c.sexo, era: c.era })
+        }
+        setCategoriasInfo(mapa)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    setPastoSelecionadoMapaId(null)
+    if (!fazendaId) {
+      setPastosBase(new Map())
+      setFazendaGeometria(null)
+      return
+    }
+    supabase
+      .from('fazendas')
+      .select('geometria')
+      .eq('id', fazendaId)
+      .single()
+      .then(({ data }) => setFazendaGeometria((data?.geometria as Geometry | null) ?? null))
+    supabase
+      .from('pastos')
+      .select('id, nome, area_ha, cor, geometria, modulo:modulos!modulo_id(fazenda_id)')
+      .then(({ data }) => {
+        const mapa = new Map<string, PastoBaseInfo>()
+        for (const p of (data as any[]) || []) {
+          if (p.modulo?.fazenda_id !== fazendaId) continue
+          mapa.set(p.id, { areaHa: p.area_ha, cor: p.cor || '#1C8C7C', geometria: p.geometria ?? null, fazendaNome: '' })
+        }
+        setPastosBase(mapa)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId])
 
   useEffect(() => {
     if (!fazendaId || !data) {
@@ -86,12 +154,27 @@ export default function RelatorioRebanhoPorPastoPage() {
   linhas.forEach((l) => {
     let grupo = pastos.find((p) => p.pasto_id === l.pasto_id)
     if (!grupo) {
-      grupo = { pasto_id: l.pasto_id, pasto_nome: l.pasto_nome, linhas: [], totalQuantidade: 0 }
+      grupo = {
+        pasto_id: l.pasto_id,
+        pasto_nome: l.pasto_nome,
+        linhas: [],
+        totalQuantidade: 0,
+        pesoMedio: null,
+        areaHa: pastosBase.get(l.pasto_id)?.areaHa ?? null,
+        lotacao: null,
+      }
       pastos.push(grupo)
     }
     grupo.linhas.push(l)
     grupo.totalQuantidade += l.quantidade
   })
+  // peso médio ponderado e lotação, calculados depois de agrupar (precisam do total)
+  for (const p of pastos) {
+    const pesoTotal = p.linhas.reduce((s, l) => s + (l.peso_medio_kg != null ? l.peso_medio_kg * l.quantidade : 0), 0)
+    const quantidadeComPeso = p.linhas.reduce((s, l) => s + (l.peso_medio_kg != null ? l.quantidade : 0), 0)
+    p.pesoMedio = quantidadeComPeso > 0 ? pesoTotal / quantidadeComPeso : null
+    p.lotacao = p.areaHa && p.areaHa > 0 ? pesoTotal / KG_POR_UA / p.areaHa : null
+  }
 
   const totalGeralQuantidade = linhas.reduce((s, l) => s + l.quantidade, 0)
   const totalGeralPeso = linhas.reduce((s, l) => s + (l.peso_medio_kg != null ? l.peso_medio_kg * l.quantidade : 0), 0)
@@ -99,6 +182,13 @@ export default function RelatorioRebanhoPorPastoPage() {
   // quantidade de peso desconhecido puxaria a média pra baixo à toa
   const quantidadeComPeso = linhas.reduce((s, l) => s + (l.peso_medio_kg != null ? l.quantidade : 0), 0)
   const pesoMedioGeral = quantidadeComPeso > 0 ? totalGeralPeso / quantidadeComPeso : null
+
+  const distribuicaoMapa: PastoDistribuicao[] = montarDistribuicaoPorPasto(
+    linhas as LinhaPastoRaw[],
+    pastosBase,
+    categoriasInfo
+  )
+  const temPastoComContorno = distribuicaoMapa.some((p) => p.geometria)
 
   return (
     <ModuloGate modulo="rebanho_por_pasto">
@@ -163,6 +253,18 @@ export default function RelatorioRebanhoPorPastoPage() {
           </div>
         ) : (
           <>
+            {temPastoComContorno && (
+              <div className="mb-6">
+                <MapaDistribuicaoRebanho
+                  fazendasGeometria={fazendaGeometria ? [fazendaGeometria] : []}
+                  pastos={distribuicaoMapa}
+                  pastoSelecionadoId={pastoSelecionadoMapaId}
+                  onSelecionarPasto={setPastoSelecionadoMapaId}
+                  altura={420}
+                />
+              </div>
+            )}
+
             {/* tabela — telas md e acima */}
             <div className="hidden overflow-x-auto rounded-card border border-border bg-surface md:block">
               <table className="w-full border-collapse text-sm">
@@ -179,15 +281,34 @@ export default function RelatorioRebanhoPorPastoPage() {
                   {pastos.map((p, pIdx) => {
                     const zebra = pIdx % 2 === 1
                     return p.linhas.map((l, lIdx) => (
-                      <tr key={`${p.pasto_id}-${l.categoria_id}`} className={zebra ? 'bg-bg' : undefined}>
+                      <tr
+                        key={`${p.pasto_id}-${l.categoria_id}`}
+                        className={`${zebra ? 'bg-bg' : ''} ${pastoSelecionadoMapaId === p.pasto_id ? '!bg-brand-100' : ''}`}
+                      >
                         {lIdx === 0 && (
                           <td
                             rowSpan={p.linhas.length}
-                            className="border-b border-border p-3 align-top font-semibold text-text-primary"
+                            className="cursor-pointer border-b border-border p-3 align-top font-semibold text-text-primary"
+                            onClick={() => setPastoSelecionadoMapaId(p.pasto_id)}
                           >
                             {p.pasto_nome}
-                            <div className="mt-0.5 text-xs font-normal text-text-secondary">
-                              {formatQuantidade(p.totalQuantidade)} cab.
+                            <div className="mt-1.5 flex flex-col gap-0.5 text-xs font-normal text-text-secondary">
+                              <span>{formatQuantidade(p.totalQuantidade)} cab.</span>
+                              <span>
+                                Peso médio <b className="font-semibold text-text-primary">{formatPeso(p.pesoMedio)}</b>
+                              </span>
+                              <span>
+                                Área{' '}
+                                <b className="font-semibold text-text-primary">
+                                  {p.areaHa != null ? `${formatArea(p.areaHa)} ha` : '—'}
+                                </b>
+                              </span>
+                              <span>
+                                Lotação{' '}
+                                <b className="font-semibold text-text-primary">
+                                  {p.lotacao != null ? `${formatLotacao(p.lotacao)} UA/ha` : '—'}
+                                </b>
+                              </span>
                             </div>
                           </td>
                         )}
@@ -225,6 +346,23 @@ export default function RelatorioRebanhoPorPastoPage() {
                   <div className="flex items-baseline justify-between">
                     <span className="font-semibold text-text-primary">{p.pasto_nome}</span>
                     <span className="text-xs text-text-secondary">{formatQuantidade(p.totalQuantidade)} cab.</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-text-secondary">
+                    <span>
+                      Peso médio <b className="font-semibold text-text-primary">{formatPeso(p.pesoMedio)}</b>
+                    </span>
+                    <span>
+                      Área{' '}
+                      <b className="font-semibold text-text-primary">
+                        {p.areaHa != null ? `${formatArea(p.areaHa)} ha` : '—'}
+                      </b>
+                    </span>
+                    <span>
+                      Lotação{' '}
+                      <b className="font-semibold text-text-primary">
+                        {p.lotacao != null ? `${formatLotacao(p.lotacao)} UA/ha` : '—'}
+                      </b>
+                    </span>
                   </div>
                   <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5">
                     {p.linhas.map((l) => (

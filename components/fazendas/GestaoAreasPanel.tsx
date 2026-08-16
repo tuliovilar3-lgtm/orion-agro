@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
@@ -8,7 +8,7 @@ import Required from '@/components/Required'
 import { formatArea } from '@/lib/format'
 import { corCategorica } from '@/lib/relatorio-cores'
 import { parseKml } from '@/lib/kml'
-import type { PastoMapa } from '@/components/fazendas/MapaPastos'
+import type { PastoMapa, MapaPastosHandle } from '@/components/fazendas/MapaPastos'
 
 // leaflet acessa `window` na importação — precisa ficar fora do SSR
 const MapaPastos = dynamic(() => import('@/components/fazendas/MapaPastos'), { ssr: false })
@@ -67,6 +67,15 @@ function IconExcluir() {
   )
 }
 
+function IconEditarContorno() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="M15 5l4 4" />
+    </svg>
+  )
+}
+
 export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [modulos, setModulos] = useState<Modulo[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
@@ -92,6 +101,10 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [atribuirNovoModuloId, setAtribuirNovoModuloId] = useState('')
   const [atribuirPastoExistenteId, setAtribuirPastoExistenteId] = useState('')
   const [salvandoAtribuicao, setSalvandoAtribuicao] = useState(false)
+
+  const [pastoEmEdicaoId, setPastoEmEdicaoId] = useState<string | null>(null)
+  const [salvandoEdicaoVertices, setSalvandoEdicaoVertices] = useState(false)
+  const mapaPastosRef = useRef<MapaPastosHandle>(null)
 
   const supabase = createClient()
 
@@ -126,6 +139,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     setPastoSelecionadoMapaId(null)
     setDesenhoPendente(null)
     setRevisaoImportacao(null)
+    setPastoEmEdicaoId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 
@@ -430,6 +444,37 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
       }
     }
     setDesenhoPendente(null)
+    await carregarModulosPastos()
+  }
+
+  function handleIniciarEdicaoVertices(p: Pasto) {
+    setPastoSelecionadoMapaId(p.id)
+    setPastoEmEdicaoId(p.id)
+  }
+
+  function handleCancelarEdicaoVertices() {
+    // nada foi salvo — sair do modo de edição já reverte o mapa pro
+    // contorno declarativo original (MapaPastos desmonta a camada editável)
+    setPastoEmEdicaoId(null)
+  }
+
+  async function handleSalvarEdicaoVertices() {
+    const resultado = mapaPastosRef.current?.obterGeometriaEditada()
+    if (!resultado) {
+      alert('Não foi possível ler o contorno editado.')
+      return
+    }
+    setSalvandoEdicaoVertices(true)
+    const { error } = await supabase
+      .from('pastos')
+      .update({ geometria: resultado.geometria, area_ha: resultado.areaHa })
+      .eq('id', pastoEmEdicaoId as string)
+    setSalvandoEdicaoVertices(false)
+    if (error) {
+      alert('Erro ao salvar contorno: ' + error.message)
+      return
+    }
+    setPastoEmEdicaoId(null)
     await carregarModulosPastos()
   }
 
@@ -817,6 +862,23 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                             </div>
                           ) : (
                             <div className="flex items-center justify-end gap-2 text-text-secondary">
+                              {p.geometria && (
+                                <button
+                                  type="button"
+                                  disabled={!!pastoEmEdicaoId && pastoEmEdicaoId !== p.id}
+                                  title={pastoEmEdicaoId === p.id ? 'Cancelar edição de contorno' : 'Editar contorno'}
+                                  className={`disabled:cursor-not-allowed disabled:opacity-40 ${
+                                    pastoEmEdicaoId === p.id ? 'text-brand-500' : 'hover:text-brand-500'
+                                  }`}
+                                  onClick={() =>
+                                    pastoEmEdicaoId === p.id
+                                      ? handleCancelarEdicaoVertices()
+                                      : handleIniciarEdicaoVertices(p)
+                                  }
+                                >
+                                  <IconEditarContorno />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 disabled={processandoPastoId === p.id || (p.ativo && ativosDoModulo.length <= 1)}
@@ -909,29 +971,57 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
 
         <div className="space-y-4">
           <MapaPastos
+            ref={mapaPastosRef}
             fazendaGeometria={fazendaGeometria}
             pastos={pastosParaMapa}
             pastoDestacadoId={pastoSelecionadoMapaId}
+            pastoEmEdicaoId={pastoEmEdicaoId}
             onDesenhado={handleDesenhado}
             onClicarPasto={setPastoSelecionadoMapaId}
           />
 
-          {pastoSelecionadoMapa && (
-            <div className="rounded-control border border-border bg-surface p-4 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-text-primary">{pastoSelecionadoMapa.nome}</span>
+          {pastoEmEdicaoId && pastoSelecionadoMapa ? (
+            <div className="rounded-control border border-brand-500 bg-brand-100 p-4 text-sm">
+              <p className="font-semibold text-text-primary">Editando contorno — {pastoSelecionadoMapa.nome}</p>
+              <p className="mt-1 text-text-secondary">
+                Arraste os vértices do polígono no mapa pra ajustar o traçado.
+              </p>
+              <div className="mt-3 flex gap-2">
                 <button
                   type="button"
-                  className="text-xs text-text-secondary underline"
-                  onClick={() => setPastoSelecionadoMapaId(null)}
+                  onClick={handleCancelarEdicaoVertices}
+                  className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
                 >
-                  Fechar
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={salvandoEdicaoVertices}
+                  onClick={handleSalvarEdicaoVertices}
+                  className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {salvandoEdicaoVertices ? 'Salvando...' : 'Salvar contorno'}
                 </button>
               </div>
-              <p className="mt-1 text-text-secondary">
-                Área: {pastoSelecionadoMapa.area_ha != null ? `${formatArea(pastoSelecionadoMapa.area_ha)} ha` : '—'}
-              </p>
             </div>
+          ) : (
+            pastoSelecionadoMapa && (
+              <div className="rounded-control border border-border bg-surface p-4 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-text-primary">{pastoSelecionadoMapa.nome}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-text-secondary underline"
+                    onClick={() => setPastoSelecionadoMapaId(null)}
+                  >
+                    Fechar
+                  </button>
+                </div>
+                <p className="mt-1 text-text-secondary">
+                  Área: {pastoSelecionadoMapa.area_ha != null ? `${formatArea(pastoSelecionadoMapa.area_ha)} ha` : '—'}
+                </p>
+              </div>
+            )
           )}
         </div>
       </div>
