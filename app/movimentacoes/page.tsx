@@ -521,6 +521,11 @@ export default function MovimentacoesPage() {
   // ao editar um lançamento já existente na listagem abaixo
   const [formularioAberto, setFormularioAberto] = useState(false)
 
+  // passo 1 (tipo) colapsa numa barra compacta assim que o usuário escolhe
+  // um tipo — a grade de 9 botões só precisa ficar visível durante a
+  // escolha em si, não o tempo todo enquanto preenche os passos 2-4
+  const [tipoConfirmado, setTipoConfirmado] = useState(false)
+
   const [modalClienteAberto, setModalClienteAberto] = useState(false)
   const [novoClienteNome, setNovoClienteNome] = useState('')
   const [novoClienteTipo, setNovoClienteTipo] = useState<TipoClienteFornecedor>('AMBOS')
@@ -1105,6 +1110,7 @@ export default function MovimentacoesPage() {
   }, [filtroFazendaId, filtroTipo, filtroCategoriaId, filtroDataInicio, filtroDataFim])
 
   function limparFormulario() {
+    setTipoConfirmado(false)
     setData('')
     setFazendaId('')
     setCategoriaId('')
@@ -1290,6 +1296,7 @@ export default function MovimentacoesPage() {
     setConfirmarMudancaSexo(false)
     setSafraNascimento(m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '')
     setProprietarioId(m.proprietario_id || '')
+    setTipoConfirmado(true)
     setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -1362,6 +1369,7 @@ export default function MovimentacoesPage() {
     setNovoAcrescimoNomeCriar('')
     setNovoAcrescimoValor('')
     setConfirmarMudancaSexo(false)
+    setTipoConfirmado(true)
     setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -1391,6 +1399,7 @@ export default function MovimentacoesPage() {
         pesoMedio: r.peso_medio_kg != null ? String(r.peso_medio_kg) : '',
       }))
     )
+    setTipoConfirmado(true)
     setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -2234,50 +2243,77 @@ export default function MovimentacoesPage() {
         {/* FORMULÁRIO */}
         <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter}>
           {/* PASSO 1 — TIPO */}
-          <div className="rounded-card border border-border bg-surface">
-            <div className="flex items-start gap-3 border-b border-border p-5">
-              <StepBadge n={1} />
-              <div>
-                <h3 className="text-sm font-bold text-text-primary">Tipo de movimentação</h3>
-                <p className="mt-0.5 text-xs text-text-secondary">
-                  A cor indica entrada, saída ou reclassificação interna do rebanho.
-                </p>
+          {tipoConfirmado ? (
+            // colapsa numa barra compacta assim que o tipo é escolhido — a
+            // grade de 9 botões só precisa ficar visível durante a escolha
+            // em si. sticky pra continuar visível (com a cor da direção)
+            // enquanto o usuário rola pelos passos 2-4; top-14 no mobile
+            // pra grudar logo abaixo da topbar fixa (56px), top-0 no
+            // desktop (sem topbar, só a sidebar lateral)
+            <div className="sticky top-14 z-20 flex items-center gap-3 rounded-card border border-border bg-surface p-3 shadow-sm md:top-0">
+              <span
+                className={`flex h-9 w-9 flex-none items-center justify-center rounded-control p-2 ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].bg} ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].fg}`}
+              >
+                <IconeMovimentacao tipo={tipo} />
+              </span>
+              <span className="text-sm font-bold text-text-primary">{LABEL_TIPO[tipo]}</span>
+              <button
+                type="button"
+                onClick={() => setTipoConfirmado(false)}
+                className="ml-auto text-xs font-semibold text-brand-500 underline"
+              >
+                Trocar
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-card border border-border bg-surface">
+              <div className="flex items-start gap-3 border-b border-border p-5">
+                <StepBadge n={1} />
+                <div>
+                  <h3 className="text-sm font-bold text-text-primary">Tipo de movimentação</h3>
+                  <p className="mt-0.5 text-xs text-text-secondary">
+                    A cor indica entrada, saída ou reclassificação interna do rebanho.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-4 p-5">
+                {DIRECAO_GRUPOS.map((g) => {
+                  const itens = TIPOS.filter((t) => DIRECAO_TIPO[t] === g.direcao)
+                  const cls = DIRECAO_CLASSES[g.direcao]
+                  return (
+                    <div key={g.direcao}>
+                      <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                        <span className={`h-2 w-2 rounded-sm ${cls.bg}`} />
+                        {g.label}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {itens.map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => {
+                              setTipo(t)
+                              setTipoConfirmado(true)
+                            }}
+                            className={`flex items-center gap-2.5 rounded-control border p-2.5 text-left transition-colors ${
+                              tipo === t
+                                ? 'border-brand-500 bg-brand-100/40 ring-2 ring-brand-100'
+                                : 'border-border hover:border-text-muted'
+                            }`}
+                          >
+                            <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-control p-1.5 ${cls.bg} ${cls.fg}`}>
+                              <IconeMovimentacao tipo={t} />
+                            </span>
+                            <span className="text-xs font-semibold leading-tight text-text-primary">{LABEL_TIPO[t]}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
-            <div className="space-y-4 p-5">
-              {DIRECAO_GRUPOS.map((g) => {
-                const itens = TIPOS.filter((t) => DIRECAO_TIPO[t] === g.direcao)
-                const cls = DIRECAO_CLASSES[g.direcao]
-                return (
-                  <div key={g.direcao}>
-                    <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-text-muted">
-                      <span className={`h-2 w-2 rounded-sm ${cls.bg}`} />
-                      {g.label}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {itens.map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setTipo(t)}
-                          className={`flex items-center gap-2.5 rounded-control border p-2.5 text-left transition-colors ${
-                            tipo === t
-                              ? 'border-brand-500 bg-brand-100/40 ring-2 ring-brand-100'
-                              : 'border-border hover:border-text-muted'
-                          }`}
-                        >
-                          <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-control p-1.5 ${cls.bg} ${cls.fg}`}>
-                            <IconeMovimentacao tipo={t} />
-                          </span>
-                          <span className="text-xs font-semibold leading-tight text-text-primary">{LABEL_TIPO[t]}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          )}
 
           {/* PASSO 2 — QUANDO E ONDE */}
           <div className="mt-4 rounded-card border border-border bg-surface">

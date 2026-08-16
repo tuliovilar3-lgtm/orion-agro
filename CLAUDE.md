@@ -2428,3 +2428,44 @@ Proprietário em 180px (ambas maiores que antes), sem rolagem horizontal (901px 
 ao trocar pro tipo Nascimento; abrir a edição de uma Compra avulsa existente mostrou "Proprietário do
 lote" corretamente posicionado no passo 2, logo abaixo do hint "Efetivo atual: 600 cabeças → 601
 após salvar". Edição de teste fechada sem salvar ao final.
+
+### Terceira rodada: campo de valor quase invisível, passo 1 colapsável, tipo escolhido fica sticky
+
+**Campo de valor da tabela de lote quase invisível**: bug real encontrado pelo usuário —
+`w-24 flex-none` (largura fixa pretendida pro `<select>` de tipo de preço) foi combinado com
+`inputSmClass`, que já embute `w-full`. Duas classes de largura no mesmo elemento é um conflito
+Tailwind clássico: o navegador aplicou `w-full` (não o `w-24` pretendido), o select tomou quase toda
+a largura da coluna, e o campo de valor ao lado ficou espremido a poucos pixels. Corrigido
+empilhando select e input (cada um em largura cheia da coluna, um embaixo do outro) em vez de lado a
+lado — elimina o conflito de raiz e, como bônus, sobra espaço pro rótulo completo do select (voltou
+a usar `c.label` em vez de `CAMPOS_PRECO_CURTO`, que continua usado só nos valores calculados
+abaixo). Verificado via `getBoundingClientRect`: campo de valor foi de alguns pixels pra 224px de
+largura (igual ao select, coluna de 240px).
+
+**Passo 1 (tipo) colapsa depois de escolhido**: pedido do usuário — a grade de 9 botões (com seções
+Entradas/Saídas/Reclassificação) ocupava um espaço vertical grande de forma permanente pra uma
+escolha única. Estado novo, `tipoConfirmado` (default `false`) — enquanto a grade completa fica
+visível, escolher um tipo (`onClick` de cada botão) chama `setTipo(t)` **e** `setTipoConfirmado(true)`
+juntos, colapsando o passo 1 numa barra compacta de uma linha (ícone + nome do tipo + link "Trocar",
+que volta `tipoConfirmado` pra `false` e reabre a grade). `iniciarEdicao`/`iniciarEdicaoGrupo`/
+`iniciarEdicaoDesmame` também setam `tipoConfirmado = true` — reabrir a edição de um lançamento já
+existente mostra a barra colapsada direto (o tipo já é conhecido, não precisa forçar reescolha).
+`limparFormulario()` reseta pra `false` — um lançamento novo sempre começa com a grade aberta, já
+que o tipo default (`NASCIMENTO`, primeiro da lista) nunca foi uma escolha consciente do usuário.
+
+**Barra colapsada fica `sticky` ao rolar**: pedido de acompanhamento — "o tipo escolhido deve
+aparecer fixo mesmo rolando pra baixo". A própria barra colapsada (não um elemento duplicado) ganha
+`sticky top-14 md:top-0 z-20` — no mobile, `top-14` (56px) gruda logo abaixo da topbar fixa do app
+(medida em 45px de altura via `getBoundingClientRect`, sobra ~11px de respiro, sem sobreposição); no
+desktop, sem topbar (só a sidebar lateral), `top-0` gruda no topo absoluto. Mostra só ícone + nome do
+tipo (cor de fundo já comunica a direção, sem precisar repetir "Entrada/Saída/Interno" por extenso)
+— decisão deliberada de não recriar o "Resumo em tempo real" removido na rodada anterior por
+duplicar dado; aqui é só uma informação nova (contexto de tipo) que não aparece em nenhum outro
+lugar da tela uma vez que o passo 1 colapsa.
+
+Verificado no navegador: type-check limpo; campo de valor confirmado em 224px (era poucos pixels);
+"Novo Lançamento" → grade completa aberta por padrão; clicar em "Compra" colapsa pra barra "Compra /
+Trocar" com o passo 2 aparecendo logo abaixo; rolar a página com `window.scrollTo` confirmou a barra
+saindo de `top: 168px` pra `top: 0px` (grudada) no desktop; em viewport mobile (375×812), a barra
+grudou em `top: 56px` sem sobrepor a topbar fixa (`bottom: 45px`); "Trocar" reabre a grade completa
+corretamente. Formulário fechado sem salvar ao final.
