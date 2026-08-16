@@ -2245,3 +2245,99 @@ estava selecionada no filtro. Nota de processo: um erro de compilação real apa
 `useMemo` antiga e o novo `useState` coexistiam) — confirmado como real (não estático/obsoleto) só
 depois de reproduzir numa aba nova do navegador, e corrigido antes de prosseguir. Movimentação de
 teste revertida (proprietário limpo) ao final.
+
+## Redesign de Lançamento de Movimentações (duas colunas, Novo Lançamento colapsável, excluir)
+
+`app/movimentacoes/page.tsx` foi redesenhado do zero na camada de apresentação — **toda a lógica de
+estado, efeitos e handlers foi preservada verbatim** (saldo por fazenda/pasto, cascata módulo→pasto,
+lote de nascimento por safra, proprietário, desconto/acréscimo rateado, lançamento em lote com
+`grupo_lancamento_id`, edição com checagem de trajetória) — só o JSX de retorno mudou. Motivação do
+usuário: a tela antiga desperdiçava espaço (coluna única estreita, categorias empilhadas em cartões
+repetidos) e não dava nenhuma visão do efetivo da fazenda nem do total antes de salvar. Um mockup
+interativo (HTML solto, iterado em várias rodadas com o usuário — cores por direção, ícones,
+listagem restilizada) foi aprovado antes da implementação real.
+
+**Layout em duas colunas** (`lg:grid-cols-[minmax(0,1fr)_360px]`): à esquerda, o formulário em 4
+blocos numerados (`StepBadge`) — 1) Tipo de movimentação, 2) Quando e onde, 3) Categorias e
+quantidades, 4) Detalhes adicionais; à direita, um painel fixo (`sticky top-6`) com "Resumo em tempo
+real" (tipo/ícone, data, fazenda, total de animais, peso total) e "Efetivo da fazenda" (antes/depois
+do lançamento).
+
+**Ícone + cor por direção**: cada um dos 9 `TipoMovimentacao` tem um `Direcao` (`entrada`/`saida`/
+`interno`) fixo em `DIRECAO_TIPO` — Nascimento/Compra = entrada (`brand-100`/`brand-500`); Venda em
+Pé/Venda Abate/Morte/Consumo-Doação = saída (`warning-bg`/`warning` — **nunca `error`**, mesmo
+princípio já documentado em `FluxoRebanho`: saída não é "ruim", é o propósito comercial do rebanho);
+Desmame/Mudança de Categoria/Transferência = interno/reclassificação (`bg`/`text-secondary`, nenhum
+dos três muda o total de cabeças do grupo). O seletor de tipo (passo 1) agrupa os 9 botões em 3
+seções visuais por essa mesma direção. `IconeMovimentacao` é um componente novo com um `<svg>`
+traço próprio por tipo (mesmo padrão de `lib/nav-icons.tsx` — `viewBox 24`, `strokeWidth 1.75`,
+`fill none`) — não reaproveita nem embute PNG algum; os ícones do mockup (símbolos do usuário,
+recoloridos via `mask-image`) só existiram no protótipo HTML descartável, nunca no código real.
+
+**Categorias em tabela** (passo 3, só quando `isLoteCategoria`): substituiu os cartões empilhados por
+linha por uma `<table>` de verdade — colunas condicionais (peso morto/rendimento só em Venda Abate,
+preço só quando `isComPreco`, safra/lote e proprietário só quando aplicável), com peso total por
+linha sempre calculado e visível, e um hint discreto "N disp." abaixo da quantidade quando há saldo
+carregado (pedido explícito do usuário: "mostrar a quantidade disponível depois de selecionar a
+categoria, de forma discreta"). Fora do modo lote, o formulário de categoria única ganhou o mesmo
+hint de saldo (por fazenda e por pasto) diretamente abaixo do campo Quantidade.
+
+**Atalhos de data**: botões "Hoje"/"Ontem" abaixo do campo de data (`definirDataAtalho`, só chama
+`setData` com a data calculada — não há lógica nova de validação).
+
+**Efetivo da fazenda**: `fn_resumo_rebanho_atual({ p_fazenda_ids: [fazendaOrigemParaPasto] })` (mesma
+RPC já usada no Painel) é buscada num `useEffect` novo sempre que a fazenda em contexto muda, e a
+soma de `quantidade` vira o hint "Efetivo atual: N cabeças" ao lado do seletor de fazenda e o valor
+"Antes" no resumo lateral. "Depois" é `efetivoFazenda + sinal × totalCabecasFormulario`, onde o sinal
+é `+1` pra entrada, `-1` pra saída ou Transferência (sai da fazenda mostrada, que é sempre a origem),
+e `0` pra Desmame/Mudança de Categoria (reclassificação interna, não muda o total da fazenda) — é só
+uma prévia informativa, nunca participa de validação real de saldo (isso continua sendo
+`fn_saldo_categoria`/`fn_saldo_categoria_pasto`, checado como sempre no `handleSubmit`).
+
+**Listagem redesenhada**: os cards de "Últimos lançamentos" (avulsos e agrupados) ganharam ícone por
+direção, tokens do design system e a mesma barra de filtros de antes, só reestilizada — nenhuma
+mudança de comportamento de busca/filtro.
+
+### "+ Novo Lançamento" — formulário começa fechado
+
+Pedido do usuário depois de ver o redesign: "acima dos filtros de Últimos lançamentos, deve haver um
+botão em destaque de Novo Lançamento e, só após clicar nele, abre a parte de preenchimento". Estado
+novo, `formularioAberto` (default `false`) — enquanto fechado, a tela mostra só um botão em destaque
+(`border-dashed border-brand-500 bg-brand-100/40`, ícone "+" circular) acima da listagem; ao clicar,
+abre o grid de formulário+resumo com um cabeçalho "Novo lançamento" (ou "Editar lançamento", quando
+`editandoId`/`editandoGrupoId` está setado) e um link "Fechar". `iniciarEdicao`/`iniciarEdicaoGrupo`/
+`iniciarEdicaoDesmame` (chamadas pelos botões "Editar" da listagem) setam `formularioAberto = true`,
+então clicar em "Editar" sempre abre o formulário automaticamente, mesmo que estivesse fechado.
+`handleFecharFormulario` (botão "Fechar", e também o botão "Cancelar edição" já existente dentro do
+formulário) decide entre `cancelarEdicao()` (se havia uma edição em andamento — desfaz e recolhe) ou
+só `limparFormulario()` + recolher (lançamento novo abandonado) — sem duplicar lógica de limpeza.
+
+### Excluir lançamento
+
+Pedido do usuário: além de editar, precisa dar pra excluir um lançamento já salvo, "porém com as
+condições já definidas, não deixar o saldo de qualquer categoria ficar negativo em nenhum momento".
+Essa regra **já existia no banco antes desta mudança** — `trg_validar_delete_movimentacao` (trigger
+`before delete on movimentacoes_rebanho`, ver `fn_validar_delete_movimentacao` no schema) chama
+`fn_checar_edicao_movimentacao(..., p_quantidade: 0)` (delta zero simula a remoção do efeito da
+linha) e bloqueia com exceção se o saldo por pasto ficaria negativo em qualquer data futura, e o
+mesmo princípio se repete pra saldo por lote de nascimento (`fn_checar_saldo_lote_futuro`) e por
+proprietário (`fn_checar_saldo_proprietario_futuro`) quando esses campos estão preenchidos na linha.
+Por isso o frontend não duplica nenhuma dessas contas — `excluirMovimentacao(id)`/`excluirGrupo(rows)`
+só tentam o `delete` (linha única ou `.in('id', ids)` pro grupo inteiro) e repassam a mensagem de erro
+do banco se a trigger bloquear, mesmo princípio já usado pra excluir fazenda/pasto/módulo/pessoa.
+
+Confirmação é **inline**, nunca `window.confirm()` (mesmo padrão de sempre no app): o botão "Excluir"
+ao lado de "Editar" em cada card da listagem (avulso ou agrupado) vira "Excluir este lançamento?" /
+"Excluir as N linhas?" com "Sim, excluir"/"Cancelar", controlado por `confirmarExclusaoMovId`/
+`confirmarExclusaoGrupoId`. Se o lançamento excluído era o que estava sendo editado no formulário
+aberto, `excluirMovimentacao`/`excluirGrupo` chamam `cancelarEdicao()` pra não deixar o formulário
+apontando pra um registro que não existe mais.
+
+Verificado no navegador: type-check limpo (`npx tsc --noEmit`); tela abre com o formulário fechado e
+só o botão "+ Novo Lançamento" visível acima da listagem; clicar nele abre os 4 blocos + resumo
+lateral; "Fechar" recolhe de volta; clicar em "Editar" num lançamento existente abre o formulário
+automaticamente com o cabeçalho "Editar lançamento"; clicar em "Excluir" troca os botões da linha
+pela confirmação inline "Excluir este lançamento? / Sim, excluir / Cancelar", e "Cancelar" descarta
+sem chamar o banco (o caminho de exclusão em si não foi exercido contra dados reais nesta verificação,
+já que dependia de escolher uma linha de teste descartável — a garantia de não deixar saldo negativo
+vem da trigger já existente e testada em migrações anteriores, não de lógica nova no frontend).

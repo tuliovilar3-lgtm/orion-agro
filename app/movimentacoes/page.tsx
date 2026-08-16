@@ -90,6 +90,139 @@ function round2(n: number) {
   return Math.round(n * 100) / 100
 }
 
+// ---------------------------------------------------------------------
+// redesign: ícone + cor por direção (entrada/saída/interno). Nunca usa
+// success/error (reservados pra confirmação/bloqueio — mesmo princípio já
+// documentado em FluxoRebanho: saída não é "ruim", é o propósito comercial
+// do rebanho).
+// ---------------------------------------------------------------------
+type Direcao = 'entrada' | 'saida' | 'interno'
+
+const DIRECAO_TIPO: Record<TipoMovimentacao, Direcao> = {
+  NASCIMENTO: 'entrada',
+  COMPRA: 'entrada',
+  VENDA_PE: 'saida',
+  VENDA_ABATE: 'saida',
+  MORTE: 'saida',
+  CONSUMO_DOACAO: 'saida',
+  DESMAME: 'interno',
+  MUDANCA_CATEGORIA: 'interno',
+  TRANSFERENCIA: 'interno',
+}
+
+const DIRECAO_LABEL: Record<Direcao, string> = {
+  entrada: 'Entradas',
+  saida: 'Saídas',
+  interno: 'Reclassificação / interno',
+}
+
+const DIRECAO_GRUPOS: { direcao: Direcao; label: string }[] = [
+  { direcao: 'entrada', label: 'Entradas' },
+  { direcao: 'saida', label: 'Saídas' },
+  { direcao: 'interno', label: 'Reclassificação / interno' },
+]
+
+const DIRECAO_CLASSES: Record<Direcao, { bg: string; fg: string }> = {
+  entrada: { bg: 'bg-brand-100', fg: 'text-brand-500' },
+  saida: { bg: 'bg-warning-bg', fg: 'text-warning' },
+  interno: { bg: 'bg-bg', fg: 'text-text-secondary' },
+}
+
+function StepBadge({ n }: { n: number }) {
+  return (
+    <div className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">
+      {n}
+    </div>
+  )
+}
+
+// símbolos por tipo — recriados como traço (mesmo padrão de ícone já usado
+// no resto do app: viewBox 24, stroke 1.75), inspirados nos símbolos que o
+// usuário desenhou (seta de entrada/saída espelhadas, cifrão, círculo com X
+// vazado, garfo+faca, gota cortada, setas de ciclo/troca)
+function IconeMovimentacao({ tipo }: { tipo: TipoMovimentacao }) {
+  const p = {
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.75,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    className: 'h-full w-full',
+  }
+  switch (tipo) {
+    case 'NASCIMENTO':
+      return (
+        <svg {...p}>
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      )
+    case 'COMPRA':
+      return (
+        <svg {...p}>
+          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          <path d="M7 10l5 5 5-5" />
+          <path d="M12 15V3" />
+        </svg>
+      )
+    case 'VENDA_PE':
+      return (
+        <svg {...p}>
+          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          <path d="M7 9l5-5 5 5" />
+          <path d="M12 4v11" />
+        </svg>
+      )
+    case 'VENDA_ABATE':
+      return (
+        <svg {...p}>
+          <path d="M12 3v18" />
+          <path d="M16.5 8c0-1.9-1.8-3-4.5-3-3 0-4.8 1.4-4.8 3.2 0 1.9 1.8 2.7 4.8 3.3 3 .6 4.8 1.4 4.8 3.3 0 1.8-1.8 3.2-4.8 3.2-2.7 0-4.5-1.1-4.5-3" />
+        </svg>
+      )
+    case 'MORTE':
+      return (
+        <svg {...p}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9 9l6 6M15 9l-6 6" />
+        </svg>
+      )
+    case 'CONSUMO_DOACAO':
+      return (
+        <svg {...p}>
+          <rect x="4" y="9" width="16" height="11" rx="1.5" />
+          <path d="M4 9h16M12 9v11M8 9c-1.5 0-3-1-3-2.5S6.5 4 8 5.5C9 4 12 5 12 9c0-4 3-5 4-3.5C17.5 4 19 5 19 6.5S17.5 9 16 9" />
+        </svg>
+      )
+    case 'DESMAME':
+      return (
+        <svg {...p}>
+          <path d="M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11Z" />
+          <path d="M4 4l16 16" />
+        </svg>
+      )
+    case 'MUDANCA_CATEGORIA':
+      return (
+        <svg {...p}>
+          <path d="M17 3l4 4-4 4M21 7H9M7 21l-4-4 4-4M3 17h12" />
+        </svg>
+      )
+    case 'TRANSFERENCIA':
+      return (
+        <svg {...p}>
+          <path d="M4 7h11l-3-3M4 7l3 3" />
+          <path d="M20 17H9l3 3M20 17l-3-3" />
+        </svg>
+      )
+  }
+}
+
+const inputClass =
+  'w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500'
+const inputSmClass =
+  'w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500'
+const labelClass = 'mb-1.5 block text-sm font-medium text-text-secondary'
+
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Sexo = 'MACHO' | 'FEMEA'
 type Categoria = {
@@ -350,11 +483,31 @@ export default function MovimentacoesPage() {
     mensagem: string
   } | null>(null)
 
+  // exclusão de lançamento — confirmação inline (nunca window.confirm,
+  // mesmo padrão já usado em módulo/pasto/pessoa/fazenda). O banco
+  // (trg_validar_delete_movimentacao) é a fonte de verdade da regra
+  // "não deixar nenhum saldo ficar negativo" — o frontend só tenta a
+  // operação e repassa o erro se for bloqueada, sem checagem prévia
+  // duplicada.
+  const [confirmarExclusaoMovId, setConfirmarExclusaoMovId] = useState<string | null>(null)
+  const [confirmarExclusaoGrupoId, setConfirmarExclusaoGrupoId] = useState<string | null>(null)
+  const [excluindo, setExcluindo] = useState(false)
+
+  // formulário começa fechado — só abre ao clicar em "+ Novo Lançamento" ou
+  // ao editar um lançamento já existente na listagem abaixo
+  const [formularioAberto, setFormularioAberto] = useState(false)
+
   const [modalClienteAberto, setModalClienteAberto] = useState(false)
   const [novoClienteNome, setNovoClienteNome] = useState('')
   const [novoClienteTipo, setNovoClienteTipo] = useState<TipoClienteFornecedor>('AMBOS')
   const [novoClienteDocumento, setNovoClienteDocumento] = useState('')
   const [salvandoCliente, setSalvandoCliente] = useState(false)
+
+  // efetivo atual da fazenda em contexto — hint ao lado do seletor de
+  // fazenda e base do bloco "Efetivo da fazenda" no resumo lateral;
+  // puramente informativo, não participa de nenhum cálculo de saldo real
+  // (isso continua sendo fn_saldo_categoria/fn_saldo_categoria_pasto)
+  const [efetivoFazenda, setEfetivoFazenda] = useState<number | null>(null)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -498,6 +651,30 @@ export default function MovimentacoesPage() {
   const valorLiquidoPreviewAtual =
     valorBrutoPreviewAtual !== null ? round2(valorBrutoPreviewAtual - totalDescontos + totalAcrescimos) : null
 
+  // totais do lançamento em andamento — só pro resumo em tempo real
+  // (coluna direita), nunca usados pra validação/payload
+  const totalCabecasFormulario = isDesmame
+    ? linhasDesmame.reduce((s, l) => s + (parseInt(l.quantidade, 10) || 0), 0)
+    : isLoteCategoria
+      ? linhas.reduce((s, l) => s + (parseInt(l.quantidade, 10) || 0), 0)
+      : parseInt(quantidade, 10) || 0
+  const totalPesoFormulario = isDesmame
+    ? linhasDesmame.reduce((s, l) => s + (parseFloat(l.pesoMedio) || 0) * (parseInt(l.quantidade, 10) || 0), 0)
+    : isLoteCategoria
+      ? linhas.reduce((s, l) => s + (calcularLinha(l).pesoTotal ?? 0), 0)
+      : pesoTotalCalculado ?? 0
+  // Desmame e Mudança de Categoria são reclassificação (não mudam o total
+  // do rebanho da fazenda); Transferência tira da fazenda de origem, que é
+  // a fazenda mostrada no resumo (fazendaOrigemParaPasto)
+  const sinalEfetivo = isTransferencia
+    ? -1
+    : DIRECAO_TIPO[tipo] === 'entrada'
+      ? 1
+      : DIRECAO_TIPO[tipo] === 'saida'
+        ? -1
+        : 0
+  const efetivoDepois = efetivoFazenda != null ? efetivoFazenda + sinalEfetivo * totalCabecasFormulario : null
+
   useEffect(() => {
     if (restringirOrigemABezerro && categoriaId) {
       const aindaValida = categoriasVisiveis.some((c) => c.id === categoriaId)
@@ -633,6 +810,29 @@ export default function MovimentacoesPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [precisaChecarSaldo, fazendaParaSaldo, categoriaId, data, pastoId])
+
+  // efetivo atual da fazenda em contexto (ver estado acima) — puramente
+  // informativo, roda em paralelo às checagens reais de saldo acima
+  useEffect(() => {
+    if (!fazendaOrigemParaPasto) {
+      setEfetivoFazenda(null)
+      return
+    }
+    let cancelado = false
+    supabase.rpc('fn_resumo_rebanho_atual', { p_fazenda_ids: [fazendaOrigemParaPasto] }).then(({ data: linhas, error }) => {
+      if (cancelado) return
+      if (error) {
+        setEfetivoFazenda(null)
+        return
+      }
+      const rows = (linhas as { quantidade: number }[]) || []
+      setEfetivoFazenda(rows.reduce((s, r) => s + r.quantidade, 0))
+    })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaOrigemParaPasto])
 
   // trocar de tipo invalida as linhas antigas (categorias visíveis podem
   // mudar, ex.: NASCIMENTO só mostra bezerro) — edição nunca usa lote,
@@ -989,6 +1189,13 @@ export default function MovimentacoesPage() {
     setRendimentoCarcaca(valor)
   }
 
+  // atalhos de data — additivas, apenas preenchem o campo já existente
+  function definirDataAtalho(offsetDias: number) {
+    const d = new Date()
+    d.setDate(d.getDate() + offsetDias)
+    setData(d.toISOString().slice(0, 10))
+  }
+
   function iniciarEdicao(m: Movimentacao) {
     setEditandoId(m.id)
     setEditandoGrupoId(null)
@@ -1035,6 +1242,7 @@ export default function MovimentacoesPage() {
     setConfirmarMudancaSexo(false)
     setSafraNascimento(m.safra_nascimento_ano_inicio != null ? String(m.safra_nascimento_ano_inicio) : '')
     setProprietarioId(m.proprietario_id || '')
+    setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1106,6 +1314,7 @@ export default function MovimentacoesPage() {
     setNovoAcrescimoNomeCriar('')
     setNovoAcrescimoValor('')
     setConfirmarMudancaSexo(false)
+    setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1134,6 +1343,7 @@ export default function MovimentacoesPage() {
         pesoMedio: r.peso_medio_kg != null ? String(r.peso_medio_kg) : '',
       }))
     )
+    setFormularioAberto(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1142,6 +1352,46 @@ export default function MovimentacoesPage() {
     setEditandoGrupoId(null)
     setEditandoGrupoLinhasOriginais([])
     limparFormulario()
+    setFormularioAberto(false)
+  }
+
+  // fecha o painel de lançamento — se estava editando, desfaz a edição
+  // (mesmo caminho de cancelarEdicao); se era um lançamento novo, só
+  // limpa os campos e recolhe
+  function handleFecharFormulario() {
+    if (editandoId || editandoGrupoId) {
+      cancelarEdicao()
+    } else {
+      limparFormulario()
+      setFormularioAberto(false)
+    }
+  }
+
+  async function excluirMovimentacao(id: string) {
+    setExcluindo(true)
+    const { error } = await supabase.from('movimentacoes_rebanho').delete().eq('id', id)
+    setExcluindo(false)
+    if (error) {
+      alert('Erro ao excluir: ' + error.message)
+      return
+    }
+    setConfirmarExclusaoMovId(null)
+    if (editandoId === id) cancelarEdicao()
+    await carregarMovimentacoes()
+  }
+
+  async function excluirGrupo(rows: Movimentacao[]) {
+    setExcluindo(true)
+    const ids = rows.map((r) => r.id)
+    const { error } = await supabase.from('movimentacoes_rebanho').delete().in('id', ids)
+    setExcluindo(false)
+    if (error) {
+      alert('Erro ao excluir: ' + error.message)
+      return
+    }
+    setConfirmarExclusaoGrupoId(null)
+    if (editandoGrupoLinhasOriginais.some((r) => ids.includes(r.id))) cancelarEdicao()
+    await carregarMovimentacoes()
   }
 
   function limparFiltros() {
@@ -1899,587 +2149,451 @@ export default function MovimentacoesPage() {
 
   return (
     <ModuloGate modulo="movimentacoes">
-    <div className="p-8 max-w-2xl">
-      <h1 className="text-2xl font-bold mb-6">Lançamento de Movimentações de Rebanho</h1>
+    <div className="mx-auto max-w-7xl px-6 py-8 md:px-10">
+      <h1 className="text-2xl font-extrabold text-text-primary">Lançamento de Movimentações de Rebanho</h1>
+      <p className="mt-1 text-sm text-text-secondary">
+        Escolha o tipo, preencha data e local, e lance uma ou várias categorias de uma vez — os totais e o efetivo
+        da fazenda são calculados em tempo real ao lado.
+      </p>
 
-      <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter} className="mb-8 space-y-3 border p-4 rounded">
-        <h2 className="font-semibold">{editandoId ? 'Editar movimentação' : 'Nova movimentação'}</h2>
-
-        <div>
-          <label className="block text-sm mb-1">Tipo</label>
-          <select
-            className="border rounded px-3 py-2 w-full"
-            value={tipo}
-            onChange={(e) => setTipo(e.target.value as TipoMovimentacao)}
-          >
-            {TIPOS.map((t) => (
-              <option key={t} value={t}>
-                {LABEL_TIPO[t]}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">
-            Data
-            <Required />
-          </label>
-          <input
-            type="date"
-            max={hoje}
-            className="border rounded px-3 py-2 w-full"
-            value={data}
-            onChange={(e) => setData(e.target.value)}
-            required
-          />
-        </div>
-
-        {!isTransferencia && (
-          <div>
-            <label className="block text-sm mb-1">
-              Fazenda
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={fazendaId}
-              onChange={(e) => setFazendaId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {fazendas.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {isTransferencia && (
-          <>
-            <div>
-              <label className="block text-sm mb-1">
-                Fazenda origem
-                <Required />
-              </label>
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={fazendaOrigemId}
-                onChange={(e) => setFazendaOrigemId(e.target.value)}
-                required
-              >
-                <option value="">Selecione...</option>
-                {fazendas.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.nome}
-                  </option>
-                ))}
-              </select>
+      {!formularioAberto ? (
+        <button
+          type="button"
+          onClick={() => setFormularioAberto(true)}
+          className="mt-6 flex w-full items-center gap-3 rounded-card border-2 border-dashed border-brand-500 bg-brand-100/40 px-5 py-4 text-left transition-colors hover:bg-brand-100 sm:w-auto"
+        >
+          <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-brand-500 text-lg font-bold text-white">+</span>
+          <span>
+            <span className="block text-sm font-bold text-brand-500">Novo Lançamento</span>
+            <span className="block text-xs text-text-secondary">Registrar uma movimentação de rebanho</span>
+          </span>
+        </button>
+      ) : (
+      <>
+      <div className="mt-6 flex items-center justify-between">
+        <h2 className="text-lg font-bold text-text-primary">
+          {editandoId || editandoGrupoId ? 'Editar lançamento' : 'Novo lançamento'}
+        </h2>
+        <button
+          type="button"
+          onClick={handleFecharFormulario}
+          className="text-xs font-medium text-text-secondary underline hover:text-text-primary"
+        >
+          Fechar
+        </button>
+      </div>
+      <div className="mt-2 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+        {/* FORMULÁRIO */}
+        <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter}>
+          {/* PASSO 1 — TIPO */}
+          <div className="rounded-card border border-border bg-surface">
+            <div className="flex items-start gap-3 border-b border-border p-5">
+              <StepBadge n={1} />
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">Tipo de movimentação</h3>
+                <p className="mt-0.5 text-xs text-text-secondary">
+                  A cor indica entrada, saída ou reclassificação interna do rebanho.
+                </p>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm mb-1">
-                Fazenda destino
-                <Required />
-              </label>
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={fazendaDestinoId}
-                onChange={(e) => setFazendaDestinoId(e.target.value)}
-                required
-              >
-                <option value="">Selecione...</option>
-                {fazendas.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.nome}
-                  </option>
-                ))}
-              </select>
+            <div className="space-y-4 p-5">
+              {DIRECAO_GRUPOS.map((g) => {
+                const itens = TIPOS.filter((t) => DIRECAO_TIPO[t] === g.direcao)
+                const cls = DIRECAO_CLASSES[g.direcao]
+                return (
+                  <div key={g.direcao}>
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                      <span className={`h-2 w-2 rounded-sm ${cls.bg}`} />
+                      {g.label}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {itens.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setTipo(t)}
+                          className={`flex items-center gap-2.5 rounded-control border p-2.5 text-left transition-colors ${
+                            tipo === t
+                              ? 'border-brand-500 bg-brand-100/40 ring-2 ring-brand-100'
+                              : 'border-border hover:border-text-muted'
+                          }`}
+                        >
+                          <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-control p-1.5 ${cls.bg} ${cls.fg}`}>
+                            <IconeMovimentacao tipo={t} />
+                          </span>
+                          <span className="text-xs font-semibold leading-tight text-text-primary">{LABEL_TIPO[t]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          </>
-        )}
-
-        {mostrarSeletorModuloOrigem && (
-          <div>
-            <label className="block text-sm mb-1">
-              Módulo
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={moduloId}
-              onChange={(e) => setModuloId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {modulosOrigemDisponiveis.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.nome}
-                </option>
-              ))}
-            </select>
           </div>
-        )}
 
-        {mostrarSeletorPastoOrigem && (
-          <div>
-            <label className="block text-sm mb-1">
-              Pasto
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={pastoId}
-              onChange={(e) => setPastoId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {pastosOrigemDoModulo.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {mostrarSeletorModuloDestino && (
-          <div>
-            <label className="block text-sm mb-1">
-              Módulo destino (fazenda destino)
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={moduloDestinoId}
-              onChange={(e) => setModuloDestinoId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {modulosDestinoDisponiveis.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {mostrarSeletorPastoDestino && (
-          <div>
-            <label className="block text-sm mb-1">
-              Pasto destino (fazenda destino)
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={pastoDestinoId}
-              onChange={(e) => setPastoDestinoId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {pastosDestinoDoModulo.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {bloqueadoPorSaldoInicial && (
-          <div className="border border-red-400 bg-red-50 rounded p-3 text-sm text-red-800">
-            {fazendasSemSaldoInicial.length === 1
-              ? `A fazenda "${fazendasSemSaldoInicial[0].nome}" ainda não teve o saldo inicial preenchido e confirmado.`
-              : `As fazendas ${fazendasSemSaldoInicial.map((f) => `"${f.nome}"`).join(' e ')} ainda não tiveram o saldo inicial preenchido e confirmado.`}{' '}
-            Isso precisa ser feito antes de lançar qualquer outra movimentação.{' '}
-            <a href="/fazendas" className="underline font-medium">
-              Ir para Fazendas
-            </a>
-          </div>
-        )}
-
-        {isDesmame ? (
-        <>
-        <div>
-          <label className="block text-sm mb-1">
-            Categoria (bezerro a desmamar)
-            <Required />
-          </label>
-          <select
-            className="border rounded px-3 py-2 w-full"
-            value={categoriaId}
-            onChange={(e) => setCategoriaId(e.target.value)}
-            required
-          >
-            <option value="">Selecione...</option>
-            {categoriasVisiveis.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nome}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">
-            Categoria destino (após desmame)
-            <Required />
-          </label>
-          <select
-            className="border rounded px-3 py-2 w-full"
-            value={categoriaDestinoId}
-            onChange={(e) => setCategoriaDestinoId(e.target.value)}
-            required
-          >
-            <option value="">Selecione...</option>
-            {categoriasDestinoDesmame.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nome}
-              </option>
-            ))}
-          </select>
-          {!categoriaOrigemSelecionada && (
-            <p className="text-xs text-gray-500 mt-1">Selecione a categoria de origem primeiro.</p>
-          )}
-        </div>
-
-        <div className="border rounded p-3 space-y-3">
-          <div className="text-sm font-medium">
-            Lotes desmamados (por safra de nascimento)
-            <Required />
-          </div>
-          {linhasDesmame.map((linha, i) => {
-            return (
-              <div key={i} className="border rounded p-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">Linha {i + 1}</span>
-                  {linhasDesmame.length > 1 && (
-                    <button
-                      type="button"
-                      className="text-red-600 text-xs underline"
-                      onClick={() => removerLinhaDesmame(i)}
-                    >
-                      Remover
-                    </button>
-                  )}
-                </div>
+          {/* PASSO 2 — QUANDO E ONDE */}
+          <div className="mt-4 rounded-card border border-border bg-surface">
+            <div className="flex items-start gap-3 border-b border-border p-5">
+              <StepBadge n={2} />
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">Quando e onde</h3>
+                <p className="mt-0.5 text-xs text-text-secondary">
+                  Data do evento, fazenda e, se o controle por pasto estiver ligado, módulo e pasto.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="block text-xs mb-1">
-                    Lote (safra de nascimento)
+                  <label className={labelClass}>
+                    Data
                     <Required />
                   </label>
-                  <select
-                    className="border rounded px-2 py-1 w-full text-sm"
-                    value={linha.safraNascimento}
-                    onChange={(e) => atualizarLinhaDesmame(i, { safraNascimento: e.target.value })}
-                  >
-                    <option value="">Selecione...</option>
-                    {lotesDesmameDisponiveis.map((l) => (
-                      <option key={l.safra} value={String(l.safra)}>
-                        Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs mb-1">
-                      Quantidade
-                      <Required />
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.quantidade}
-                      onChange={(e) => atualizarLinhaDesmame(i, { quantidade: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs mb-1">
-                      Peso médio (kg)
-                      <Required />
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.pesoMedio}
-                      onChange={(e) => atualizarLinhaDesmame(i, { pesoMedio: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-          <button type="button" className="text-sm text-blue-600 underline" onClick={adicionarLinhaDesmame}>
-            + Adicionar lote
-          </button>
-        </div>
-        </>
-        ) : !isLoteCategoria ? (
-        <>
-        <div>
-          <label className="block text-sm mb-1">
-            {isMudancaCategoria ? 'Categoria origem' : 'Categoria'}
-            <Required />
-          </label>
-          <select
-            className="border rounded px-3 py-2 w-full"
-            value={categoriaId}
-            onChange={(e) => setCategoriaId(e.target.value)}
-            required
-          >
-            <option value="">Selecione...</option>
-            {categoriasVisiveis.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nome}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {isMudancaCategoria && (
-          <div>
-            <label className="block text-sm mb-1">
-              Categoria destino
-              <Required />
-            </label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={categoriaDestinoId}
-              onChange={(e) => setCategoriaDestinoId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {categorias.filter((c) => !categoriaEhBezerro(c)).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {mudancaEntreSexosDiferentes && (
-          <div className="border border-yellow-400 bg-yellow-50 rounded p-3 text-sm">
-            <p className="text-yellow-800">
-              Atenção: essa mudança é de <strong>{categoriaOrigemSelecionada?.sexo}</strong> para{' '}
-              <strong>{categoriaDestinoSelecionada?.sexo}</strong>. Isso normalmente não deveria acontecer —
-              confirme só se for um ajuste de estoque intencional.
-            </p>
-            <label className="flex items-center gap-2 mt-2">
-              <input
-                type="checkbox"
-                checked={confirmarMudancaSexo}
-                onChange={(e) => setConfirmarMudancaSexo(e.target.checked)}
-              />
-              Confirmo que é uma mudança entre sexos diferentes (ajuste de estoque)
-            </label>
-          </div>
-        )}
-
-        <div>
-          <label className="block text-sm mb-1">
-            Quantidade
-            <Required />
-          </label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            className="border rounded px-3 py-2 w-full"
-            value={quantidade}
-            onChange={(e) => setQuantidade(e.target.value)}
-            required
-          />
-          {precisaChecarSaldo && fazendaParaSaldo && categoriaId && data && (
-            <p
-              className={`text-xs mt-1 ${
-                saldoDisponivel !== null && quantidade && parseInt(quantidade, 10) > saldoDisponivel
-                  ? 'text-red-600'
-                  : 'text-gray-500'
-              }`}
-            >
-              {carregandoSaldo
-                ? 'Consultando saldo...'
-                : saldoDisponivel !== null
-                  ? `Saldo disponível: ${formatQuantidade(saldoDisponivel)} cabeça(s)${
-                      quantidade && parseInt(quantidade, 10) > saldoDisponivel
-                        ? ' — saldo indisponível dessa categoria para a data desejada'
-                        : ''
-                    }`
-                  : ''}
-            </p>
-          )}
-          {precisaChecarSaldo && mostrarSeletorPastoOrigem && pastoId && data && (
-            <p
-              className={`text-xs mt-1 ${
-                saldoPastoDisponivel !== null && quantidade && parseInt(quantidade, 10) > saldoPastoDisponivel
-                  ? 'text-red-600'
-                  : 'text-gray-500'
-              }`}
-            >
-              {carregandoSaldoPasto
-                ? 'Consultando saldo no pasto...'
-                : saldoPastoDisponivel !== null
-                  ? `Saldo disponível nesse pasto: ${formatQuantidade(saldoPastoDisponivel)} cabeça(s)${
-                      quantidade && parseInt(quantidade, 10) > saldoPastoDisponivel
-                        ? ' — saldo indisponível dessa categoria nesse pasto para a data desejada'
-                        : ''
-                    }`
-                  : ''}
-            </p>
-          )}
-        </div>
-
-        {(isSimples || isMudancaCategoria || isComPreco) && (
-          <div>
-            <label className="block text-sm mb-1">
-              Peso médio (kg)
-              <Required />
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              className="border rounded px-3 py-2 w-full"
-              value={pesoMedio}
-              onChange={(e) => setPesoMedio(e.target.value)}
-              required
-            />
-            {isComPreco && (
-              <p className="text-xs text-gray-500 mt-1">
-                Peso total (calculado): {pesoTotalCalculado !== null ? `${formatPeso(pesoTotalCalculado)} kg` : '—'}
-              </p>
-            )}
-          </div>
-        )}
-
-        {mostrarCamposLoteSingular &&
-          (isNascimento || tipo === 'COMPRA' ? (
-            <div>
-              <label className="block text-sm mb-1">
-                Safra do bezerro
-                <Required />
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                className="border rounded px-3 py-2 w-full"
-                value={formatSafraInput(safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                onChange={(e) => setSafraNascimento(extrairAnoSafraDigitado(e.target.value))}
-                onFocus={(e) => e.target.select()}
-              />
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm mb-1">
-                Lote de nascimento (safra)
-                <Required />
-              </label>
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={safraNascimento}
-                onChange={(e) => setSafraNascimento(e.target.value)}
-              >
-                <option value="">Selecione...</option>
-                {lotesDisponiveisSingular.map((l) => (
-                  <option key={l.safra} value={String(l.safra)}>
-                    Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
-
-        {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && (
-          <div>
-            <label className="block text-sm mb-1">Proprietário do lote</label>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={proprietarioId}
-              onChange={(e) => setProprietarioId(e.target.value)}
-            >
-              <option value="">Sem proprietário atribuído</option>
-              {proprietariosDisponiveis.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nome}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {isVendaAbate && (
-          <div>
-            <label className="block text-sm mb-1">
-              Peso morto (kg) ou rendimento de carcaça (%) — por animal
-              <Required />
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="Peso morto (kg)"
-                className="border rounded px-3 py-2 w-full"
-                value={pesoMorto}
-                onChange={(e) => handlePesoMortoChange(e.target.value)}
-              />
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="Rendimento (%)"
-                className="border rounded px-3 py-2 w-full"
-                value={rendimentoCarcaca}
-                onChange={(e) => handleRendimentoChange(e.target.value)}
-              />
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Preencha um dos dois — o outro é calculado automaticamente.
-              {arrobaPorAnimalPreview !== null && ` Peso em arrobas: ${formatDecimal(arrobaPorAnimalPreview)} @/animal.`}
-            </p>
-          </div>
-        )}
-
-        </>
-        ) : (
-        <div className="border rounded p-3 space-y-3">
-          <div className="text-sm font-medium">
-            Categorias
-            <Required />
-          </div>
-          {linhas.map((linha, i) => {
-            const { pesoTotal: pesoTotalLinha, arrobaPorAnimal, valorTotal: valorTotalLinha } = calcularLinha(linha)
-            const saldo = saldosLinhas[i]
-            const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
-            return (
-              <div key={i} className="border rounded p-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">Linha {i + 1}</span>
-                  {linhas.length > 1 && (
-                    <button type="button" className="text-red-600 text-xs underline" onClick={() => removerLinha(i)}>
-                      Remover
+                  <input
+                    type="date"
+                    max={hoje}
+                    className={inputClass}
+                    value={data}
+                    onChange={(e) => setData(e.target.value)}
+                    required
+                  />
+                  <div className="mt-1.5 flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => definirDataAtalho(0)}
+                      className="rounded-full border border-border bg-bg px-2.5 py-1 text-xs font-semibold text-text-secondary hover:border-brand-500 hover:text-brand-500"
+                    >
+                      Hoje
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => definirDataAtalho(-1)}
+                      className="rounded-full border border-border bg-bg px-2.5 py-1 text-xs font-semibold text-text-secondary hover:border-brand-500 hover:text-brand-500"
+                    >
+                      Ontem
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+
+                {!isTransferencia && (
                   <div>
-                    <label className="block text-xs mb-1">
-                      Categoria
+                    <label className={labelClass}>
+                      Fazenda
                       <Required />
                     </label>
                     <select
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.categoriaId}
-                      onChange={(e) => atualizarLinha(i, { categoriaId: e.target.value })}
+                      className={inputClass}
+                      value={fazendaId}
+                      onChange={(e) => setFazendaId(e.target.value)}
+                      required
                     >
+                      <option value="">Selecione...</option>
+                      {fazendas.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.nome}
+                        </option>
+                      ))}
+                    </select>
+                    {efetivoFazenda != null && (
+                      <p className="mt-1.5 text-xs text-text-secondary">
+                        Efetivo atual: <span className="font-semibold text-text-primary">{formatQuantidade(efetivoFazenda)}</span> cabeças
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {isTransferencia && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={labelClass}>
+                      Fazenda origem
+                      <Required />
+                    </label>
+                    <select
+                      className={inputClass}
+                      value={fazendaOrigemId}
+                      onChange={(e) => setFazendaOrigemId(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione...</option>
+                      {fazendas.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.nome}
+                        </option>
+                      ))}
+                    </select>
+                    {efetivoFazenda != null && (
+                      <p className="mt-1.5 text-xs text-text-secondary">
+                        Efetivo atual: <span className="font-semibold text-text-primary">{formatQuantidade(efetivoFazenda)}</span> cabeças
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className={labelClass}>
+                      Fazenda destino
+                      <Required />
+                    </label>
+                    <select
+                      className={inputClass}
+                      value={fazendaDestinoId}
+                      onChange={(e) => setFazendaDestinoId(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione...</option>
+                      {fazendas.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {(mostrarSeletorModuloOrigem || mostrarSeletorPastoOrigem || mostrarSeletorModuloDestino || mostrarSeletorPastoDestino) && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {mostrarSeletorModuloOrigem && (
+                    <div>
+                      <label className={labelClass}>
+                        Módulo
+                        <Required />
+                      </label>
+                      <select className={inputClass} value={moduloId} onChange={(e) => setModuloId(e.target.value)} required>
+                        <option value="">Selecione...</option>
+                        {modulosOrigemDisponiveis.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {mostrarSeletorPastoOrigem && (
+                    <div>
+                      <label className={labelClass}>
+                        Pasto
+                        <Required />
+                      </label>
+                      <select className={inputClass} value={pastoId} onChange={(e) => setPastoId(e.target.value)} required>
+                        <option value="">Selecione...</option>
+                        {pastosOrigemDoModulo.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {mostrarSeletorModuloDestino && (
+                    <div>
+                      <label className={labelClass}>
+                        Módulo destino (fazenda destino)
+                        <Required />
+                      </label>
+                      <select
+                        className={inputClass}
+                        value={moduloDestinoId}
+                        onChange={(e) => setModuloDestinoId(e.target.value)}
+                        required
+                      >
+                        <option value="">Selecione...</option>
+                        {modulosDestinoDisponiveis.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {mostrarSeletorPastoDestino && (
+                    <div>
+                      <label className={labelClass}>
+                        Pasto destino (fazenda destino)
+                        <Required />
+                      </label>
+                      <select
+                        className={inputClass}
+                        value={pastoDestinoId}
+                        onChange={(e) => setPastoDestinoId(e.target.value)}
+                        required
+                      >
+                        <option value="">Selecione...</option>
+                        {pastosDestinoDoModulo.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {bloqueadoPorSaldoInicial && (
+                <div className="rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
+                  {fazendasSemSaldoInicial.length === 1
+                    ? `A fazenda "${fazendasSemSaldoInicial[0].nome}" ainda não teve o saldo inicial preenchido e confirmado.`
+                    : `As fazendas ${fazendasSemSaldoInicial.map((f) => `"${f.nome}"`).join(' e ')} ainda não tiveram o saldo inicial preenchido e confirmado.`}{' '}
+                  Isso precisa ser feito antes de lançar qualquer outra movimentação.{' '}
+                  <a href="/fazendas" className="font-medium underline">
+                    Ir para Fazendas
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* PASSO 3 — CATEGORIAS */}
+          <div className="mt-4 rounded-card border border-border bg-surface">
+            <div className="flex items-start gap-3 border-b border-border p-5">
+              <StepBadge n={3} />
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">
+                  {isDesmame
+                    ? 'Lotes desmamados'
+                    : isMudancaCategoria
+                      ? 'Mudança de categoria'
+                      : isLoteCategoria
+                        ? 'Categorias e quantidades'
+                        : 'Categoria e quantidade'}
+                  <Required />
+                </h3>
+                <p className="mt-0.5 text-xs text-text-secondary">
+                  {isDesmame
+                    ? 'Categoria de origem e destino ficam fixas; as linhas variam por lote de nascimento (safra).'
+                    : isLoteCategoria
+                      ? 'Adicione quantas linhas forem necessárias — os totais são calculados automaticamente.'
+                      : 'Preencha os dados da categoria envolvida.'}
+                </p>
+              </div>
+            </div>
+            <div className="p-5">
+              {isDesmame ? (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className={labelClass}>
+                        Categoria (bezerro a desmamar)
+                        <Required />
+                      </label>
+                      <select className={inputClass} value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)} required>
+                        <option value="">Selecione...</option>
+                        {categoriasVisiveis.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass}>
+                        Categoria destino (após desmame)
+                        <Required />
+                      </label>
+                      <select
+                        className={inputClass}
+                        value={categoriaDestinoId}
+                        onChange={(e) => setCategoriaDestinoId(e.target.value)}
+                        required
+                      >
+                        <option value="">Selecione...</option>
+                        {categoriasDestinoDesmame.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nome}
+                          </option>
+                        ))}
+                      </select>
+                      {!categoriaOrigemSelecionada && (
+                        <p className="mt-1 text-xs text-text-muted">Selecione a categoria de origem primeiro.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-control border border-border p-3">
+                    <div className="mb-2 text-sm font-medium text-text-secondary">
+                      Lotes desmamados (por safra de nascimento)
+                      <Required />
+                    </div>
+                    <div className="space-y-2">
+                      {linhasDesmame.map((linha, i) => (
+                        <div key={i} className="rounded-control border border-border p-2.5">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs text-text-muted">Linha {i + 1}</span>
+                            {linhasDesmame.length > 1 && (
+                              <button
+                                type="button"
+                                className="text-xs text-error underline"
+                                onClick={() => removerLinhaDesmame(i)}
+                              >
+                                Remover
+                              </button>
+                            )}
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-text-secondary">
+                              Lote (safra de nascimento)
+                              <Required />
+                            </label>
+                            <select
+                              className={inputSmClass}
+                              value={linha.safraNascimento}
+                              onChange={(e) => atualizarLinhaDesmame(i, { safraNascimento: e.target.value })}
+                            >
+                              <option value="">Selecione...</option>
+                              {lotesDesmameDisponiveis.map((l) => (
+                                <option key={l.safra} value={String(l.safra)}>
+                                  Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-text-secondary">
+                                Quantidade
+                                <Required />
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                className={inputSmClass}
+                                value={linha.quantidade}
+                                onChange={(e) => atualizarLinhaDesmame(i, { quantidade: e.target.value })}
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-text-secondary">
+                                Peso médio (kg)
+                                <Required />
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                className={inputSmClass}
+                                value={linha.pesoMedio}
+                                onChange={(e) => atualizarLinhaDesmame(i, { pesoMedio: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" className="mt-2 text-sm font-semibold text-brand-500 underline" onClick={adicionarLinhaDesmame}>
+                      + Adicionar lote
+                    </button>
+                  </div>
+                </>
+              ) : !isLoteCategoria ? (
+                <>
+                  <div>
+                    <label className={labelClass}>
+                      {isMudancaCategoria ? 'Categoria origem' : 'Categoria'}
+                      <Required />
+                    </label>
+                    <select className={inputClass} value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)} required>
                       <option value="">Selecione...</option>
                       {categoriasVisiveis.map((c) => (
                         <option key={c.id} value={c.id}>
@@ -2488,8 +2602,51 @@ export default function MovimentacoesPage() {
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs mb-1">
+
+                  {isMudancaCategoria && (
+                    <div className="mt-4">
+                      <label className={labelClass}>
+                        Categoria destino
+                        <Required />
+                      </label>
+                      <select
+                        className={inputClass}
+                        value={categoriaDestinoId}
+                        onChange={(e) => setCategoriaDestinoId(e.target.value)}
+                        required
+                      >
+                        <option value="">Selecione...</option>
+                        {categorias
+                          .filter((c) => !categoriaEhBezerro(c))
+                          .map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nome}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {mudancaEntreSexosDiferentes && (
+                    <div className="mt-4 rounded-control border border-warning bg-warning-bg p-3 text-sm">
+                      <p className="text-text-primary">
+                        Atenção: essa mudança é de <strong>{categoriaOrigemSelecionada?.sexo}</strong> para{' '}
+                        <strong>{categoriaDestinoSelecionada?.sexo}</strong>. Isso normalmente não deveria acontecer —
+                        confirme só se for um ajuste de estoque intencional.
+                      </p>
+                      <label className="mt-2 flex items-center gap-2 text-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={confirmarMudancaSexo}
+                          onChange={(e) => setConfirmarMudancaSexo(e.target.checked)}
+                        />
+                        Confirmo que é uma mudança entre sexos diferentes (ajuste de estoque)
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <label className={labelClass}>
                       Quantidade
                       <Required />
                     </label>
@@ -2497,584 +2654,848 @@ export default function MovimentacoesPage() {
                       type="number"
                       min="1"
                       step="1"
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.quantidade}
-                      onChange={(e) => atualizarLinha(i, { quantidade: e.target.value })}
+                      className={inputClass}
+                      value={quantidade}
+                      onChange={(e) => setQuantidade(e.target.value)}
+                      required
                     />
-                    {precisaChecarSaldo && linha.categoriaId && (
+                    {precisaChecarSaldo && fazendaParaSaldo && categoriaId && data && (
                       <p
-                        className={`text-xs mt-1 ${
-                          saldo != null && quantidadeNum && quantidadeNum > saldo ? 'text-red-600' : 'text-gray-500'
+                        className={`mt-1 text-xs ${
+                          saldoDisponivel !== null && quantidade && parseInt(quantidade, 10) > saldoDisponivel
+                            ? 'text-error'
+                            : 'text-text-secondary'
                         }`}
                       >
-                        {saldo != null
-                          ? `Saldo: ${formatQuantidade(saldo)} cabeça(s)${
-                              quantidadeNum && quantidadeNum > saldo ? ' — saldo indisponível para a data' : ''
-                            }`
-                          : ''}
+                        {carregandoSaldo
+                          ? 'Consultando saldo...'
+                          : saldoDisponivel !== null
+                            ? `Saldo disponível: ${formatQuantidade(saldoDisponivel)} cabeça(s)${
+                                quantidade && parseInt(quantidade, 10) > saldoDisponivel
+                                  ? ' — saldo indisponível dessa categoria para a data desejada'
+                                  : ''
+                              }`
+                            : ''}
+                      </p>
+                    )}
+                    {precisaChecarSaldo && mostrarSeletorPastoOrigem && pastoId && data && (
+                      <p
+                        className={`mt-1 text-xs ${
+                          saldoPastoDisponivel !== null && quantidade && parseInt(quantidade, 10) > saldoPastoDisponivel
+                            ? 'text-error'
+                            : 'text-text-secondary'
+                        }`}
+                      >
+                        {carregandoSaldoPasto
+                          ? 'Consultando saldo no pasto...'
+                          : saldoPastoDisponivel !== null
+                            ? `Saldo disponível nesse pasto: ${formatQuantidade(saldoPastoDisponivel)} cabeça(s)${
+                                quantidade && parseInt(quantidade, 10) > saldoPastoDisponivel
+                                  ? ' — saldo indisponível dessa categoria nesse pasto para a data desejada'
+                                  : ''
+                              }`
+                            : ''}
                       </p>
                     )}
                   </div>
-                </div>
-                {mostrarPesoLinha && (
-                  <div>
-                    <label className="block text-xs mb-1">
-                      Peso médio (kg)
-                      <Required />
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.pesoMedio}
-                      onChange={(e) => atualizarLinha(i, { pesoMedio: e.target.value })}
-                    />
-                  </div>
-                )}
-                {(() => {
-                  const catLinha = categorias.find((c) => c.id === linha.categoriaId)
-                  const linhaEhBezerro = isNascimento || categoriaEhBezerro(catLinha)
-                  if (!linhaEhBezerro) return null
-                  if (isNascimento || tipo === 'COMPRA') {
-                    return (
-                      <div>
-                        <label className="block text-xs mb-1">
+
+                  {(isSimples || isMudancaCategoria || isComPreco) && (
+                    <div className="mt-4">
+                      <label className={labelClass}>
+                        Peso médio (kg)
+                        <Required />
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        className={inputClass}
+                        value={pesoMedio}
+                        onChange={(e) => setPesoMedio(e.target.value)}
+                        required
+                      />
+                      {isComPreco && (
+                        <p className="mt-1 text-xs text-text-secondary">
+                          Peso total (calculado): {pesoTotalCalculado !== null ? `${formatPeso(pesoTotalCalculado)} kg` : '—'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {mostrarCamposLoteSingular &&
+                    (isNascimento || tipo === 'COMPRA' ? (
+                      <div className="mt-4">
+                        <label className={labelClass}>
                           Safra do bezerro
                           <Required />
                         </label>
                         <input
                           type="text"
                           inputMode="numeric"
-                          className="border rounded px-2 py-1 w-full text-sm"
-                          value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                          onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
+                          className={inputClass}
+                          value={formatSafraInput(safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                          onChange={(e) => setSafraNascimento(extrairAnoSafraDigitado(e.target.value))}
                           onFocus={(e) => e.target.select()}
                         />
                       </div>
-                    )
-                  }
-                  const lotesLinha = lotesDisponiveisLinhas[i] || []
-                  return (
-                    <div>
-                      <label className="block text-xs mb-1">
-                        Lote de nascimento (safra)
+                    ) : (
+                      <div className="mt-4">
+                        <label className={labelClass}>
+                          Lote de nascimento (safra)
+                          <Required />
+                        </label>
+                        <select className={inputClass} value={safraNascimento} onChange={(e) => setSafraNascimento(e.target.value)}>
+                          <option value="">Selecione...</option>
+                          {lotesDisponiveisSingular.map((l) => (
+                            <option key={l.safra} value={String(l.safra)}>
+                              Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+
+                  {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && (
+                    <div className="mt-4">
+                      <label className={labelClass}>Proprietário do lote</label>
+                      <select className={inputClass} value={proprietarioId} onChange={(e) => setProprietarioId(e.target.value)}>
+                        <option value="">Sem proprietário atribuído</option>
+                        {proprietariosDisponiveis.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.nome}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {isVendaAbate && (
+                    <div className="mt-4">
+                      <label className={labelClass}>
+                        Peso morto (kg) ou rendimento de carcaça (%) — por animal
                         <Required />
                       </label>
-                      <select
-                        className="border rounded px-2 py-1 w-full text-sm"
-                        value={linha.safraNascimento}
-                        onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
-                      >
-                        <option value="">Selecione...</option>
-                        {lotesLinha.map((l) => (
-                          <option key={l.safra} value={String(l.safra)}>
-                            Safra {formatSafra(l.safra)} ({formatQuantidade(l.saldo)} disponível)
-                          </option>
-                        ))}
-                      </select>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          placeholder="Peso morto (kg)"
+                          className={inputClass}
+                          value={pesoMorto}
+                          onChange={(e) => handlePesoMortoChange(e.target.value)}
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          placeholder="Rendimento (%)"
+                          className={inputClass}
+                          value={rendimentoCarcaca}
+                          onChange={(e) => handleRendimentoChange(e.target.value)}
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-text-secondary">
+                        Preencha um dos dois — o outro é calculado automaticamente.
+                        {arrobaPorAnimalPreview !== null && ` Peso em arrobas: ${formatDecimal(arrobaPorAnimalPreview)} @/animal.`}
+                      </p>
                     </div>
-                  )
-                })()}
-                {mostrarSeletorProprietario && (
-                  <div>
-                    <label className="block text-xs mb-1">Proprietário</label>
-                    <select
-                      className="border rounded px-2 py-1 w-full text-sm"
-                      value={linha.proprietarioId}
-                      onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
-                    >
-                      <option value="">Sem proprietário atribuído</option>
-                      {proprietariosDisponiveis.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.nome}
-                        </option>
-                      ))}
-                    </select>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="overflow-x-auto rounded-control border border-border">
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-bg">
+                          <th className="min-w-[160px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            Categoria
+                          </th>
+                          <th className="w-20 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            Qtd.
+                          </th>
+                          <th className="w-28 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            Peso méd. (kg)
+                          </th>
+                          {isVendaAbate && (
+                            <th className="w-40 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                              Peso morto / Rend.
+                            </th>
+                          )}
+                          {isComPreco && (
+                            <th className="min-w-[170px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                              Preço
+                            </th>
+                          )}
+                          <th className="w-32 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            Safra / Lote
+                          </th>
+                          {mostrarSeletorProprietario && (
+                            <th className="min-w-[140px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                              Proprietário
+                            </th>
+                          )}
+                          <th className="w-28 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            Peso total
+                          </th>
+                          <th className="w-8 border-b border-border p-2" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {linhas.map((linha, i) => {
+                          const { pesoTotal: pesoTotalLinha, arrobaPorAnimal, valorTotal: valorTotalLinha } = calcularLinha(linha)
+                          const saldo = saldosLinhas[i]
+                          const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
+                          const catLinha = categorias.find((c) => c.id === linha.categoriaId)
+                          const linhaEhBezerro = isNascimento || categoriaEhBezerro(catLinha)
+                          return (
+                            <tr key={i}>
+                              <td className="border-b border-border p-2 align-top">
+                                <select
+                                  className={inputSmClass}
+                                  value={linha.categoriaId}
+                                  onChange={(e) => atualizarLinha(i, { categoriaId: e.target.value })}
+                                >
+                                  <option value="">Selecione...</option>
+                                  {categoriasVisiveis.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.nome}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="border-b border-border p-2 align-top">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  className={`text-right ${inputSmClass}`}
+                                  value={linha.quantidade}
+                                  onChange={(e) => atualizarLinha(i, { quantidade: e.target.value })}
+                                />
+                                {precisaChecarSaldo && linha.categoriaId && saldo != null && (
+                                  <p className={`mt-1 text-[11px] ${quantidadeNum && quantidadeNum > saldo ? 'text-error' : 'text-text-secondary'}`}>
+                                    {formatQuantidade(saldo)} disp.
+                                  </p>
+                                )}
+                              </td>
+                              <td className="border-b border-border p-2 align-top">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0.01"
+                                  className={`text-right ${inputSmClass}`}
+                                  value={linha.pesoMedio}
+                                  onChange={(e) => atualizarLinha(i, { pesoMedio: e.target.value })}
+                                />
+                              </td>
+                              {isVendaAbate && (
+                                <td className="border-b border-border p-2 align-top">
+                                  <div className="flex gap-1">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0.01"
+                                      placeholder="Morto"
+                                      className={`text-right ${inputSmClass}`}
+                                      value={linha.pesoMorto}
+                                      onChange={(e) => atualizarPesoMortoLinha(i, e.target.value)}
+                                    />
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0.01"
+                                      placeholder="Rend. %"
+                                      className={`text-right ${inputSmClass}`}
+                                      value={linha.rendimentoCarcaca}
+                                      onChange={(e) => atualizarRendimentoLinha(i, e.target.value)}
+                                    />
+                                  </div>
+                                  {arrobaPorAnimal !== null && (
+                                    <p className="mt-1 text-[11px] text-text-secondary">{formatDecimal(arrobaPorAnimal)} @/animal</p>
+                                  )}
+                                </td>
+                              )}
+                              {isComPreco && (
+                                <td className="border-b border-border p-2 align-top">
+                                  <div className="flex gap-1">
+                                    <select
+                                      className={inputSmClass}
+                                      value={linha.campoPreco}
+                                      onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
+                                    >
+                                      {CAMPOS_PRECO.map((c) => (
+                                        <option key={c.key} value={c.key}>
+                                          {c.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0.01"
+                                      className={inputSmClass}
+                                      value={linha.valorPreco}
+                                      onChange={(e) => atualizarLinha(i, { valorPreco: e.target.value })}
+                                    />
+                                  </div>
+                                  <p className="mt-1 text-[11px] text-text-secondary">Bruto: {formatMoeda(valorTotalLinha)}</p>
+                                </td>
+                              )}
+                              <td className="border-b border-border p-2 align-top">
+                                {!linhaEhBezerro ? (
+                                  <span className="text-xs text-text-muted">—</span>
+                                ) : isNascimento || tipo === 'COMPRA' ? (
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    className={inputSmClass}
+                                    value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                                    onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
+                                    onFocus={(e) => e.target.select()}
+                                  />
+                                ) : (
+                                  <select
+                                    className={inputSmClass}
+                                    value={linha.safraNascimento}
+                                    onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                                  >
+                                    <option value="">Selecione...</option>
+                                    {(lotesDisponiveisLinhas[i] || []).map((l) => (
+                                      <option key={l.safra} value={String(l.safra)}>
+                                        {formatSafra(l.safra)} ({formatQuantidade(l.saldo)})
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                              </td>
+                              {mostrarSeletorProprietario && (
+                                <td className="border-b border-border p-2 align-top">
+                                  <select
+                                    className={inputSmClass}
+                                    value={linha.proprietarioId}
+                                    onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
+                                  >
+                                    <option value="">—</option>
+                                    {proprietariosDisponiveis.map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.nome}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                              )}
+                              <td className="border-b border-border p-2 text-right align-top tabular-nums text-text-secondary">
+                                {pesoTotalLinha !== null ? `${formatPeso(pesoTotalLinha)} kg` : '—'}
+                              </td>
+                              <td className="border-b border-border p-2 text-right align-top">
+                                {linhas.length > 1 && (
+                                  <button type="button" title="Remover" className="text-text-secondary hover:text-error" onClick={() => removerLinha(i)}>
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M6 6l12 12M18 6L6 18" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                )}
-                {isVendaAbate && (
-                  <div>
-                    <label className="block text-xs mb-1">
-                      Peso morto (kg) ou rendimento (%) — por animal
+                  <button
+                    type="button"
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-control border border-dashed border-border px-3 py-2 text-xs font-semibold text-brand-500 hover:border-brand-500 hover:bg-brand-100"
+                    onClick={adicionarLinha}
+                  >
+                    + Adicionar categoria
+                  </button>
+                  {isComPreco && !isComAjuste && (
+                    <p className="mt-2 text-sm font-medium text-text-primary">Valor bruto total do lançamento: {formatMoeda(somaValorTotalLote)}</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* PASSO 4 — DETALHES ADICIONAIS */}
+          <div className="mt-4 rounded-card border border-border bg-surface">
+            <div className="flex items-start gap-3 border-b border-border p-5">
+              <StepBadge n={4} />
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">Detalhes adicionais</h3>
+                <p className="mt-0.5 text-xs text-text-secondary">Campos que dependem do tipo escolhido, mais observação.</p>
+              </div>
+            </div>
+            <div className="space-y-4 p-5">
+              {precisaCliente && (
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <label className="text-sm font-medium text-text-secondary">
+                      Cliente / fornecedor
                       <Required />
                     </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        placeholder="Peso morto (kg)"
-                        className="border rounded px-2 py-1 w-full text-sm"
-                        value={linha.pesoMorto}
-                        onChange={(e) => atualizarPesoMortoLinha(i, e.target.value)}
-                      />
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        placeholder="Rendimento (%)"
-                        className="border rounded px-2 py-1 w-full text-sm"
-                        value={linha.rendimentoCarcaca}
-                        onChange={(e) => atualizarRendimentoLinha(i, e.target.value)}
-                      />
-                    </div>
-                    {arrobaPorAnimal !== null && (
-                      <p className="text-xs text-gray-500 mt-1">Peso em arrobas: {formatDecimal(arrobaPorAnimal)} @/animal</p>
-                    )}
+                    <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={() => setModalClienteAberto(true)}>
+                      + Novo
+                    </button>
                   </div>
-                )}
-                {isComPreco && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs mb-1">Preço informado como</label>
+                  <select
+                    className={inputClass}
+                    value={clienteFornecedorId}
+                    onChange={(e) => setClienteFornecedorId(e.target.value)}
+                    required
+                  >
+                    <option value="">Selecione...</option>
+                    {clientesFornecedores.map((cf) => (
+                      <option key={cf.id} value={cf.id}>
+                        {cf.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {isMorte && (
+                <div>
+                  <label className={labelClass}>
+                    Causa da morte
+                    <Required />
+                  </label>
+                  <input className={inputClass} value={causaMorte} onChange={(e) => setCausaMorte(e.target.value)} required />
+                </div>
+              )}
+
+              {isConsumoDoacao && (
+                <div>
+                  <label className={labelClass}>
+                    Consumo interno ou doação
+                    <Required />
+                  </label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-1.5 text-sm text-text-primary">
+                      <input
+                        type="radio"
+                        name="subtipoConsumoDoacao"
+                        checked={subtipoConsumoDoacao === 'CONSUMO_INTERNO'}
+                        onChange={() => setSubtipoConsumoDoacao('CONSUMO_INTERNO')}
+                      />
+                      Consumo interno
+                    </label>
+                    <label className="flex items-center gap-1.5 text-sm text-text-primary">
+                      <input
+                        type="radio"
+                        name="subtipoConsumoDoacao"
+                        checked={subtipoConsumoDoacao === 'DOACAO'}
+                        onChange={() => setSubtipoConsumoDoacao('DOACAO')}
+                      />
+                      Doação
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {isComPreco && !isLoteCategoria && (
+                <div>
+                  <label className={labelClass}>
+                    Campo de preço informado
+                    {isVendaAbate && <Required />}
+                  </label>
+                  <div className="mb-2 flex flex-wrap gap-3">
+                    {CAMPOS_PRECO.map((c) => (
+                      <label key={c.key} className="flex items-center gap-1.5 text-sm text-text-primary">
+                        <input type="radio" name="campoPreco" checked={campoPreco === c.key} onChange={() => setCampoPreco(c.key)} />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    className={inputClass}
+                    value={valorPreco}
+                    onChange={(e) => setValorPreco(e.target.value)}
+                    placeholder={CAMPOS_PRECO.find((c) => c.key === campoPreco)?.label}
+                    required={isVendaAbate}
+                  />
+                  <div className="mt-1.5 space-y-0.5 text-xs text-text-secondary">
+                    {CAMPOS_PRECO.filter((c) => c.key !== campoPreco).map((c) => (
+                      <p key={c.key}>
+                        {c.label}: {formatDecimal(valoresCalculados[c.key])}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {isComAjuste && (
+                <div className="rounded-control border border-border p-4">
+                  <div>
+                    <div className="mb-1.5 text-sm font-medium text-text-primary">
+                      Descontos
+                      {totalDescontos > 0 && <span className="font-normal text-text-secondary"> · {formatMoeda(totalDescontos)}</span>}
+                    </div>
+                    {descontos.length > 0 && (
+                      <ul className="mb-2 space-y-1">
+                        {descontos.map((d, i) => (
+                          <li key={i} className="flex items-center justify-between rounded-control bg-bg px-2.5 py-1.5 text-sm">
+                            <span className="text-text-primary">{d.itemNome}</span>
+                            <span className="flex items-center gap-2">
+                              <span className="tabular-nums text-text-primary">{formatMoeda(d.valor)}</span>
+                              <button type="button" className="text-xs text-error underline" onClick={() => removerAjuste('DESCONTO', i)}>
+                                Remover
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="flex flex-wrap gap-2">
                       <select
-                        className="border rounded px-2 py-1 w-full text-sm"
-                        value={linha.campoPreco}
-                        onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
+                        className={`flex-1 ${inputSmClass}`}
+                        value={novoDescontoItemId}
+                        onChange={(e) => setNovoDescontoItemId(e.target.value)}
                       >
-                        {CAMPOS_PRECO.map((c) => (
-                          <option key={c.key} value={c.key}>
-                            {c.label}
+                        <option value="">Selecione ou cadastre um item...</option>
+                        {itensDesconto.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {i.nome}
                           </option>
                         ))}
+                        <option value={NOVO_ITEM_AJUSTE}>+ Novo item...</option>
                       </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs mb-1">
-                        Valor
-                        {isVendaAbate && <Required />}
-                      </label>
+                      {novoDescontoItemId === NOVO_ITEM_AJUSTE && (
+                        <input
+                          className={`w-32 ${inputSmClass}`}
+                          placeholder="Nome do item"
+                          value={novoDescontoNomeCriar}
+                          onChange={(e) => setNovoDescontoNomeCriar(e.target.value)}
+                        />
+                      )}
                       <input
                         type="number"
                         step="0.01"
                         min="0.01"
-                        className="border rounded px-2 py-1 w-full text-sm"
-                        value={linha.valorPreco}
-                        onChange={(e) => atualizarLinha(i, { valorPreco: e.target.value })}
+                        placeholder="0,00"
+                        className={`w-24 ${inputSmClass}`}
+                        value={novoDescontoValor}
+                        onChange={(e) => setNovoDescontoValor(e.target.value)}
                       />
+                      <button
+                        type="button"
+                        disabled={criandoAjusteDesconto}
+                        className="whitespace-nowrap rounded-control border border-border px-3 py-1.5 text-sm text-text-primary disabled:opacity-50"
+                        onClick={() => adicionarAjuste('DESCONTO')}
+                      >
+                        + Adicionar
+                      </button>
                     </div>
-                    <p className="text-xs text-gray-500 col-span-2">
-                      Valor total (bruto) dessa categoria: {formatMoeda(valorTotalLinha)}
-                      {pesoTotalLinha !== null && ` · Peso total: ${formatPeso(pesoTotalLinha)} kg`}
-                    </p>
                   </div>
-                )}
-              </div>
-            )
-          })}
-          <button type="button" className="text-sm text-blue-600 underline" onClick={adicionarLinha}>
-            + Adicionar categoria
-          </button>
-          {isComPreco && !isComAjuste && (
-            <p className="text-sm font-medium">Valor bruto total do lançamento: {formatMoeda(somaValorTotalLote)}</p>
-          )}
-        </div>
-        )}
 
-        {precisaCliente && (
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm">
-                Cliente / fornecedor
-                <Required />
-              </label>
-              <button
-                type="button"
-                className="text-xs text-blue-600 underline"
-                onClick={() => setModalClienteAberto(true)}
-              >
-                + Novo
-              </button>
+                  <div className="mt-4">
+                    <div className="mb-1.5 text-sm font-medium text-text-primary">
+                      Acréscimos
+                      {totalAcrescimos > 0 && <span className="font-normal text-text-secondary"> · {formatMoeda(totalAcrescimos)}</span>}
+                    </div>
+                    {acrescimos.length > 0 && (
+                      <ul className="mb-2 space-y-1">
+                        {acrescimos.map((a, i) => (
+                          <li key={i} className="flex items-center justify-between rounded-control bg-bg px-2.5 py-1.5 text-sm">
+                            <span className="text-text-primary">{a.itemNome}</span>
+                            <span className="flex items-center gap-2">
+                              <span className="tabular-nums text-text-primary">{formatMoeda(a.valor)}</span>
+                              <button type="button" className="text-xs text-error underline" onClick={() => removerAjuste('ACRESCIMO', i)}>
+                                Remover
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <select
+                        className={`flex-1 ${inputSmClass}`}
+                        value={novoAcrescimoItemId}
+                        onChange={(e) => setNovoAcrescimoItemId(e.target.value)}
+                      >
+                        <option value="">Selecione ou cadastre um item...</option>
+                        {itensAcrescimo.map((i) => (
+                          <option key={i.id} value={i.id}>
+                            {i.nome}
+                          </option>
+                        ))}
+                        <option value={NOVO_ITEM_AJUSTE}>+ Novo item...</option>
+                      </select>
+                      {novoAcrescimoItemId === NOVO_ITEM_AJUSTE && (
+                        <input
+                          className={`w-32 ${inputSmClass}`}
+                          placeholder="Nome do item"
+                          value={novoAcrescimoNomeCriar}
+                          onChange={(e) => setNovoAcrescimoNomeCriar(e.target.value)}
+                        />
+                      )}
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        placeholder="0,00"
+                        className={`w-24 ${inputSmClass}`}
+                        value={novoAcrescimoValor}
+                        onChange={(e) => setNovoAcrescimoValor(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        disabled={criandoAjusteAcrescimo}
+                        className="whitespace-nowrap rounded-control border border-border px-3 py-1.5 text-sm text-text-primary disabled:opacity-50"
+                        onClick={() => adicionarAjuste('ACRESCIMO')}
+                      >
+                        + Adicionar
+                      </button>
+                    </div>
+                  </div>
+
+                  {valorBrutoPreviewAtual !== null && (
+                    <div className="mt-4 space-y-0.5 border-t border-border pt-3 text-sm">
+                      <div className="flex justify-between text-text-secondary">
+                        <span>Valor bruto{isLoteCategoria ? ' (todas as categorias)' : ''}</span>
+                        <span className="tabular-nums">{formatMoeda(valorBrutoPreviewAtual)}</span>
+                      </div>
+                      <div className="flex justify-between text-text-secondary">
+                        <span>Descontos</span>
+                        <span className="tabular-nums">− {formatMoeda(totalDescontos)}</span>
+                      </div>
+                      <div className="flex justify-between text-text-secondary">
+                        <span>Acréscimos</span>
+                        <span className="tabular-nums">+ {formatMoeda(totalAcrescimos)}</span>
+                      </div>
+                      <div className="flex justify-between font-semibold text-text-primary">
+                        <span>Valor líquido</span>
+                        <span className="tabular-nums">{formatMoeda(valorLiquidoPreviewAtual)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className={labelClass}>Observação</label>
+                <textarea className={inputClass} value={observacao} onChange={(e) => setObservacao(e.target.value)} rows={2} />
+              </div>
             </div>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={clienteFornecedorId}
-              onChange={(e) => setClienteFornecedorId(e.target.value)}
-              required
-            >
-              <option value="">Selecione...</option>
-              {clientesFornecedores.map((cf) => (
-                <option key={cf.id} value={cf.id}>
-                  {cf.nome}
+
+            <div className="flex justify-end gap-2 border-t border-border p-5">
+              <button
+                type="submit"
+                disabled={salvando || bloqueadoPorSaldoInicial}
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
+              >
+                {salvando ? 'Salvando...' : editandoId ? 'Salvar edição' : 'Salvar movimentação'}
+              </button>
+              {editandoId && (
+                <button type="button" className="rounded-control border border-border px-4 py-2 text-sm text-text-primary" onClick={cancelarEdicao}>
+                  Cancelar edição
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+
+        {/* RESUMO */}
+        <div className="sticky top-6 space-y-4">
+          <div className="rounded-card border border-border bg-surface">
+            <div className="border-b border-border p-4">
+              <h3 className="text-sm font-bold text-text-primary">Resumo em tempo real</h3>
+            </div>
+            <div className="flex items-center gap-3 p-4">
+              <span
+                className={`flex h-9 w-9 flex-none items-center justify-center rounded-control p-2 ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].bg} ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].fg}`}
+              >
+                <IconeMovimentacao tipo={tipo} />
+              </span>
+              <div>
+                <div className="text-sm font-bold text-text-primary">{LABEL_TIPO[tipo]}</div>
+                <div className="text-xs text-text-secondary">{DIRECAO_LABEL[DIRECAO_TIPO[tipo]]}</div>
+              </div>
+            </div>
+            <div className="px-4 pb-4">
+              <div className="flex justify-between border-t border-border py-2 text-sm">
+                <span className="text-text-secondary">Data</span>
+                <span className="font-semibold text-text-primary">{data ? new Date(data + 'T00:00').toLocaleDateString('pt-BR') : '—'}</span>
+              </div>
+              <div className="flex justify-between border-t border-border py-2 text-sm">
+                <span className="text-text-secondary">Fazenda</span>
+                <span className="font-semibold text-text-primary">{fazendas.find((f) => f.id === fazendaOrigemParaPasto)?.nome ?? '—'}</span>
+              </div>
+              <div className="flex justify-between border-t border-border py-2 text-sm">
+                <span className="text-text-secondary">Total de animais</span>
+                <span className="font-semibold tabular-nums text-text-primary">{formatQuantidade(totalCabecasFormulario)}</span>
+              </div>
+              <div className="flex justify-between border-t border-border py-2 text-sm">
+                <span className="text-text-secondary">Peso total</span>
+                <span className="font-semibold tabular-nums text-text-primary">{totalPesoFormulario ? `${formatPeso(totalPesoFormulario)} kg` : '—'}</span>
+              </div>
+            </div>
+            <div className="border-t border-border p-4">
+              <h3 className="text-sm font-bold text-text-primary">Efetivo da fazenda</h3>
+            </div>
+            <div className="flex items-center justify-center gap-3 px-4 pb-5 pt-1">
+              <div className="text-center">
+                <div className="text-xl font-extrabold tabular-nums text-text-primary">{efetivoFazenda != null ? formatQuantidade(efetivoFazenda) : '—'}</div>
+                <div className="text-[10px] uppercase tracking-wide text-text-secondary">Antes</div>
+              </div>
+              <div className="text-text-muted">→</div>
+              <div className="text-center">
+                <div className="text-xl font-extrabold tabular-nums text-brand-500">{efetivoDepois != null ? formatQuantidade(efetivoDepois) : '—'}</div>
+                <div className="text-[10px] uppercase tracking-wide text-text-secondary">Após salvar</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </>
+      )}
+
+      {/* LISTAGEM */}
+      <h2 className="mb-1 mt-8 text-lg font-extrabold text-text-primary">
+        {filtroAtivo ? `Movimentações filtradas (${movimentacoes.length})` : 'Últimos lançamentos'}
+      </h2>
+      <p className="mb-4 text-xs text-text-secondary">
+        Filtre por fazenda, tipo, categoria ou período pra achar um lançamento específico antes de editar.
+      </p>
+
+      <div className="rounded-card border border-border bg-surface p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[9rem]">
+            <label className={labelClass}>Fazenda</label>
+            <select className={inputSmClass} value={filtroFazendaId} onChange={(e) => setFiltroFazendaId(e.target.value)}>
+              <option value="">Todas</option>
+              {fazendasFiltro.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.nome}
                 </option>
               ))}
             </select>
           </div>
-        )}
-
-        {isMorte && (
-          <div>
-            <label className="block text-sm mb-1">
-              Causa da morte
-              <Required />
-            </label>
-            <input
-              className="border rounded px-3 py-2 w-full"
-              value={causaMorte}
-              onChange={(e) => setCausaMorte(e.target.value)}
-              required
-            />
-          </div>
-        )}
-
-        {isConsumoDoacao && (
-          <div>
-            <label className="block text-sm mb-1">
-              Consumo interno ou doação
-              <Required />
-            </label>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-1 text-sm">
-                <input
-                  type="radio"
-                  name="subtipoConsumoDoacao"
-                  checked={subtipoConsumoDoacao === 'CONSUMO_INTERNO'}
-                  onChange={() => setSubtipoConsumoDoacao('CONSUMO_INTERNO')}
-                />
-                Consumo interno
-              </label>
-              <label className="flex items-center gap-1 text-sm">
-                <input
-                  type="radio"
-                  name="subtipoConsumoDoacao"
-                  checked={subtipoConsumoDoacao === 'DOACAO'}
-                  onChange={() => setSubtipoConsumoDoacao('DOACAO')}
-                />
-                Doação
-              </label>
-            </div>
-          </div>
-        )}
-
-        {isComPreco && !isLoteCategoria && (
-          <div>
-            <label className="block text-sm mb-1">
-              Campo de preço informado
-              {isVendaAbate && <Required />}
-            </label>
-            <div className="flex flex-wrap gap-3 mb-2">
-              {CAMPOS_PRECO.map((c) => (
-                <label key={c.key} className="flex items-center gap-1 text-sm">
-                  <input
-                    type="radio"
-                    name="campoPreco"
-                    checked={campoPreco === c.key}
-                    onChange={() => setCampoPreco(c.key)}
-                  />
-                  {c.label}
-                </label>
+          <div className="min-w-[9rem]">
+            <label className={labelClass}>Tipo</label>
+            <select
+              className={inputSmClass}
+              value={filtroTipo}
+              onChange={(e) => setFiltroTipo(e.target.value as TipoMovimentacao | '')}
+            >
+              <option value="">Todos</option>
+              {TIPOS.map((t) => (
+                <option key={t} value={t}>
+                  {LABEL_TIPO[t]}
+                </option>
               ))}
-            </div>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              className="border rounded px-3 py-2 w-full"
-              value={valorPreco}
-              onChange={(e) => setValorPreco(e.target.value)}
-              placeholder={CAMPOS_PRECO.find((c) => c.key === campoPreco)?.label}
-              required={isVendaAbate}
-            />
-            <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-              {CAMPOS_PRECO.filter((c) => c.key !== campoPreco).map((c) => (
-                <p key={c.key}>
-                  {c.label}: {formatDecimal(valoresCalculados[c.key])}
-                </p>
+            </select>
+          </div>
+          <div className="min-w-[9rem]">
+            <label className={labelClass}>Categoria</label>
+            <select className={inputSmClass} value={filtroCategoriaId} onChange={(e) => setFiltroCategoriaId(e.target.value)}>
+              <option value="">Todas</option>
+              {categoriasFiltro.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nome}
+                </option>
               ))}
-            </div>
+            </select>
           </div>
-        )}
-
-        {isComAjuste && (
-          <div className="border rounded p-3 space-y-3">
-            <div>
-              <div className="text-sm font-medium mb-1">
-                Descontos
-                {totalDescontos > 0 && <span className="text-gray-500 font-normal"> · {formatMoeda(totalDescontos)}</span>}
-              </div>
-              {descontos.length > 0 && (
-                <ul className="space-y-1 mb-2">
-                  {descontos.map((d, i) => (
-                    <li key={i} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1 text-sm">
-                      <span>{d.itemNome}</span>
-                      <span className="flex items-center gap-2">
-                        <span>{formatMoeda(d.valor)}</span>
-                        <button
-                          type="button"
-                          className="text-red-600 text-xs underline"
-                          onClick={() => removerAjuste('DESCONTO', i)}
-                        >
-                          Remover
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex gap-2">
-                <select
-                  className="border rounded px-2 py-1 text-sm flex-1"
-                  value={novoDescontoItemId}
-                  onChange={(e) => setNovoDescontoItemId(e.target.value)}
-                >
-                  <option value="">Selecione ou cadastre um item...</option>
-                  {itensDesconto.map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {i.nome}
-                    </option>
-                  ))}
-                  <option value={NOVO_ITEM_AJUSTE}>+ Novo item...</option>
-                </select>
-                {novoDescontoItemId === NOVO_ITEM_AJUSTE && (
-                  <input
-                    className="border rounded px-2 py-1 text-sm w-32"
-                    placeholder="Nome do item"
-                    value={novoDescontoNomeCriar}
-                    onChange={(e) => setNovoDescontoNomeCriar(e.target.value)}
-                  />
-                )}
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0,00"
-                  className="border rounded px-2 py-1 text-sm w-24"
-                  value={novoDescontoValor}
-                  onChange={(e) => setNovoDescontoValor(e.target.value)}
-                />
-                <button
-                  type="button"
-                  disabled={criandoAjusteDesconto}
-                  className="border rounded px-3 py-1 text-sm whitespace-nowrap disabled:opacity-50"
-                  onClick={() => adicionarAjuste('DESCONTO')}
-                >
-                  + Adicionar
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <div className="text-sm font-medium mb-1">
-                Acréscimos
-                {totalAcrescimos > 0 && <span className="text-gray-500 font-normal"> · {formatMoeda(totalAcrescimos)}</span>}
-              </div>
-              {acrescimos.length > 0 && (
-                <ul className="space-y-1 mb-2">
-                  {acrescimos.map((a, i) => (
-                    <li key={i} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1 text-sm">
-                      <span>{a.itemNome}</span>
-                      <span className="flex items-center gap-2">
-                        <span>{formatMoeda(a.valor)}</span>
-                        <button
-                          type="button"
-                          className="text-red-600 text-xs underline"
-                          onClick={() => removerAjuste('ACRESCIMO', i)}
-                        >
-                          Remover
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex gap-2">
-                <select
-                  className="border rounded px-2 py-1 text-sm flex-1"
-                  value={novoAcrescimoItemId}
-                  onChange={(e) => setNovoAcrescimoItemId(e.target.value)}
-                >
-                  <option value="">Selecione ou cadastre um item...</option>
-                  {itensAcrescimo.map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {i.nome}
-                    </option>
-                  ))}
-                  <option value={NOVO_ITEM_AJUSTE}>+ Novo item...</option>
-                </select>
-                {novoAcrescimoItemId === NOVO_ITEM_AJUSTE && (
-                  <input
-                    className="border rounded px-2 py-1 text-sm w-32"
-                    placeholder="Nome do item"
-                    value={novoAcrescimoNomeCriar}
-                    onChange={(e) => setNovoAcrescimoNomeCriar(e.target.value)}
-                  />
-                )}
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0,00"
-                  className="border rounded px-2 py-1 text-sm w-24"
-                  value={novoAcrescimoValor}
-                  onChange={(e) => setNovoAcrescimoValor(e.target.value)}
-                />
-                <button
-                  type="button"
-                  disabled={criandoAjusteAcrescimo}
-                  className="border rounded px-3 py-1 text-sm whitespace-nowrap disabled:opacity-50"
-                  onClick={() => adicionarAjuste('ACRESCIMO')}
-                >
-                  + Adicionar
-                </button>
-              </div>
-            </div>
-
-            {valorBrutoPreviewAtual !== null && (
-              <div className="border-t pt-2 text-sm space-y-0.5">
-                <div className="flex justify-between text-gray-600">
-                  <span>Valor bruto{isLoteCategoria ? ' (todas as categorias)' : ''}</span>
-                  <span>{formatMoeda(valorBrutoPreviewAtual)}</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>Descontos</span>
-                  <span>− {formatMoeda(totalDescontos)}</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>Acréscimos</span>
-                  <span>+ {formatMoeda(totalAcrescimos)}</span>
-                </div>
-                <div className="flex justify-between font-semibold">
-                  <span>Valor líquido</span>
-                  <span>{formatMoeda(valorLiquidoPreviewAtual)}</span>
-                </div>
-              </div>
-            )}
+          <div className="min-w-[9rem]">
+            <label className={labelClass}>De</label>
+            <input type="date" max={hoje} className={inputSmClass} value={filtroDataInicio} onChange={(e) => setFiltroDataInicio(e.target.value)} />
           </div>
-        )}
-
-        <div>
-          <label className="block text-sm mb-1">Observação</label>
-          <textarea
-            className="border rounded px-3 py-2 w-full"
-            value={observacao}
-            onChange={(e) => setObservacao(e.target.value)}
-            rows={2}
-          />
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={salvando || bloqueadoPorSaldoInicial}
-            className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
-          >
-            {salvando ? 'Salvando...' : editandoId ? 'Salvar edição' : 'Salvar movimentação'}
-          </button>
-          {editandoId && (
-            <button type="button" className="px-4 py-2 rounded border" onClick={cancelarEdicao}>
-              Cancelar edição
+          <div className="min-w-[9rem]">
+            <label className={labelClass}>Até</label>
+            <input type="date" max={hoje} className={inputSmClass} value={filtroDataFim} onChange={(e) => setFiltroDataFim(e.target.value)} />
+          </div>
+          {filtroAtivo && (
+            <button type="button" className="pb-2 text-xs font-medium text-brand-500 underline" onClick={limparFiltros}>
+              Limpar filtros
             </button>
           )}
         </div>
-      </form>
-
-      <div className="mb-4 flex flex-wrap items-end gap-3 border rounded p-4">
-        <div>
-          <label className="block text-sm mb-1">Fazenda</label>
-          <select
-            className="border rounded px-3 py-2"
-            value={filtroFazendaId}
-            onChange={(e) => setFiltroFazendaId(e.target.value)}
-          >
-            <option value="">Todas</option>
-            {fazendasFiltro.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.nome}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Tipo</label>
-          <select
-            className="border rounded px-3 py-2"
-            value={filtroTipo}
-            onChange={(e) => setFiltroTipo(e.target.value as TipoMovimentacao | '')}
-          >
-            <option value="">Todos</option>
-            {TIPOS.map((t) => (
-              <option key={t} value={t}>
-                {LABEL_TIPO[t]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Categoria</label>
-          <select
-            className="border rounded px-3 py-2"
-            value={filtroCategoriaId}
-            onChange={(e) => setFiltroCategoriaId(e.target.value)}
-          >
-            <option value="">Todas</option>
-            {categoriasFiltro.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nome}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm mb-1">De</label>
-          <input
-            type="date"
-            max={hoje}
-            className="border rounded px-3 py-2"
-            value={filtroDataInicio}
-            onChange={(e) => setFiltroDataInicio(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Até</label>
-          <input
-            type="date"
-            max={hoje}
-            className="border rounded px-3 py-2"
-            value={filtroDataFim}
-            onChange={(e) => setFiltroDataFim(e.target.value)}
-          />
-        </div>
-        {filtroAtivo && (
-          <button type="button" className="text-xs text-blue-600 underline" onClick={limparFiltros}>
-            Limpar filtros
-          </button>
-        )}
       </div>
 
-      <h2 className="font-semibold mb-3">
-        {filtroAtivo ? `Movimentações filtradas (${movimentacoes.length})` : 'Últimas movimentações'}
-      </h2>
       {loading ? (
-        <p>Carregando...</p>
+        <div className="mt-4 space-y-3">
+          <div className="h-20 animate-pulse rounded-card bg-border" />
+          <div className="h-20 animate-pulse rounded-card bg-border" />
+        </div>
       ) : erro ? (
-        <p className="text-red-600">Erro: {erro}</p>
+        <p className="mt-4 text-sm text-error">Erro: {erro}</p>
       ) : movimentacoes.length === 0 ? (
-        <p>{filtroAtivo ? 'Nenhuma movimentação encontrada com esse filtro.' : 'Nenhuma movimentação lançada ainda.'}</p>
+        <div className="mt-4 rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
+          <p className="text-base font-semibold text-text-primary">
+            {filtroAtivo ? 'Nenhuma movimentação encontrada com esse filtro' : 'Nenhuma movimentação lançada ainda'}
+          </p>
+          {!filtroAtivo && (
+            <p className="mx-auto mt-1.5 max-w-sm text-sm text-text-secondary">
+              Lance a primeira movimentação acima para começar a acompanhar o rebanho.
+            </p>
+          )}
+        </div>
       ) : (
-        <ul className="space-y-2">
+        <div className="mt-4 space-y-3">
           {gruposMovimentacoes.map((grupo) => {
             if (grupo.movimentacoes.length === 1) {
               const m = grupo.movimentacoes[0]
+              const cls = DIRECAO_CLASSES[DIRECAO_TIPO[m.tipo]]
               return (
-                <li key={m.id} className="border p-3 rounded">
-                  <div className="flex justify-between items-start">
-                    <strong>{LABEL_TIPO[m.tipo]}</strong>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-500">{m.data}</span>
+                <div key={m.id} className="flex gap-3 rounded-card border border-border bg-surface p-4">
+                  <span className={`flex h-9 w-9 flex-none items-center justify-center rounded-control p-2 ${cls.bg} ${cls.fg}`}>
+                    <IconeMovimentacao tipo={m.tipo} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="text-sm font-bold text-text-primary">{LABEL_TIPO[m.tipo]}</span>
+                      <span className="text-xs text-text-secondary">{descreverMovimentacao(m)}</span>
+                      <span className="ml-auto text-xs text-text-muted">{m.data}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-text-secondary">{detalhesMovimentacao(m)}</div>
+                    {m.observacao && <div className="mt-1 text-xs italic text-text-muted">{m.observacao}</div>}
+                  </div>
+                  {confirmarExclusaoMovId === m.id ? (
+                    <div className="flex flex-none flex-col items-end gap-1 self-start">
+                      <span className="text-xs font-medium text-error">Excluir este lançamento?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={excluindo}
+                          className="text-xs font-semibold text-error underline disabled:opacity-50"
+                          onClick={() => excluirMovimentacao(m.id)}
+                        >
+                          {excluindo ? 'Excluindo...' : 'Sim, excluir'}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs text-text-secondary underline"
+                          onClick={() => setConfirmarExclusaoMovId(null)}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-none flex-col items-end gap-1 self-start">
                       <button
                         type="button"
-                        className="text-xs text-blue-600 underline"
+                        className="text-xs font-semibold text-brand-500 underline"
                         onClick={() => (m.tipo === 'DESMAME' ? iniciarEdicaoDesmame([m]) : iniciarEdicao(m))}
                       >
                         Editar
                       </button>
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-error underline"
+                        onClick={() => setConfirmarExclusaoMovId(m.id)}
+                      >
+                        Excluir
+                      </button>
                     </div>
-                  </div>
-                  <div>{descreverMovimentacao(m)}</div>
-                  <div className="text-sm text-gray-600">{detalhesMovimentacao(m)}</div>
-                  {m.observacao && <div className="text-sm text-gray-500 italic">{m.observacao}</div>}
-                </li>
+                  )}
+                </div>
               )
             }
 
@@ -3087,102 +3508,117 @@ export default function MovimentacoesPage() {
               const acrescimo = ajustes.filter((a) => a.item?.tipo === 'ACRESCIMO').reduce((ss, a) => ss + a.valor, 0)
               return s + (m.valor_total != null ? m.valor_total - desconto + acrescimo : 0)
             }, 0)
+            const cls = DIRECAO_CLASSES[DIRECAO_TIPO[primeira.tipo]]
 
             return (
-              <li key={grupo.groupId} className="border p-3 rounded">
-                <div className="flex justify-between items-start">
-                  <strong>
-                    {LABEL_TIPO[primeira.tipo]} · {grupo.movimentacoes.length} categorias
-                  </strong>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-500">{primeira.data}</span>
+              <div key={grupo.groupId} className="flex gap-3 rounded-card border border-border bg-surface p-4">
+                <span className={`flex h-9 w-9 flex-none items-center justify-center rounded-control p-2 ${cls.bg} ${cls.fg}`}>
+                  <IconeMovimentacao tipo={primeira.tipo} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="text-sm font-bold text-text-primary">
+                      {LABEL_TIPO[primeira.tipo]} · {grupo.movimentacoes.length} categorias
+                    </span>
+                    <span className="ml-auto text-xs text-text-muted">{primeira.data}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-text-secondary">
+                    {primeira.tipo === 'TRANSFERENCIA'
+                      ? `${primeira.fazenda_origem?.nome ?? '—'} → ${primeira.fazenda_destino?.nome ?? '—'}`
+                      : (primeira.fazenda?.nome ?? '—')}
+                    {primeira.cliente?.nome ? ` · ${primeira.cliente.nome}` : ''}
+                  </div>
+                  <ul className="mt-1.5 space-y-1">
+                    {grupo.movimentacoes.map((m) => (
+                      <li key={m.id} className="border-t border-border pt-1 text-xs text-text-secondary">
+                        <span className="font-medium text-text-primary">{m.categoria?.nome ?? '—'}</span> — {detalhesMovimentacao(m, true)}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-1.5 text-xs font-semibold text-text-primary">
+                    Total: {formatQuantidade(somaQuantidade)} cab.
+                    {somaValorTotal > 0 ? ` · bruto ${formatMoeda(somaValorTotal)} · líquido ${formatMoeda(somaLiquido)}` : ''}
+                  </div>
+                  {primeira.observacao && <div className="mt-1 text-xs italic text-text-muted">{primeira.observacao}</div>}
+                </div>
+                {confirmarExclusaoGrupoId === grupo.groupId ? (
+                  <div className="flex flex-none flex-col items-end gap-1 self-start">
+                    <span className="text-xs font-medium text-error">Excluir as {grupo.movimentacoes.length} linhas?</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={excluindo}
+                        className="text-xs font-semibold text-error underline disabled:opacity-50"
+                        onClick={() => excluirGrupo(grupo.movimentacoes)}
+                      >
+                        {excluindo ? 'Excluindo...' : 'Sim, excluir'}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs text-text-secondary underline"
+                        onClick={() => setConfirmarExclusaoGrupoId(null)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-none flex-col items-end gap-1 self-start">
                     <button
                       type="button"
-                      className="text-xs text-blue-600 underline"
+                      className="text-xs font-semibold text-brand-500 underline"
                       onClick={() =>
-                        primeira.tipo === 'DESMAME'
-                          ? iniciarEdicaoDesmame(grupo.movimentacoes)
-                          : iniciarEdicaoGrupo(grupo.movimentacoes)
+                        primeira.tipo === 'DESMAME' ? iniciarEdicaoDesmame(grupo.movimentacoes) : iniciarEdicaoGrupo(grupo.movimentacoes)
                       }
                     >
                       Editar
                     </button>
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-error underline"
+                      onClick={() => setConfirmarExclusaoGrupoId(grupo.groupId)}
+                    >
+                      Excluir
+                    </button>
                   </div>
-                </div>
-                <div>
-                  {primeira.tipo === 'TRANSFERENCIA'
-                    ? `${primeira.fazenda_origem?.nome ?? '—'} → ${primeira.fazenda_destino?.nome ?? '—'}`
-                    : (primeira.fazenda?.nome ?? '—')}
-                  {primeira.cliente?.nome ? ` · ${primeira.cliente.nome}` : ''}
-                </div>
-                <ul className="mt-1.5 space-y-1">
-                  {grupo.movimentacoes.map((m) => (
-                    <li key={m.id} className="text-sm text-gray-600 border-t pt-1">
-                      <span className="font-medium text-black">{m.categoria?.nome ?? '—'}</span> —{' '}
-                      {detalhesMovimentacao(m, true)}
-                    </li>
-                  ))}
-                </ul>
-                <div className="text-sm font-medium mt-1.5">
-                  Total: {formatQuantidade(somaQuantidade)} cab.
-                  {somaValorTotal > 0 ? ` · bruto ${formatMoeda(somaValorTotal)} · líquido ${formatMoeda(somaLiquido)}` : ''}
-                </div>
-                {primeira.observacao && <div className="text-sm text-gray-500 italic">{primeira.observacao}</div>}
-              </li>
+                )}
+              </div>
             )
           })}
-        </ul>
+        </div>
       )}
 
       {modalClienteAberto && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <form
-            onSubmit={handleCriarCliente}
-            onKeyDown={bloquearEnvioPorEnter}
-            className="bg-white p-4 rounded w-full max-w-sm space-y-3"
-          >
-            <h2 className="font-semibold">Novo cliente/fornecedor</h2>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <form onSubmit={handleCriarCliente} onKeyDown={bloquearEnvioPorEnter} className="w-full max-w-sm space-y-3 rounded-card border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold text-text-primary">Novo cliente/fornecedor</h2>
             <div>
-              <label className="block text-sm mb-1">
+              <label className={labelClass}>
                 Nome
                 <Required />
               </label>
-              <input
-                className="border rounded px-3 py-2 w-full"
-                value={novoClienteNome}
-                onChange={(e) => setNovoClienteNome(e.target.value)}
-                required
-                autoFocus
-              />
+              <input className={inputClass} value={novoClienteNome} onChange={(e) => setNovoClienteNome(e.target.value)} required autoFocus />
             </div>
             <div>
-              <label className="block text-sm mb-1">Tipo</label>
-              <select
-                className="border rounded px-3 py-2 w-full"
-                value={novoClienteTipo}
-                onChange={(e) => setNovoClienteTipo(e.target.value as TipoClienteFornecedor)}
-              >
+              <label className={labelClass}>Tipo</label>
+              <select className={inputClass} value={novoClienteTipo} onChange={(e) => setNovoClienteTipo(e.target.value as TipoClienteFornecedor)}>
                 <option value="CLIENTE">Cliente</option>
                 <option value="FORNECEDOR">Fornecedor</option>
                 <option value="AMBOS">Ambos</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm mb-1">Documento (CPF/CNPJ)</label>
-              <input
-                className="border rounded px-3 py-2 w-full"
-                value={novoClienteDocumento}
-                onChange={(e) => setNovoClienteDocumento(e.target.value)}
-              />
+              <label className={labelClass}>Documento (CPF/CNPJ)</label>
+              <input className={inputClass} value={novoClienteDocumento} onChange={(e) => setNovoClienteDocumento(e.target.value)} />
             </div>
-            <div className="flex gap-2 justify-end">
-              <button type="button" className="px-4 py-2 rounded border" onClick={() => setModalClienteAberto(false)}>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded-control border border-border px-4 py-2 text-sm text-text-primary" onClick={() => setModalClienteAberto(false)}>
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={salvandoCliente}
-                className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
               >
                 {salvandoCliente ? 'Salvando...' : 'Salvar'}
               </button>
@@ -3192,22 +3628,18 @@ export default function MovimentacoesPage() {
       )}
 
       {avisoEdicaoFutura && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white p-4 rounded w-full max-w-sm space-y-3">
-            <h2 className="font-semibold">Confirmar edição</h2>
-            <p className="text-sm text-gray-700">{avisoEdicaoFutura.mensagem}</p>
-            <div className="flex gap-2 justify-end">
-              <button
-                type="button"
-                className="px-4 py-2 rounded border"
-                onClick={() => setAvisoEdicaoFutura(null)}
-              >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm space-y-3 rounded-card border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold text-text-primary">Confirmar edição</h2>
+            <p className="text-sm text-text-secondary">{avisoEdicaoFutura.mensagem}</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded-control border border-border px-4 py-2 text-sm text-text-primary" onClick={() => setAvisoEdicaoFutura(null)}>
                 Cancelar
               </button>
               <button
                 type="button"
                 disabled={salvando}
-                className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
                 onClick={() => salvarEdicao(avisoEdicaoFutura.payload)}
               >
                 {salvando ? 'Salvando...' : 'Confirmar edição'}
@@ -3218,22 +3650,18 @@ export default function MovimentacoesPage() {
       )}
 
       {avisoEdicaoFuturaGrupo && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white p-4 rounded w-full max-w-sm space-y-3">
-            <h2 className="font-semibold">Confirmar edição</h2>
-            <p className="text-sm text-gray-700">{avisoEdicaoFuturaGrupo.mensagem}</p>
-            <div className="flex gap-2 justify-end">
-              <button
-                type="button"
-                className="px-4 py-2 rounded border"
-                onClick={() => setAvisoEdicaoFuturaGrupo(null)}
-              >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm space-y-3 rounded-card border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold text-text-primary">Confirmar edição</h2>
+            <p className="text-sm text-text-secondary">{avisoEdicaoFuturaGrupo.mensagem}</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded-control border border-border px-4 py-2 text-sm text-text-primary" onClick={() => setAvisoEdicaoFuturaGrupo(null)}>
                 Cancelar
               </button>
               <button
                 type="button"
                 disabled={salvando}
-                className="bg-black text-white px-4 py-2 rounded disabled:opacity-50"
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-50"
                 onClick={() =>
                   finalizarSalvarLote(
                     avisoEdicaoFuturaGrupo.payloads,
