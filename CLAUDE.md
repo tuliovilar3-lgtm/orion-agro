@@ -2478,3 +2478,47 @@ cheia da coluna) em vez de lado a lado, e a coluna virou `min-w-[150px]` (era `w
 também ficaram mais descritivos agora que sobra espaço: "Peso morto (kg)" e "Rendimento (%)" (antes
 "Morto"/"Rend. %", abreviados por causa do espaço apertado). Verificado no navegador: os dois inputs
 medem 134px de largura cada (eram ~76px), com os placeholders completos visíveis.
+
+### Resolução definitiva: tabela vira card por categoria (passo 3)
+
+As três correções anteriores (Preço, depois Peso morto/Rend.) eram um sintoma do mesmo problema
+estrutural: cada campo extra que um tipo específico exige (Venda Abate sozinho soma 8 colunas —
+categoria, qtd., peso, peso morto, rendimento, tipo de preço, valor, safra, proprietário, peso
+total) precisa competir por espaço horizontal dentro de uma `<table>`, e corrigir uma coluna só
+empurra o aperto pra outra (confirmado pelo usuário via print: alargar Preço/Peso-morto-Rend.
+deixou Qtd./Peso médio espremidos de novo, com rolagem horizontal reaparecendo). Pedido do usuário:
+"sugira uma resolução definitiva… se precisar, coloque os campos em mais linhas, deixando espaço
+com folga para cada campo" — e que a correção valesse pra **todos** os tipos de lançamento em lote,
+não só Venda Abate.
+
+`app/movimentacoes/page.tsx`, dentro do branch `isLoteCategoria`, trocou a `<table>` inteira por
+**um card por categoria** (`rounded-control border border-border p-3`, mesmo padrão visual já usado
+pelas linhas de Desmame — `<span>Linha {i+1}</span>` + botão "Remover" no cabeçalho do card). Dentro
+de cada card, os campos ficam numa grade responsiva (`grid grid-cols-2 sm:grid-cols-3
+lg:grid-cols-4 gap-3`, Categoria com `col-span-2`) em vez de colunas de tabela fixas — cada campo
+sempre ocupa uma célula de grade que tem largura de sobra (confirmado via `getBoundingClientRect`:
+270px por campo em desktop 1280px, 124px em mobile 375px, contra os 76-134px que a tabela dava nas
+colunas mais cheias), porque o número de campos por linha se ajusta sozinho ao número de colunas do
+grid em vez de todos brigarem pela largura total da tabela de uma vez. Cada campo ganha seu próprio
+`<label>` (`labelCardClass`, novo — mesma função de `labelClass` já usado no resto do formulário, só
+menor pra caber várias linhas empilhadas de campos por card) com `<Required/>` quando aplicável — a
+tabela antiga não tinha labels próprios, só o cabeçalho da coluna, então isso também deixou o
+formulário mais claro (cada campo dentro do card agora se explica sozinho, sem precisar olhar pro
+topo da tabela pra saber o que é).
+
+Os "sub-cálculos" que antes apareciam dentro de cada célula da tabela (peso em @/animal, valor
+bruto, os 3 valores de preço equivalentes) viraram uma linha de resumo só, no rodapé de cada card
+(`border-t border-border pt-2`, texto pequeno, `flex flex-wrap` — quebra linha sozinho se precisar),
+reunindo Peso total + @/animal (Venda Abate) + os campos de preço não escolhidos, tudo num só lugar
+em vez de espalhado dentro de cada campo. `calcularValoresLinha`/`CAMPOS_PRECO_CURTO` (criados na
+correção anterior) continuam servindo essa linha de resumo sem mudança.
+
+Verificado no navegador (desktop 1280px e mobile 375px, tipos Venda Abate e Compra): todos os
+campos de cada card medidos via `getBoundingClientRect` — Venda Abate (8 campos) com 270px cada em
+desktop e 124px em mobile, sem nenhum campo abaixo de 120px em nenhuma tela; Compra (6 campos,
+sem peso morto/rendimento) com a mesma largura confortável de 270px em desktop; nenhuma rolagem
+horizontal em nenhum dos dois casos. Um problema de ambiente foi descoberto durante o teste (não
+relacionado ao código): a viewport do navegador de teste ficou em `0×0` depois de um preset
+"desktop" mal aplicado, dando leituras de largura sem sentido (18px em todo campo) até ser
+redefinida explicitamente pra 1280×800 — vale registrar como pegadinha de metodologia de teste, não
+como bug do app.

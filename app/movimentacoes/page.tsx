@@ -229,6 +229,10 @@ const inputClass =
 const inputSmClass =
   'w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500'
 const labelClass = 'mb-1.5 block text-sm font-medium text-text-secondary'
+// label compacto usado dentro dos cards de categoria do passo 3 (lote) —
+// mesma função de labelClass, só menor, já que cada card empilha vários
+// campos e precisa de ritmo vertical mais denso
+const labelCardClass = 'mb-1 block text-xs font-medium text-text-secondary'
 
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Sexo = 'MACHO' | 'FEMEA'
@@ -2885,227 +2889,207 @@ export default function MovimentacoesPage() {
                 </>
               ) : (
                 <>
-                  <div className="overflow-x-auto rounded-control border border-border">
-                    <table className="w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-bg">
-                          <th className="min-w-[160px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                            Categoria
-                          </th>
-                          <th className="w-20 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                            Qtd.
-                          </th>
-                          <th className="w-28 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                            Peso méd. (kg)
-                          </th>
-                          {isVendaAbate && (
-                            <th className="min-w-[150px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                              Peso morto / Rend.
-                            </th>
-                          )}
-                          {isComPreco && (
-                            <th className="min-w-[240px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                              Preço
-                            </th>
-                          )}
-                          {mostrarColunaSafra && (
-                            <th className="w-32 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                              Safra / Lote
-                            </th>
-                          )}
-                          {mostrarSeletorProprietario && (
-                            <th className="min-w-[180px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                              Proprietário
-                            </th>
-                          )}
-                          <th className="w-28 border-b border-border p-2 text-right text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                            Peso total
-                          </th>
-                          <th className="w-8 border-b border-border p-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {linhas.map((linha, i) => {
-                          const { pesoTotal: pesoTotalLinha, arrobaPorAnimal } = calcularLinha(linha)
-                          const saldo = saldosLinhas[i]
-                          const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
-                          const catLinha = categorias.find((c) => c.id === linha.categoriaId)
-                          const linhaEhBezerro = isNascimento || categoriaEhBezerro(catLinha)
-                          return (
-                            <tr key={i}>
-                              <td className="border-b border-border p-2 align-top">
-                                <select
-                                  className={inputSmClass}
-                                  value={linha.categoriaId}
-                                  onChange={(e) => atualizarLinha(i, { categoriaId: e.target.value })}
-                                >
-                                  <option value="">Selecione...</option>
-                                  {categoriasVisiveis.map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                      {c.nome}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td className="border-b border-border p-2 align-top">
-                                <input
-                                  type="number"
-                                  min="1"
-                                  step="1"
-                                  className={`text-right ${inputSmClass}`}
-                                  value={linha.quantidade}
-                                  onChange={(e) => atualizarLinha(i, { quantidade: e.target.value })}
-                                />
-                                {precisaChecarSaldo && linha.categoriaId && saldo != null && (
-                                  <p className={`mt-1 text-[11px] ${quantidadeNum && quantidadeNum > saldo ? 'text-error' : 'text-text-secondary'}`}>
-                                    {formatQuantidade(saldo)} disp.
-                                  </p>
-                                )}
-                              </td>
-                              <td className="border-b border-border p-2 align-top">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0.01"
-                                  className={`text-right ${inputSmClass}`}
-                                  value={linha.pesoMedio}
-                                  onChange={(e) => atualizarLinha(i, { pesoMedio: e.target.value })}
-                                />
-                              </td>
-                              {isVendaAbate && (
-                                <td className="border-b border-border p-2 align-top">
-                                  {/* empilhado em vez de lado a lado — mesmo motivo da coluna
-                                      Preço: dois inputs dividindo uma coluna estreita deixavam o
-                                      placeholder cortado ("Mc"/"Re" em vez de "Morto"/"Rend. %") */}
-                                  <div className="space-y-1">
-                                    <input
-                                      type="number"
-                                      step="0.01"
-                                      min="0.01"
-                                      placeholder="Peso morto (kg)"
-                                      className={`text-right ${inputSmClass}`}
-                                      value={linha.pesoMorto}
-                                      onChange={(e) => atualizarPesoMortoLinha(i, e.target.value)}
-                                    />
-                                    <input
-                                      type="number"
-                                      step="0.01"
-                                      min="0.01"
-                                      placeholder="Rendimento (%)"
-                                      className={`text-right ${inputSmClass}`}
-                                      value={linha.rendimentoCarcaca}
-                                      onChange={(e) => atualizarRendimentoLinha(i, e.target.value)}
-                                    />
-                                  </div>
-                                  {arrobaPorAnimal !== null && (
-                                    <p className="mt-1 text-[11px] text-text-secondary">{formatDecimal(arrobaPorAnimal)} @/animal</p>
-                                  )}
-                                </td>
+                  {/* card por categoria em vez de tabela — cada campo mora numa grade
+                      responsiva (2 a 4 por linha, quebrando sozinha) que sempre tem
+                      largura de sobra, ao contrário de colunas de tabela fixas que
+                      precisam disputar espaço entre si (Venda Abate sozinho já exige 8
+                      colunas: categoria, qtd., peso, peso morto, rendimento, tipo de
+                      preço, valor, safra, proprietário, peso total — não cabem lado a
+                      lado em nenhuma largura de tela razoável) */}
+                  <div className="space-y-3">
+                    {linhas.map((linha, i) => {
+                      const { pesoTotal: pesoTotalLinha, arrobaPorAnimal } = calcularLinha(linha)
+                      const saldo = saldosLinhas[i]
+                      const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
+                      const catLinha = categorias.find((c) => c.id === linha.categoriaId)
+                      const linhaEhBezerro = isNascimento || categoriaEhBezerro(catLinha)
+                      const valoresLinha = isComPreco ? calcularValoresLinha(linha) : null
+                      return (
+                        <div key={i} className="rounded-control border border-border p-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs text-text-muted">Linha {i + 1}</span>
+                            {linhas.length > 1 && (
+                              <button type="button" className="text-xs text-error underline" onClick={() => removerLinha(i)}>
+                                Remover
+                              </button>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                            <div className="col-span-2">
+                              <label className={labelCardClass}>
+                                Categoria
+                                <Required />
+                              </label>
+                              <select
+                                className={inputSmClass}
+                                value={linha.categoriaId}
+                                onChange={(e) => atualizarLinha(i, { categoriaId: e.target.value })}
+                              >
+                                <option value="">Selecione...</option>
+                                {categoriasVisiveis.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.nome}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className={labelCardClass}>
+                                Quantidade
+                                <Required />
+                              </label>
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                className={inputSmClass}
+                                value={linha.quantidade}
+                                onChange={(e) => atualizarLinha(i, { quantidade: e.target.value })}
+                              />
+                              {precisaChecarSaldo && linha.categoriaId && saldo != null && (
+                                <p className={`mt-1 text-[11px] ${quantidadeNum && quantidadeNum > saldo ? 'text-error' : 'text-text-secondary'}`}>
+                                  {formatQuantidade(saldo)} disp.
+                                </p>
                               )}
-                              {isComPreco && (
-                                <td className="border-b border-border p-2 align-top">
-                                  {/* select e input empilhados (não lado a lado) — combinar
-                                      w-24 com inputSmClass (que já tem w-full embutido) no
-                                      mesmo elemento fazia as duas classes de largura brigarem
-                                      e o campo de valor quase sumia; empilhado, cada um usa a
-                                      largura cheia da coluna sem conflito */}
-                                  <div className="space-y-1">
-                                    <select
-                                      className={inputSmClass}
-                                      value={linha.campoPreco}
-                                      onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
-                                    >
-                                      {CAMPOS_PRECO.map((c) => (
-                                        <option key={c.key} value={c.key}>
-                                          {c.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      type="number"
-                                      step="0.01"
-                                      min="0.01"
-                                      className={inputSmClass}
-                                      value={linha.valorPreco}
-                                      onChange={(e) => atualizarLinha(i, { valorPreco: e.target.value })}
-                                    />
-                                  </div>
-                                  {(() => {
-                                    const valoresLinha = calcularValoresLinha(linha)
-                                    return (
-                                      <p className="mt-1 text-[11px] text-text-secondary">
-                                        {CAMPOS_PRECO.filter((c) => c.key !== linha.campoPreco).map((c) => (
-                                          <span key={c.key} className="mr-2 whitespace-nowrap">
-                                            {CAMPOS_PRECO_CURTO[c.key]}: {formatDecimal(valoresLinha[c.key])}
-                                          </span>
-                                        ))}
-                                      </p>
-                                    )
-                                  })()}
-                                </td>
-                              )}
-                              {mostrarColunaSafra && (
-                                <td className="border-b border-border p-2 align-top">
-                                  {!linhaEhBezerro ? (
-                                    <span className="text-xs text-text-muted">—</span>
-                                  ) : isNascimento || tipo === 'COMPRA' ? (
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      className={inputSmClass}
-                                      value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                                      onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
-                                      onFocus={(e) => e.target.select()}
-                                    />
-                                  ) : (
-                                    <select
-                                      className={inputSmClass}
-                                      value={linha.safraNascimento}
-                                      onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
-                                    >
-                                      <option value="">Selecione...</option>
-                                      {(lotesDisponiveisLinhas[i] || []).map((l) => (
-                                        <option key={l.safra} value={String(l.safra)}>
-                                          {formatSafra(l.safra)} ({formatQuantidade(l.saldo)})
-                                        </option>
-                                      ))}
-                                    </select>
-                                  )}
-                                </td>
-                              )}
-                              {mostrarSeletorProprietario && (
-                                <td className="border-b border-border p-2 align-top">
+                            </div>
+                            <div>
+                              <label className={labelCardClass}>
+                                Peso médio (kg)
+                                <Required />
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                className={inputSmClass}
+                                value={linha.pesoMedio}
+                                onChange={(e) => atualizarLinha(i, { pesoMedio: e.target.value })}
+                              />
+                            </div>
+                            {isVendaAbate && (
+                              <>
+                                <div>
+                                  <label className={labelCardClass}>
+                                    Peso morto (kg)
+                                    <Required />
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    className={inputSmClass}
+                                    value={linha.pesoMorto}
+                                    onChange={(e) => atualizarPesoMortoLinha(i, e.target.value)}
+                                  />
+                                </div>
+                                <div>
+                                  <label className={labelCardClass}>
+                                    Rendimento (%)
+                                    <Required />
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    className={inputSmClass}
+                                    value={linha.rendimentoCarcaca}
+                                    onChange={(e) => atualizarRendimentoLinha(i, e.target.value)}
+                                  />
+                                </div>
+                              </>
+                            )}
+                            {isComPreco && (
+                              <>
+                                <div>
+                                  <label className={labelCardClass}>Tipo de preço</label>
                                   <select
                                     className={inputSmClass}
-                                    value={linha.proprietarioId}
-                                    onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
+                                    value={linha.campoPreco}
+                                    onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
                                   >
-                                    <option value="">—</option>
-                                    {proprietariosDisponiveis.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.nome}
+                                    {CAMPOS_PRECO.map((c) => (
+                                      <option key={c.key} value={c.key}>
+                                        {c.label}
                                       </option>
                                     ))}
                                   </select>
-                                </td>
-                              )}
-                              <td className="border-b border-border p-2 text-right align-top tabular-nums text-text-secondary">
-                                {pesoTotalLinha !== null ? `${formatPeso(pesoTotalLinha)} kg` : '—'}
-                              </td>
-                              <td className="border-b border-border p-2 text-right align-top">
-                                {linhas.length > 1 && (
-                                  <button type="button" title="Remover" className="text-text-secondary hover:text-error" onClick={() => removerLinha(i)}>
-                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M6 6l12 12M18 6L6 18" />
-                                    </svg>
-                                  </button>
+                                </div>
+                                <div>
+                                  <label className={labelCardClass}>Valor</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0.01"
+                                    className={inputSmClass}
+                                    value={linha.valorPreco}
+                                    onChange={(e) => atualizarLinha(i, { valorPreco: e.target.value })}
+                                  />
+                                </div>
+                              </>
+                            )}
+                            {mostrarColunaSafra && (
+                              <div>
+                                <label className={labelCardClass}>Safra / Lote{linhaEhBezerro && <Required />}</label>
+                                {!linhaEhBezerro ? (
+                                  <p className="pt-2 text-xs text-text-muted">—</p>
+                                ) : isNascimento || tipo === 'COMPRA' ? (
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    className={inputSmClass}
+                                    value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                                    onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
+                                    onFocus={(e) => e.target.select()}
+                                  />
+                                ) : (
+                                  <select
+                                    className={inputSmClass}
+                                    value={linha.safraNascimento}
+                                    onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                                  >
+                                    <option value="">Selecione...</option>
+                                    {(lotesDisponiveisLinhas[i] || []).map((l) => (
+                                      <option key={l.safra} value={String(l.safra)}>
+                                        {formatSafra(l.safra)} ({formatQuantidade(l.saldo)})
+                                      </option>
+                                    ))}
+                                  </select>
                                 )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                              </div>
+                            )}
+                            {mostrarSeletorProprietario && (
+                              <div>
+                                <label className={labelCardClass}>Proprietário</label>
+                                <select
+                                  className={inputSmClass}
+                                  value={linha.proprietarioId}
+                                  onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
+                                >
+                                  <option value="">—</option>
+                                  {proprietariosDisponiveis.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.nome}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-2 text-xs text-text-secondary">
+                            <span>
+                              Peso total: <span className="font-semibold text-text-primary">{pesoTotalLinha !== null ? `${formatPeso(pesoTotalLinha)} kg` : '—'}</span>
+                            </span>
+                            {isVendaAbate && arrobaPorAnimal !== null && <span>{formatDecimal(arrobaPorAnimal)} @/animal</span>}
+                            {valoresLinha &&
+                              CAMPOS_PRECO.filter((c) => c.key !== linha.campoPreco).map((c) => (
+                                <span key={c.key}>
+                                  {CAMPOS_PRECO_CURTO[c.key]}: {formatDecimal(valoresLinha[c.key])}
+                                </span>
+                              ))}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                   <button
                     type="button"
