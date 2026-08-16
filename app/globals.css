@@ -53,3 +53,11 @@ body {
 .recharts-wrapper svg:focus {
   outline: none;
 }
+
+/* mesmo problema do recharts acima, agora no Leaflet: clicar num polígono
+   (pasto) o deixa focado por acessibilidade, e o navegador desenha um
+   contorno preto padrão ao redor do bounding box inteiro da forma — nada
+   a ver com o destaque visual real (cor/espessura), que já é feito à parte */
+.leaflet-interactive:focus {
+  outline: none;
+}

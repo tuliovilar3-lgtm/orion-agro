@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css'
 import type { Geometry } from 'geojson'
 import { ICONE_SRC, ICONE_TIER, TIER_SIZE_PX, type CodigoIconeCategoria } from '@/lib/categoria-icones'
 import { formatQuantidade, formatPeso, formatArea, formatLotacao } from '@/lib/format'
+import { useTelaCheia, ControleTelaCheia, InvalidarTamanho } from '@/components/fazendas/MapaTelaCheia'
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção usada no
 // Painel e no Relatório de Lotação
@@ -110,6 +111,7 @@ export default function MapaDistribuicaoRebanho({
   altura?: number
 }) {
   const pastosComGeometria = useMemo(() => pastos.filter((p) => p.geometria), [pastos])
+  const { wrapperRef, telaCheia, alternarTelaCheia } = useTelaCheia()
 
   const todasGeometrias = [
     ...fazendasGeometria,
@@ -118,7 +120,11 @@ export default function MapaDistribuicaoRebanho({
   const centroInicial: [number, number] = [-15.78, -47.93]
 
   return (
-    <div className="overflow-hidden rounded-control border border-border bg-surface" style={{ height: altura }}>
+    <div
+      ref={wrapperRef}
+      className="overflow-hidden rounded-control border border-border bg-surface"
+      style={{ height: telaCheia ? '100vh' : altura }}
+    >
       <MapContainer center={centroInicial} zoom={4} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution="Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
@@ -184,6 +190,8 @@ export default function MapaDistribuicaoRebanho({
           ))
         })}
         <AjustarZoom geometrias={todasGeometrias} />
+        <ControleTelaCheia ativo={telaCheia} onToggle={alternarTelaCheia} />
+        <InvalidarTamanho gatilho={telaCheia} />
       </MapContainer>
     </div>
   )

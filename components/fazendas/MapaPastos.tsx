@@ -1,6 +1,6 @@
 'use client'
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -8,6 +8,7 @@ import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import type { Geometry } from 'geojson'
 import { calcularAreaHa } from '@/lib/kml'
+import { useTelaCheia, ControleTelaCheia, InvalidarTamanho } from '@/components/fazendas/MapaTelaCheia'
 
 export type PastoMapa = {
   id: string
@@ -56,11 +57,6 @@ function EdicaoVerticesPasto({
   return null
 }
 
-const ICONE_EXPANDIR =
-  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>'
-const ICONE_RECOLHER =
-  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>'
-
 // só a ferramenta de desenhar polígono novo — a edição de um contorno já
 // existente é feita por vértice (ver EdicaoVerticesPasto acima), não por
 // aqui; as duas coisas nunca ficam ativas ao mesmo tempo (GestaoAreasPanel
@@ -101,62 +97,6 @@ function ControleDesenho({ onDesenhado }: { onDesenhado: (geometria: Geometry, a
   return null
 }
 
-// botão de tela cheia como controle nativo do Leaflet — empilha junto
-// com o toolbar de desenho no canto superior direito, sem precisar de
-// posicionamento absoluto manual por cima do mapa
-function ControleTelaCheia({ ativo, onToggle }: { ativo: boolean; onToggle: () => void }) {
-  const map = useMap()
-  const botaoRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    const TelaCheiaControl = L.Control.extend({
-      onAdd() {
-        const btn = L.DomUtil.create('button', 'leaflet-bar') as HTMLButtonElement
-        btn.type = 'button'
-        btn.style.width = '30px'
-        btn.style.height = '30px'
-        btn.style.display = 'flex'
-        btn.style.alignItems = 'center'
-        btn.style.justifyContent = 'center'
-        btn.style.cursor = 'pointer'
-        btn.style.backgroundColor = '#FFFFFF'
-        L.DomEvent.disableClickPropagation(btn)
-        L.DomEvent.on(btn, 'click', onToggle)
-        botaoRef.current = btn
-        return btn
-      },
-    })
-    const control = new (TelaCheiaControl as any)({ position: 'topright' })
-    control.addTo(map)
-    return () => {
-      control.remove()
-      botaoRef.current = null
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map])
-
-  useEffect(() => {
-    const btn = botaoRef.current
-    if (!btn) return
-    btn.innerHTML = ativo ? ICONE_RECOLHER : ICONE_EXPANDIR
-    btn.title = ativo ? 'Sair da tela cheia' : 'Tela cheia'
-  }, [ativo])
-
-  return null
-}
-
-// depois de entrar/sair da tela cheia o container muda de tamanho, mas
-// o Leaflet não percebe sozinho — sem isso o mapa fica cortado até o
-// usuário arrastar/zoom manualmente
-function InvalidarTamanho({ gatilho }: { gatilho: boolean }) {
-  const map = useMap()
-  useEffect(() => {
-    const id = setTimeout(() => map.invalidateSize(), 60)
-    return () => clearTimeout(id)
-  }, [map, gatilho])
-  return null
-}
-
 function AjustarZoom({ geometrias }: { geometrias: Geometry[] }) {
   const map = useMap()
   useEffect(() => {
@@ -183,8 +123,7 @@ const MapaPastos = forwardRef<
   { fazendaGeometria, pastos, pastoDestacadoId, pastoEmEdicaoId, onDesenhado, onClicarPasto },
   ref
 ) {
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  const [telaCheia, setTelaCheia] = useState(false)
+  const { wrapperRef, telaCheia, alternarTelaCheia } = useTelaCheia()
   const layerEmEdicaoRef = useRef<L.Polygon | null>(null)
 
   useImperativeHandle(ref, () => ({
@@ -195,22 +134,6 @@ const MapaPastos = forwardRef<
       return { geometria: geojson.geometry as Geometry, areaHa: calcularAreaHa(geojson.geometry) }
     },
   }))
-
-  useEffect(() => {
-    function aoMudarTelaCheia() {
-      setTelaCheia(document.fullscreenElement === wrapperRef.current)
-    }
-    document.addEventListener('fullscreenchange', aoMudarTelaCheia)
-    return () => document.removeEventListener('fullscreenchange', aoMudarTelaCheia)
-  }, [])
-
-  function alternarTelaCheia() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    } else {
-      wrapperRef.current?.requestFullscreen()
-    }
-  }
 
   const todasGeometrias = [
     ...(fazendaGeometria ? [fazendaGeometria] : []),
