@@ -2899,7 +2899,7 @@ export default function MovimentacoesPage() {
                             Peso méd. (kg)
                           </th>
                           {isVendaAbate && (
-                            <th className="w-40 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            <th className="min-w-[150px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
                               Peso morto / Rend.
                             </th>
                           )}
@@ -2974,12 +2974,15 @@ export default function MovimentacoesPage() {
                               </td>
                               {isVendaAbate && (
                                 <td className="border-b border-border p-2 align-top">
-                                  <div className="flex gap-1">
+                                  {/* empilhado em vez de lado a lado — mesmo motivo da coluna
+                                      Preço: dois inputs dividindo uma coluna estreita deixavam o
+                                      placeholder cortado ("Mc"/"Re" em vez de "Morto"/"Rend. %") */}
+                                  <div className="space-y-1">
                                     <input
                                       type="number"
                                       step="0.01"
                                       min="0.01"
-                                      placeholder="Morto"
+                                      placeholder="Peso morto (kg)"
                                       className={`text-right ${inputSmClass}`}
                                       value={linha.pesoMorto}
                                       onChange={(e) => atualizarPesoMortoLinha(i, e.target.value)}
@@ -2988,7 +2991,7 @@ export default function MovimentacoesPage() {
                                       type="number"
                                       step="0.01"
                                       min="0.01"
-                                      placeholder="Rend. %"
+                                      placeholder="Rendimento (%)"
                                       className={`text-right ${inputSmClass}`}
                                       value={linha.rendimentoCarcaca}
                                       onChange={(e) => atualizarRendimentoLinha(i, e.target.value)}

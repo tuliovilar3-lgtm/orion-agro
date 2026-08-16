@@ -2469,3 +2469,12 @@ Trocar" com o passo 2 aparecendo logo abaixo; rolar a página com `window.scroll
 saindo de `top: 168px` pra `top: 0px` (grudada) no desktop; em viewport mobile (375×812), a barra
 grudou em `top: 56px` sem sobrepor a topbar fixa (`bottom: 45px`); "Trocar" reabre a grade completa
 corretamente. Formulário fechado sem salvar ao final.
+
+**Mesmo bug de largura na coluna "Peso morto / Rend." de Venda Abate**: os dois inputs (peso morto e
+rendimento) dividiam uma coluna de `w-40` (160px fixos) lado a lado, sobrando ~76px cada — pouco pra
+mostrar o placeholder inteiro ("Morto"/"Rend. %" apareciam cortados, tipo "Mc"/"Re"). Mesmo tratamento
+já aplicado à coluna Preço: os dois inputs passam a ficar empilhados (`space-y-1`, cada um em largura
+cheia da coluna) em vez de lado a lado, e a coluna virou `min-w-[150px]` (era `w-40` fixo). Placeholders
+também ficaram mais descritivos agora que sobra espaço: "Peso morto (kg)" e "Rendimento (%)" (antes
+"Morto"/"Rend. %", abreviados por causa do espaço apertado). Verificado no navegador: os dois inputs
+medem 134px de largura cada (eram ~76px), com os placeholders completos visíveis.
