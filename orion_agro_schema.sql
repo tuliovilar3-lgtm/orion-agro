@@ -458,10 +458,6 @@ begin
     raise exception 'Não é possível excluir: essa pessoa é proprietária de uma fazenda. Inative-a em vez disso.';
   end if;
 
-  if exists (select 1 from fazenda_proprietarios where pessoa_id = old.id) then
-    raise exception 'Não é possível excluir: essa pessoa está vinculada como proprietária de gado em uma fazenda. Remova o vínculo (editar a fazenda) antes de excluir.';
-  end if;
-
   delete from pessoa_papeis where pessoa_id = old.id;
 
   return old;
@@ -475,20 +471,6 @@ for each row execute function fn_validar_delete_pessoa();
 -- só agora dá pra referenciar pessoas (Proprietário) a partir de
 -- fazendas, definida mais acima no arquivo
 alter table fazendas add column proprietario_id uuid references pessoas(id);
-
--- fazenda_proprietarios (migração 044): pessoas (papel PROPRIETARIO)
--- autorizadas a serem atribuídas como dono de um lote de gado nessa
--- fazenda — separado de fazendas.proprietario_id, que é o dono da
--- terra (cadastral, singular). Algumas fazendas têm mais de um
--- proprietário de gado (parceria, arrendamento, sociedade entre
--- parentes).
-create table fazenda_proprietarios (
-  id           uuid primary key default gen_random_uuid(),
-  fazenda_id   uuid not null references fazendas(id),
-  pessoa_id    uuid not null references pessoas(id),
-  criado_em    timestamptz not null default now(),
-  unique (fazenda_id, pessoa_id)
-);
 
 create table centros_custo (
   id              uuid primary key default gen_random_uuid(),
@@ -1351,9 +1333,9 @@ create table movimentacoes_rebanho (
   -- lançamento de entrada de qualquer forma).
   safra_nascimento_ano_inicio int,
 
-  -- proprietário do lote de gado dessa linha (migração 044) — só usado
-  -- quando a fazenda tem mais de um proprietário vinculado (ver
-  -- fazenda_proprietarios); dimensão independente, não cruza com pasto.
+  -- proprietário do lote de gado dessa linha (migração 044, lista
+  -- global de pessoas com papel PROPRIETARIO desde a migração 045) —
+  -- dimensão independente, não cruza com pasto.
   proprietario_id       uuid references pessoas(id),
 
   -- comercial (compra / venda em pé / venda abate / consumo-doação)
@@ -1879,24 +1861,6 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
--- fn_proprietarios_disponiveis_fazenda (migração 044): pessoas
--- vinculadas como proprietário de gado numa fazenda (fazenda_proprietarios)
--- — alimenta o seletor no frontend, que só aparece com 2+ resultados.
--- ---------------------------------------------------------------------
-
-create or replace function fn_proprietarios_disponiveis_fazenda(p_fazenda_id uuid)
-returns table(pessoa_id uuid, nome text)
-language sql
-stable
-as $$
-  select p.id, p.nome
-  from fazenda_proprietarios fp
-  join pessoas p on p.id = fp.pessoa_id
-  where fp.fazenda_id = p_fazenda_id
-  order by p.nome;
-$$;
-
--- ---------------------------------------------------------------------
 -- fn_lotes_nascimento_disponiveis (migração 030, simplificada na 031):
 -- lista os lotes (safra) com saldo > 0 numa fazenda+categoria numa
 -- data — alimenta o seletor de lote no frontend (Desmame e as demais
@@ -2049,39 +2013,6 @@ $$ language plpgsql;
 create trigger trg_validar_pasto_pertence_fazenda
 before insert or update on movimentacoes_rebanho
 for each row execute function fn_validar_pasto_pertence_fazenda();
-
--- ---------------------------------------------------------------------
--- TRIGGER (migração 044): quando proprietario_id é preenchido, precisa
--- estar vinculado (fazenda_proprietarios) à fazenda do lançamento —
--- mesmo princípio de fn_validar_pasto_pertence_fazenda. Em
--- TRANSFERENCIA, checa a fazenda de origem (de onde o lote está saindo).
--- ---------------------------------------------------------------------
-
-create or replace function fn_validar_proprietario_pertence_fazenda()
-returns trigger as $$
-declare
-  v_fazenda_esperada uuid;
-begin
-  if new.proprietario_id is null then
-    return new;
-  end if;
-
-  v_fazenda_esperada := coalesce(new.fazenda_origem_id, new.fazenda_id);
-
-  if not exists (
-    select 1 from fazenda_proprietarios
-    where fazenda_id = v_fazenda_esperada and pessoa_id = new.proprietario_id
-  ) then
-    raise exception 'O proprietário selecionado não está vinculado a essa fazenda.';
-  end if;
-
-  return new;
-end;
-$$ language plpgsql;
-
-create trigger trg_validar_proprietario_pertence_fazenda
-before insert or update on movimentacoes_rebanho
-for each row execute function fn_validar_proprietario_pertence_fazenda();
 
 -- ---------------------------------------------------------------------
 -- TRIGGER: exige que o saldo inicial da fazenda já tenha sido

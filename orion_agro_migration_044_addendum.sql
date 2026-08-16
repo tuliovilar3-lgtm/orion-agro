@@ -29,3 +29,24 @@ begin
   return old;
 end;
 $$ language plpgsql;
+
+-- ---------------------------------------------------------------------
+-- Backfill: fazendas que já existiam antes da migração 044 nunca
+-- passaram pelo formulário "Editar Fazenda" desde então, então
+-- fazenda_proprietarios ficou vazia pra elas — nem o dono da terra
+-- aparece marcado em "Proprietários do gado nesta fazenda", e o
+-- seletor de proprietário no lançamento nunca aparece (a checagem é
+-- "2 ou mais vinculados", e 0 nunca passa disso). Isso popula o dono
+-- da terra como o proprietário de gado padrão pra qualquer fazenda que
+-- ainda não tem nenhum vínculo — mesma regra que já roda no submit do
+-- formulário, aplicada uma vez aqui pros dados existentes. Idempotente
+-- (seguro rodar de novo) e não sobrescreve fazendas que já têm algum
+-- proprietário de gado configurado manualmente.
+-- ---------------------------------------------------------------------
+
+insert into fazenda_proprietarios (fazenda_id, pessoa_id)
+select f.id, f.proprietario_id
+from fazendas f
+where f.proprietario_id is not null
+  and not exists (select 1 from fazenda_proprietarios fp where fp.fazenda_id = f.id)
+on conflict (fazenda_id, pessoa_id) do nothing;

@@ -102,7 +102,7 @@ type Categoria = {
 }
 type ClienteFornecedor = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
-type Proprietario = { id: string; nome: string; fazenda_id: string }
+type Proprietario = { id: string; nome: string }
 type ItemAjuste = { id: string; nome: string; tipo: TipoAjuste }
 type AjusteLancado = { itemId: string; itemNome: string; valor: number }
 type LinhaCategoria = {
@@ -384,12 +384,13 @@ export default function MovimentacoesPage() {
   const pastosDestinoDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaDestinoId)
   const mostrarSeletorPastoDestino = isTransferencia && controlaPasto && pastosDestinoDisponiveis.length > 1
 
-  // proprietário do lote de gado: seletor só aparece quando a fazenda
-  // (de origem, em TRANSFERENCIA) tem 2+ proprietários vinculados —
-  // mesmo princípio do seletor de pasto, mas sem "Geral" — quando
-  // escondido, o campo simplesmente fica vazio (proprietário é sempre
-  // opcional, diferente de pasto).
-  const proprietariosDisponiveis = proprietarios.filter((p) => p.fazenda_id === fazendaOrigemParaPasto)
+  // proprietário do lote de gado: lista global (qualquer pessoa com
+  // papel PROPRIETARIO, sem vínculo por fazenda — o gado pode ser
+  // transferido entre fazendas, então amarrar por fazenda só criaria
+  // fricção). Seletor só aparece quando há 2+ proprietários cadastrados
+  // no sistema; quando escondido, o campo fica vazio (proprietário é
+  // sempre opcional).
+  const proprietariosDisponiveis = proprietarios
   const mostrarSeletorProprietario = proprietariosDisponiveis.length > 1
 
   // nenhuma movimentação pode ser lançada numa fazenda que ainda não
@@ -539,25 +540,6 @@ export default function MovimentacoesPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTransferencia, fazendaDestinoId, mostrarSeletorPastoDestino, pastos])
-
-  // proprietário: limpa a seleção (singular e por linha) quando a
-  // fazenda muda ou o proprietário escolhido deixa de estar entre os
-  // vinculados — sem fallback, já que o campo é sempre opcional
-  useEffect(() => {
-    if (!mostrarSeletorProprietario || !proprietariosDisponiveis.some((p) => p.id === proprietarioId)) {
-      setProprietarioId('')
-    }
-    setLinhas((prev) =>
-      prev.map((l) =>
-        mostrarSeletorProprietario && proprietariosDisponiveis.some((p) => p.id === l.proprietarioId)
-          ? l
-          : l.proprietarioId
-            ? { ...l, proprietarioId: '' }
-            : l
-      )
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaOrigemParaPasto, mostrarSeletorProprietario, proprietarios])
 
   useEffect(() => {
     if (!precisaChecarSaldo || !fazendaParaSaldo || !categoriaId || !data) {
@@ -749,7 +731,10 @@ export default function MovimentacoesPage() {
         // inativada depois
         supabase.from('fazendas').select('id, nome').order('nome'),
         supabase.from('categorias_animal').select('id, nome').order('nome'),
-        supabase.from('fazenda_proprietarios').select('fazenda_id, pessoa:pessoas!pessoa_id(id, nome)'),
+        // lista global de proprietários (qualquer pessoa com papel
+        // PROPRIETARIO) — não filtrada por fazenda, já que o gado pode
+        // ser transferido entre fazendas
+        supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
       ])
     setFazendas(f || [])
     setCategorias((c as unknown as Categoria[]) || [])
@@ -761,8 +746,9 @@ export default function MovimentacoesPage() {
     setCategoriasFiltro(cFiltro || [])
     setProprietarios(
       ((prop || []) as any[])
-        .filter((r) => r.pessoa)
-        .map((r) => ({ id: r.pessoa.id, nome: r.pessoa.nome, fazenda_id: r.fazenda_id }))
+        .map((r) => r.pessoa)
+        .filter(Boolean)
+        .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
     )
   }
 

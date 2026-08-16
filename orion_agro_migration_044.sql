@@ -426,6 +426,21 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------
+-- 7b) Backfill: fazendas que já existem no momento desta migração nunca
+-- passaram pelo novo formulário, então fazenda_proprietarios ficaria
+-- vazia pra elas até a próxima edição — popula o dono da terra como o
+-- proprietário de gado padrão pra qualquer fazenda ainda sem nenhum
+-- vínculo (mesma regra que roda no submit do formulário de Fazenda).
+-- ---------------------------------------------------------------------
+
+insert into fazenda_proprietarios (fazenda_id, pessoa_id)
+select f.id, f.proprietario_id
+from fazendas f
+where f.proprietario_id is not null
+  and not exists (select 1 from fazenda_proprietarios fp where fp.fazenda_id = f.id)
+on conflict (fazenda_id, pessoa_id) do nothing;
+
+-- ---------------------------------------------------------------------
 -- 8) fn_relatorio_movimentacao_rebanho ganha um filtro opcional por
 -- proprietário (p_proprietario_ids, default null = sem filtro, mesmo
 -- comportamento de hoje). Usada tanto por "Resumo de Movimentação de

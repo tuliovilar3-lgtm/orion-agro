@@ -2108,6 +2108,17 @@ sem o ajuste, excluir uma pessoa vinculada como proprietário de gado bateria nu
 em vez da mensagem amigável já usada pros outros vínculos. Corrigido na mesma migração 044, mesmo
 princípio de "inative-a em vez disso" já usado em todo o resto do sistema.
 
+**Segundo gap, encontrado depois do deploy**: o "dono da terra vira o único proprietário de gado por
+padrão" só roda no submit do formulário de Fazenda — fazendas que já existiam antes da migração 044 e
+não foram reabertas/salvas desde então ficaram com `fazenda_proprietarios` **vazia**, nem o dono da
+terra vinculado. Como o seletor exige 2+, isso não quebrava nada visivelmente (0 e 1 se comportam
+igual — seletor escondido), mas deixava a lista "Proprietários do gado nesta fazenda" com nenhum
+nome marcado, inconsistente com o que o usuário via no cadastro. Corrigido com um backfill idempotente
+(popula `fazenda_proprietarios` com `fazendas.proprietario_id` pra toda fazenda ainda sem nenhum
+vínculo, sem sobrescrever quem já tinha algo configurado manualmente) — incluído tanto no arquivo da
+migração 044 (pra quem rodar do zero) quanto no addendum enviado separadamente pra quem já tinha
+rodado a versão original.
+
 Verificado no navegador (`FAZENDA TESTE`): vincular um segundo proprietário de gado a uma fazenda de
 teste ("Sócio Teste", criado via "+ Novo" no cadastro de fazenda) fez o seletor de proprietário
 aparecer no lançamento — confirmado que fica escondido com só 1 vinculado (comportamento padrão de
@@ -2122,3 +2133,49 @@ Dados de teste totalmente revertidos ao final: proprietário do lote limpo da mo
 vínculo em `fazenda_proprietarios` removido, `fazendas.proprietario_id` restaurado pro dono original
 ("Túlio" — alterado sem querer durante o teste, já que criar um proprietário novo via "+ Novo"
 auto-seleciona ele no campo de dono da terra também), e a pessoa "Sócio Teste" excluída.
+
+## Proprietário do lote de gado vira lista global (migração 045)
+
+Uso real revelou dois problemas com o vínculo por fazenda da migração 044: (1) fazendas cadastradas
+antes da migração ficavam com `fazenda_proprietarios` vazia até serem reabertas/salvas, então o
+seletor não aparecia em nenhum lançamento até um passo manual de configuração; e (2) mais fundamental
+— **o usuário observou que o gado de um proprietário pode ser transferido de uma fazenda para
+outra**, então amarrar "quais proprietários valem nesta fazenda" cria fricção justamente no caso mais
+comum (Transferência), sem nenhum ganho real, já que `fn_saldo_categoria_proprietario` (mantida sem
+alteração) sempre rastreou o saldo por fazenda+categoria+proprietário independente de qualquer vínculo
+prévio — o vínculo só existia pra filtrar a lista do seletor, não pro cálculo de saldo em si.
+
+Decisão: **proprietário vira uma lista global**, igual o cadastro de dono da terra já funcionava —
+qualquer pessoa com papel PROPRIETARIO (Pessoas e Empresas) fica selecionável em qualquer lançamento,
+em qualquer fazenda, sem nenhum passo de vínculo antes. Reverteu por completo a Fase 1:
+
+- **Removidos** (migração 045): tabela `fazenda_proprietarios`, trigger/função
+  `fn_validar_proprietario_pertence_fazenda` (não faz mais sentido checar "pertence à fazenda"),
+  função `fn_proprietarios_disponiveis_fazenda`, e a checagem de `fazenda_proprietarios` dentro de
+  `fn_validar_delete_pessoa` (a checagem de `movimentacoes_rebanho.proprietario_id` continua).
+- **Removida** a seção "Proprietários do gado nesta fazenda" do cadastro de Fazenda
+  (`CadastrarFazendaModal.tsx`) — o formulário volta a ser exatamente como antes da migração 044,
+  com um único campo de Proprietário (dono da terra).
+- **`app/movimentacoes/page.tsx`**: `proprietarios` passa a ser buscado direto de `pessoa_papeis`
+  filtrado por papel PROPRIETARIO (mesma query que o cadastro de Fazenda já usa pro dono da terra),
+  sem nenhum filtro por fazenda. `mostrarSeletorProprietario` vira `proprietarios.length > 1` —
+  contagem global, não mais por fazenda. O efeito de limpeza que resetava a seleção ao trocar de
+  fazenda foi removido inteiramente: como proprietário não depende mais de fazenda, uma seleção feita
+  numa linha continua válida se a fazenda do lançamento mudar.
+- **`FiltroGlobalContext.tsx`**: mesmo princípio — `proprietarios` vem de uma busca única e global no
+  mount do provider (paralela à busca de `fazendas`), sem cruzar com `fazendaIds` selecionado. A
+  poda de seleções inválidas continua existindo, mas agora só reage a mudanças na lista global em si
+  (ex.: proprietário excluído do sistema), não a troca de fazenda.
+
+Verificado no navegador: com dois proprietários reais já cadastrados (Carlos Cesar Pereira - Tinho e
+Túlio, sem nenhum vínculo por fazenda configurado), o seletor apareceu imediatamente em Compra pra
+**FAZENDA SÃO JOSÉ** — a mesma fazenda que na migração 044 tinha ficado com `fazenda_proprietarios`
+vazia e teria bloqueado esse mesmo lançamento com "O proprietário selecionado não está vinculado a
+essa fazenda." Lançar essa Compra com proprietário atribuído funcionou sem nenhum erro (a trigger
+antiga que bloqueava isso não existe mais), apareceu corretamente na listagem, e o filtro em
+Relatórios de Movimentações mostrou os dois proprietários globalmente, sem depender de qual fazenda
+estava selecionada no filtro. Nota de processo: um erro de compilação real apareceu no meio da edição
+(`proprietarios` declarado duas vezes em `FiltroGlobalContext.tsx`, de um passo intermediário onde a
+`useMemo` antiga e o novo `useState` coexistiam) — confirmado como real (não estático/obsoleto) só
+depois de reproduzir numa aba nova do navegador, e corrigido antes de prosseguir. Movimentação de
+teste revertida (proprietário limpo) ao final.

@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { anoCalendarioAtual, anoInicioSafraAtual, periodoAno, periodoSafra, ultimoDiaDoMes } from '@/lib/periodo'
 
@@ -15,12 +15,13 @@ type FiltroGlobalValue = {
   alternarFazenda: (id: string) => void
   alternarTodas: () => void
   todasSelecionadas: boolean
-  // proprietários vinculados às fazendas atualmente selecionadas (união,
-  // sem duplicar quem está em mais de uma). proprietarioIds vazio =
-  // "todos" (sem filtro) — diferente de fazendaIds, onde vazio filtraria
-  // tudo fora, já que proprietário é sempre opcional numa movimentação
-  // (a maioria não tem nenhum atribuído) e não faria sentido esconder
-  // esses lançamentos por padrão.
+  // lista global de proprietários (qualquer pessoa com papel
+  // PROPRIETARIO, sem vínculo por fazenda — o gado pode ser transferido
+  // entre fazendas). proprietarioIds vazio = "todos" (sem filtro) —
+  // diferente de fazendaIds, onde vazio filtraria tudo fora, já que
+  // proprietário é sempre opcional numa movimentação (a maioria não tem
+  // nenhum atribuído) e não faria sentido esconder esses lançamentos
+  // por padrão.
   proprietarios: Proprietario[]
   proprietarioIds: string[]
   setProprietarioIds: (ids: string[]) => void
@@ -53,9 +54,7 @@ const STORAGE_KEY = 'orion.filtroGlobal'
 export function FiltroGlobalProvider({ children }: { children: React.ReactNode }) {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [fazendaIds, setFazendaIdsState] = useState<string[]>([])
-  // dados crus de fazenda_proprietarios (todas, sem filtro) — a lista
-  // exposta (proprietarios) é derivada disso cruzando com fazendaIds
-  const [fazendaProprietarios, setFazendaProprietarios] = useState<{ fazenda_id: string; pessoa_id: string; nome: string }[]>([])
+  const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
   const [proprietarioIds, setProprietarioIdsState] = useState<string[]>([])
   const [modoFiltro, setModoFiltroState] = useState<ModoFiltro>('safra')
   const [mes, setMesState] = useState(() => new Date().toISOString().slice(0, 7))
@@ -73,14 +72,15 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     Promise.all([
       supabase.from('fazendas').select('id, nome').order('nome'),
-      supabase.from('fazenda_proprietarios').select('fazenda_id, pessoa:pessoas!pessoa_id(id, nome)'),
-    ]).then(([{ data }, { data: fp }]) => {
+      supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
+    ]).then(([{ data }, { data: prop }]) => {
         const lista = data || []
         setFazendas(lista)
-        setFazendaProprietarios(
-          ((fp || []) as any[])
-            .filter((r) => r.pessoa)
-            .map((r) => ({ fazenda_id: r.fazenda_id, pessoa_id: r.pessoa.id, nome: r.pessoa.nome }))
+        setProprietarios(
+          ((prop || []) as any[])
+            .map((r) => r.pessoa)
+            .filter(Boolean)
+            .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
         )
 
         let salvo: Record<string, unknown> | null = null
@@ -146,18 +146,8 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
 
   const todasSelecionadas = fazendas.length > 0 && fazendaIds.length === fazendas.length
 
-  // união dos proprietários vinculados às fazendas selecionadas — quem
-  // está em mais de uma fazenda aparece uma vez só
-  const proprietarios = useMemo(() => {
-    const porId = new Map<string, string>()
-    for (const fp of fazendaProprietarios) {
-      if (fazendaIds.includes(fp.fazenda_id)) porId.set(fp.pessoa_id, fp.nome)
-    }
-    return [...porId.entries()].map(([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
-  }, [fazendaProprietarios, fazendaIds])
-
-  // poda seleções que deixaram de existir na lista atual (ex.: usuário
-  // desmarcou a fazenda cujo proprietário estava selecionado)
+  // poda seleções que deixaram de existir na lista (ex.: proprietário
+  // excluído do sistema)
   useEffect(() => {
     setProprietarioIdsState((prev) => {
       const podado = prev.filter((id) => proprietarios.some((p) => p.id === id))
