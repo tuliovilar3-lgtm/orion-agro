@@ -9,6 +9,7 @@ import ModuloGate from '@/components/ModuloGate'
 type Fazenda = { id: string; nome: string }
 type Categoria = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
+type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
 type ModoPesagem = 'CATEGORIA' | 'PASTO'
 
 type LinhaDistribuicao = {
@@ -48,6 +49,7 @@ export default function PesagensPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
+  const [modulos, setModulos] = useState<Modulo[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
   const [pesagens, setPesagens] = useState<Pesagem[]>([])
   const [loading, setLoading] = useState(true)
@@ -56,6 +58,7 @@ export default function PesagensPage() {
   const [fazendaId, setFazendaId] = useState('')
   const [data, setData] = useState(() => new Date().toISOString().slice(0, 10))
   const [modo, setModo] = useState<ModoPesagem>('CATEGORIA')
+  const [moduloId, setModuloId] = useState('')
   const [pastoId, setPastoId] = useState('')
   const [distribuicao, setDistribuicao] = useState<LinhaDistribuicao[]>([])
   const [loadingDistribuicao, setLoadingDistribuicao] = useState(false)
@@ -72,6 +75,14 @@ export default function PesagensPage() {
   const mostrarToggleModo = controlaPasto
   const pastosDaFazenda = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId)
   const modoEfetivo: ModoPesagem = mostrarToggleModo ? modo : 'CATEGORIA'
+
+  // módulo → pasto é uma cascata de dois níveis, só relevante no modo
+  // "Por pasto" — mesmo princípio já usado em Movimentações/Mudança de
+  // Pasto/Saldo Inicial. Sem módulo escolhido ainda (ou fazenda com um
+  // módulo só), cai pra lista de pastos da fazenda inteira.
+  const modulosDaFazenda = modulos.filter((m) => m.fazenda_id === fazendaId)
+  const mostrarSeletorModulo = modulosDaFazenda.length > 1
+  const pastosParaSelecionar = moduloId ? pastos.filter((p) => p.modulo_id === moduloId) : pastosDaFazenda
 
   const categoriasExibidas =
     modoEfetivo === 'PASTO'
@@ -125,6 +136,12 @@ export default function PesagensPage() {
       .order('nome')
       .then(({ data }) => setPastos((data as unknown as Pasto[]) || []))
     supabase
+      .from('modulos')
+      .select('id, fazenda_id, nome, ativo, ordem')
+      .eq('ativo', true)
+      .order('ordem')
+      .then(({ data }) => setModulos(data || []))
+    supabase
       .from('configuracoes')
       .select('controla_pasto')
       .single()
@@ -133,13 +150,32 @@ export default function PesagensPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // reseta modo/pasto/pesos ao trocar de fazenda
+  // reseta modo/módulo/pasto/pesos ao trocar de fazenda
   useEffect(() => {
     setModo('CATEGORIA')
+    setModuloId('')
     setPastoId('')
     setPesoPorCategoria({})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
+
+  // módulo (modo "Por pasto"): some sozinho quando a fazenda só tem um
+  // módulo ativo
+  useEffect(() => {
+    if (modoEfetivo !== 'PASTO' || !fazendaId) return
+    if (!mostrarSeletorModulo) {
+      setModuloId(modulosDaFazenda[0]?.id ?? '')
+    } else if (!modulosDaFazenda.some((m) => m.id === moduloId)) {
+      setModuloId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modoEfetivo, fazendaId, mostrarSeletorModulo, modulos])
+
+  // trocar de módulo invalida o pasto escolhido
+  useEffect(() => {
+    setPastoId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduloId])
 
   useEffect(() => {
     setPesoPorCategoria({})
@@ -324,6 +360,27 @@ export default function PesagensPage() {
           </div>
         )}
 
+        {fazendaId && modoEfetivo === 'PASTO' && mostrarSeletorModulo && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+              Módulo
+              <Required />
+            </label>
+            <select
+              className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+              value={moduloId}
+              onChange={(e) => setModuloId(e.target.value)}
+            >
+              <option value="">Selecione...</option>
+              {modulosDaFazenda.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {fazendaId && modoEfetivo === 'PASTO' && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">
@@ -334,9 +391,10 @@ export default function PesagensPage() {
               className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
               value={pastoId}
               onChange={(e) => setPastoId(e.target.value)}
+              disabled={mostrarSeletorModulo && !moduloId}
             >
               <option value="">Selecione...</option>
-              {pastosDaFazenda.map((p) => (
+              {pastosParaSelecionar.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.nome}
                 </option>

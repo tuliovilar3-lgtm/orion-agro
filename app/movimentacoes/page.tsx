@@ -102,6 +102,7 @@ type Categoria = {
 }
 type ClienteFornecedor = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
+type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
 type Proprietario = { id: string; nome: string }
 type ItemAjuste = { id: string; nome: string; tipo: TipoAjuste }
 type AjusteLancado = { itemId: string; itemNome: string; valor: number }
@@ -262,6 +263,7 @@ export default function MovimentacoesPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
+  const [modulos, setModulos] = useState<Modulo[]>([])
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
   const [clientesFornecedores, setClientesFornecedores] = useState<ClienteFornecedor[]>([])
@@ -284,6 +286,8 @@ export default function MovimentacoesPage() {
   const [categoriaDestinoId, setCategoriaDestinoId] = useState('')
   const [fazendaOrigemId, setFazendaOrigemId] = useState('')
   const [fazendaDestinoId, setFazendaDestinoId] = useState('')
+  const [moduloId, setModuloId] = useState('')
+  const [moduloDestinoId, setModuloDestinoId] = useState('')
   const [pastoId, setPastoId] = useState('')
   const [pastoDestinoId, setPastoDestinoId] = useState('')
   const [quantidade, setQuantidade] = useState('')
@@ -374,15 +378,21 @@ export default function MovimentacoesPage() {
   const isLoteCategoria = editandoGrupoId !== null || (!editandoId && TIPOS_COM_LOTE.includes(tipo))
   const mostrarPesoLinha = isSimples || isComPreco
 
-  // pasto: seletor só aparece quando o grupo usa controle por pasto e a
-  // fazenda tem mais de um pasto ativo — caso contrário o pasto "Geral"
-  // é preenchido sozinho (ver useEffects abaixo)
+  // módulo → pasto é uma cascata de dois níveis: o seletor de módulo só
+  // aparece quando a fazenda tem mais de um módulo ativo, e o seletor de
+  // pasto (dentro do módulo escolhido) só aparece quando esse módulo tem
+  // mais de um pasto ativo — caso contrário módulo e pasto "Geral" são
+  // preenchidos sozinhos (ver useEffects abaixo)
   const fazendaOrigemParaPasto = isTransferencia ? fazendaOrigemId : fazendaId
-  const pastosOrigemDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaOrigemParaPasto)
-  const mostrarSeletorPastoOrigem = controlaPasto && pastosOrigemDisponiveis.length > 1
+  const modulosOrigemDisponiveis = modulos.filter((m) => m.fazenda_id === fazendaOrigemParaPasto)
+  const mostrarSeletorModuloOrigem = controlaPasto && modulosOrigemDisponiveis.length > 1
+  const pastosOrigemDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
+  const mostrarSeletorPastoOrigem = controlaPasto && pastosOrigemDoModulo.length > 1
 
-  const pastosDestinoDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaDestinoId)
-  const mostrarSeletorPastoDestino = isTransferencia && controlaPasto && pastosDestinoDisponiveis.length > 1
+  const modulosDestinoDisponiveis = modulos.filter((m) => m.fazenda_id === fazendaDestinoId)
+  const mostrarSeletorModuloDestino = isTransferencia && controlaPasto && modulosDestinoDisponiveis.length > 1
+  const pastosDestinoDoModulo = pastos.filter((p) => p.modulo_id === moduloDestinoId)
+  const mostrarSeletorPastoDestino = isTransferencia && controlaPasto && pastosDestinoDoModulo.length > 1
 
   // proprietário do lote de gado: lista global (qualquer pessoa com
   // papel PROPRIETARIO, sem vínculo por fazenda — o gado pode ser
@@ -508,38 +518,72 @@ export default function MovimentacoesPage() {
     setConfirmarMudancaSexo(false)
   }, [tipo, categoriaId, categoriaDestinoId])
 
-  // pasto de origem: some pro "Geral" sozinho quando o seletor está
-  // escondido (grupo sem controla_pasto, ou só um pasto ativo)
+  // módulo de origem: some sozinho quando só há um módulo ativo na
+  // fazenda (mesmo princípio já usado pro pasto abaixo)
   useEffect(() => {
     if (!fazendaOrigemParaPasto) {
+      setModuloId('')
+      return
+    }
+    if (!mostrarSeletorModuloOrigem) {
+      const geral = modulosOrigemDisponiveis.find((m) => m.nome === 'Geral') || modulosOrigemDisponiveis[0]
+      setModuloId(geral ? geral.id : '')
+    } else if (!modulosOrigemDisponiveis.some((m) => m.id === moduloId)) {
+      setModuloId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaOrigemParaPasto, mostrarSeletorModuloOrigem, modulos])
+
+  // pasto de origem: some pro "Geral" sozinho quando o seletor está
+  // escondido (grupo sem controla_pasto, ou o módulo escolhido só tem um
+  // pasto ativo) — depende do módulo selecionado acima
+  useEffect(() => {
+    if (!moduloId) {
       setPastoId('')
       return
     }
     if (!mostrarSeletorPastoOrigem) {
-      const geral = pastosOrigemDisponiveis.find((p) => p.nome === 'Geral') || pastosOrigemDisponiveis[0]
+      const geral = pastosOrigemDoModulo.find((p) => p.nome === 'Geral') || pastosOrigemDoModulo[0]
       setPastoId(geral ? geral.id : '')
-    } else if (!pastosOrigemDisponiveis.some((p) => p.id === pastoId)) {
+    } else if (!pastosOrigemDoModulo.some((p) => p.id === pastoId)) {
       setPastoId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaOrigemParaPasto, mostrarSeletorPastoOrigem, pastos])
+  }, [moduloId, mostrarSeletorPastoOrigem, pastos])
 
-  // pasto de destino em TRANSFERENCIA (na fazenda de destino) — mesmo
-  // princípio do de origem.
+  // módulo de destino em TRANSFERENCIA (na fazenda de destino) — mesmo
+  // princípio do de origem
   useEffect(() => {
     if (!isTransferencia) return
     if (!fazendaDestinoId) {
+      setModuloDestinoId('')
+      return
+    }
+    if (!mostrarSeletorModuloDestino) {
+      const geral = modulosDestinoDisponiveis.find((m) => m.nome === 'Geral') || modulosDestinoDisponiveis[0]
+      setModuloDestinoId(geral ? geral.id : '')
+    } else if (!modulosDestinoDisponiveis.some((m) => m.id === moduloDestinoId)) {
+      setModuloDestinoId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTransferencia, fazendaDestinoId, mostrarSeletorModuloDestino, modulos])
+
+  // pasto de destino em TRANSFERENCIA — depende do módulo de destino
+  // selecionado acima
+  useEffect(() => {
+    if (!isTransferencia) return
+    if (!moduloDestinoId) {
       setPastoDestinoId('')
       return
     }
     if (!mostrarSeletorPastoDestino) {
-      const geral = pastosDestinoDisponiveis.find((p) => p.nome === 'Geral') || pastosDestinoDisponiveis[0]
+      const geral = pastosDestinoDoModulo.find((p) => p.nome === 'Geral') || pastosDestinoDoModulo[0]
       setPastoDestinoId(geral ? geral.id : '')
-    } else if (!pastosDestinoDisponiveis.some((p) => p.id === pastoDestinoId)) {
+    } else if (!pastosDestinoDoModulo.some((p) => p.id === pastoDestinoId)) {
       setPastoDestinoId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTransferencia, fazendaDestinoId, mostrarSeletorPastoDestino, pastos])
+  }, [isTransferencia, moduloDestinoId, mostrarSeletorPastoDestino, pastos])
 
   useEffect(() => {
     if (!precisaChecarSaldo || !fazendaParaSaldo || !categoriaId || !data) {
@@ -701,6 +745,7 @@ export default function MovimentacoesPage() {
       { data: f },
       { data: c },
       { data: p },
+      { data: mods },
       { data: cf },
       { data: cfg },
       { data: ia },
@@ -723,6 +768,7 @@ export default function MovimentacoesPage() {
           .select('id, modulo_id, nome, ativo, modulo:modulos!modulo_id(fazenda_id)')
           .eq('ativo', true)
           .order('nome'),
+        supabase.from('modulos').select('id, fazenda_id, nome, ativo, ordem').eq('ativo', true).order('ordem'),
         supabase.from('pessoas').select('id, nome').eq('ativo', true).order('nome'),
         supabase.from('configuracoes').select('controla_pasto').single(),
         supabase.from('itens_ajuste_financeiro').select('id, nome, tipo').order('nome'),
@@ -739,6 +785,7 @@ export default function MovimentacoesPage() {
     setFazendas(f || [])
     setCategorias((c as unknown as Categoria[]) || [])
     setPastos((p as unknown as Pasto[]) || [])
+    setModulos(mods || [])
     setClientesFornecedores(cf || [])
     setControlaPasto(cfg?.controla_pasto ?? false)
     setItensAjuste((ia as unknown as ItemAjuste[]) || [])
@@ -835,6 +882,8 @@ export default function MovimentacoesPage() {
     setCategoriaDestinoId('')
     setFazendaOrigemId('')
     setFazendaDestinoId('')
+    setModuloId('')
+    setModuloDestinoId('')
     setPastoId('')
     setPastoDestinoId('')
     setQuantidade('')
@@ -952,7 +1001,9 @@ export default function MovimentacoesPage() {
     setFazendaOrigemId(m.fazenda_origem_id || '')
     setFazendaDestinoId(m.fazenda_destino_id || '')
     setPastoId(m.pasto_id || '')
+    setModuloId(pastos.find((p) => p.id === m.pasto_id)?.modulo_id || '')
     setPastoDestinoId(m.pasto_destino_id || '')
+    setModuloDestinoId(pastos.find((p) => p.id === m.pasto_destino_id)?.modulo_id || '')
     setQuantidade(String(m.quantidade))
     setPesoMedio(m.peso_medio_kg != null ? String(m.peso_medio_kg) : '')
     setPesoMorto(m.peso_morto_kg != null ? String(round2(m.peso_morto_kg / m.quantidade)) : '')
@@ -1038,7 +1089,9 @@ export default function MovimentacoesPage() {
     setFazendaOrigemId(primeira.fazenda_origem_id || '')
     setFazendaDestinoId(primeira.fazenda_destino_id || '')
     setPastoId(primeira.pasto_id || '')
+    setModuloId(pastos.find((p) => p.id === primeira.pasto_id)?.modulo_id || '')
     setPastoDestinoId(primeira.pasto_destino_id || '')
+    setModuloDestinoId(pastos.find((p) => p.id === primeira.pasto_destino_id)?.modulo_id || '')
     setClienteFornecedorId(primeira.cliente_fornecedor_id || '')
     setCausaMorte(primeira.causa_morte || '')
     setSubtipoConsumoDoacao(primeira.subtipo_consumo_doacao || '')
@@ -1072,6 +1125,7 @@ export default function MovimentacoesPage() {
     setCategoriaId(primeira.categoria_id || '')
     setCategoriaDestinoId(primeira.categoria_destino_id || '')
     setPastoId(primeira.pasto_id || '')
+    setModuloId(pastos.find((p) => p.id === primeira.pasto_id)?.modulo_id || '')
     setObservacao(primeira.observacao || '')
     setLinhasDesmame(
       rows.map((r) => ({
@@ -1946,6 +2000,28 @@ export default function MovimentacoesPage() {
           </>
         )}
 
+        {mostrarSeletorModuloOrigem && (
+          <div>
+            <label className="block text-sm mb-1">
+              Módulo
+              <Required />
+            </label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={moduloId}
+              onChange={(e) => setModuloId(e.target.value)}
+              required
+            >
+              <option value="">Selecione...</option>
+              {modulosOrigemDisponiveis.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {mostrarSeletorPastoOrigem && (
           <div>
             <label className="block text-sm mb-1">
@@ -1959,9 +2035,31 @@ export default function MovimentacoesPage() {
               required
             >
               <option value="">Selecione...</option>
-              {pastosOrigemDisponiveis.map((p) => (
+              {pastosOrigemDoModulo.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {mostrarSeletorModuloDestino && (
+          <div>
+            <label className="block text-sm mb-1">
+              Módulo destino (fazenda destino)
+              <Required />
+            </label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={moduloDestinoId}
+              onChange={(e) => setModuloDestinoId(e.target.value)}
+              required
+            >
+              <option value="">Selecione...</option>
+              {modulosDestinoDisponiveis.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nome}
                 </option>
               ))}
             </select>
@@ -1981,7 +2079,7 @@ export default function MovimentacoesPage() {
               required
             >
               <option value="">Selecione...</option>
-              {pastosDestinoDisponiveis.map((p) => (
+              {pastosDestinoDoModulo.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.nome}
                 </option>

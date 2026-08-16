@@ -2134,6 +2134,72 @@ vínculo em `fazenda_proprietarios` removido, `fazendas.proprietario_id` restaur
 ("Túlio" — alterado sem querer durante o teste, já que criar um proprietário novo via "+ Novo"
 auto-seleciona ele no campo de dono da terra também), e a pessoa "Sócio Teste" excluída.
 
+## Cascata Módulo → Pasto nos formulários de lançamento
+
+Antes, os 4 formulários que lançam num pasto (`app/movimentacoes/page.tsx`,
+`app/controle-pasto/page.tsx`, `app/pesagens/page.tsx`, `components/fazendas/SaldoInicialPanel.tsx`)
+listavam **todos** os pastos da fazenda inteira num seletor só, sem passar pelo módulo — em fazendas
+com muitos pastos espalhados por vários módulos, essa lista ficava longa e sem organização, difícil
+de achar o pasto certo. Adicionada uma camada intermediária de seleção: **módulo → pasto**, mesmo
+princípio de cascata de dois níveis já usado nos outros pares do sistema (tipo de uso → subtipo de
+uso, fazenda → pasto original) — o pasto agora é sempre filtrado pelo módulo escolhido, não mais pela
+fazenda inteira de uma vez.
+
+`modulos` passa a ser carregada como consulta própria (`supabase.from('modulos').select('id,
+fazenda_id, nome, ativo, ordem')`) nos 4 arquivos, igual ao padrão que `GestaoAreasPanel.tsx` já usava
+— um módulo pode existir sem nenhum pasto, então não dá pra derivar a lista de módulos só a partir dos
+pastos já carregados. Cada arquivo tem seu próprio `type Modulo` local (mesmo padrão de duplicação
+deliberada já usado pra `type Pasto` nesses arquivos — sem hook compartilhado, cada tela é dona da sua
+cópia).
+
+**Mesma regra de "some sozinho" já usada pro pasto se aplica ao módulo**: o seletor de módulo só
+aparece quando a fazenda tem 2+ módulos ativos (`mostrarSeletorModulo`/`mostrarSeletorModuloOrigem`/
+`mostrarSeletorModuloDestino`, conforme o arquivo) — com um módulo só, ele é preenchido sozinho sem UI
+(mesmo módulo "Geral" auto-criado de sempre). O seletor de pasto, por sua vez, passa a ser filtrado
+pelo módulo escolhido (`pastos.filter(p => p.modulo_id === moduloId)`) em vez da fazenda inteira, e
+continua com a mesma regra de "some sozinho com 1 pasto só" que já tinha — só que agora dentro do
+módulo, não da fazenda. Trocar de módulo sempre invalida o pasto escolhido (reseta pra vazio,
+recalculado pela cascata).
+
+**Onde a cascata é dupla (dois pares módulo→pasto independentes)**: `TRANSFERENCIA` em Movimentações
+(módulo/pasto de origem e módulo/pasto de destino podem estar em fazendas — e módulos — diferentes) e
+o lançamento inteiro de Mudança de Pasto em `controle-pasto/page.tsx` (origem e destino sempre na
+mesma fazenda, mas podem estar em módulos diferentes — é inclusive o caso mais comum de uso dessa
+tela). Os dois pares são independentes: escolher o módulo de origem não afeta as opções do módulo de
+destino, e vice-versa.
+
+**Pesagens** só usa a cascata no modo "Por pasto" (o modo "Por categoria" nunca lida com pasto
+diretamente — grava em todos os pastos onde a categoria tem saldo, sem seletor de pasto nenhum). Nesse
+arquivo, diferente dos outros três, o pasto sempre foi um seletor obrigatório sem a regra de "some
+sozinho" (mesmo com só 1 pasto no módulo, o campo continua aparecendo) — só o módulo ganhou a regra de
+auto-esconder com 1 módulo só, mantendo a exigência de escolha explícita do pasto como já era antes.
+
+**`SaldoInicialPanel.tsx` tem uma corrida de carregamento que os outros 3 não têm**: `carregarLinhas`
+(que define o `pastoId` a partir da linha `SALDO_INICIAL` já existente) roda em paralelo com o efeito
+de montagem que carrega `pastos`/`módulos`/`configuracoes`, ambos disparados já na primeira
+renderização — diferente dos outros 3 arquivos, onde reabrir uma edição (`iniciarEdicao`) só acontece
+bem depois da montagem, por clique explícito do usuário, quando `pastos` já com certeza carregou.
+Por causa dessa corrida, derivar o módulo a partir do pasto salvo direto dentro de `carregarLinhas`
+(`pastos.find(...)`) seria frágil — poderia rodar antes de `pastos` estar populado. Resolvido com um
+efeito reativo separado (`useEffect(() => {...}, [pastoId, pastos])`) que deriva `moduloId` sempre que
+`pastoId` ou `pastos` mudarem, convergindo pro valor certo em qualquer ordem de carregamento. Os
+outros 3 arquivos resolvem o módulo direto no momento de reabrir a edição
+(`pastos.find(p => p.id === m.pasto_id)?.modulo_id`), sem precisar desse efeito extra, porque não têm
+o mesmo risco de corrida.
+
+Payload de submit não muda em nenhum dos 4 arquivos — módulo é só um filtro de UI pra achar o pasto
+mais rápido, nunca persistido em `movimentacoes_rebanho`/`movimentacoes_area`. Verificado no navegador
+com `FAZENDA TESTE` (2 módulos reais, "Vilar" e "Sítio Túlio", com pastos diferentes em cada um): nos
+4 arquivos, trocar de módulo mudou a lista de pastos corretamente (módulos diferentes mostrando
+conjuntos de pasto diferentes, sem vazamento entre eles); em Movimentações, reabrir a edição de um
+lançamento existente (Venda Abate) restaurou módulo e pasto corretos automaticamente; em Controle de
+Pasto, os seletores de módulo origem/destino funcionaram de forma independente (origem em "Vilar",
+destino em "Sítio Túlio", cada um com sua própria lista de pastos); em Pesagens, o modo "Por pasto"
+mostrou módulo depois pasto corretamente escopados; na aba "Saldo Inicial" de Fazendas, o módulo e
+pasto já salvos foram restaurados certos ao abrir a fazenda (confirmando que o efeito reativo resolve
+a corrida de carregamento), e trocar de módulo recalculou a lista de pasto e limpou a seleção
+corretamente.
+
 ## Proprietário do lote de gado vira lista global (migração 045)
 
 Uso real revelou dois problemas com o vínculo por fazenda da migração 044: (1) fazendas cadastradas

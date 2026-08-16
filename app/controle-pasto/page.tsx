@@ -11,6 +11,7 @@ import ModuloGate from '@/components/ModuloGate'
 type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Categoria = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
+type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
 
 type LinhaPasto = { categoriaId: string; quantidade: string; pesoMedio: string }
 
@@ -57,6 +58,7 @@ export default function ControlePastoPage() {
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
+  const [modulos, setModulos] = useState<Modulo[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,6 +66,8 @@ export default function ControlePastoPage() {
 
   const [data, setData] = useState('')
   const [fazendaId, setFazendaId] = useState('')
+  const [moduloId, setModuloId] = useState('')
+  const [moduloDestinoId, setModuloDestinoId] = useState('')
   const [pastoId, setPastoId] = useState('')
   const [pastoDestinoId, setPastoDestinoId] = useState('')
   const [observacao, setObservacao] = useState('')
@@ -82,15 +86,22 @@ export default function ControlePastoPage() {
   const hoje = new Date().toISOString().slice(0, 10)
 
   const estaEditando = editandoGrupoLinhasOriginais.length > 0
-  const pastosOrigemDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId)
-  const bloqueadoPorPastoInsuficiente = !!fazendaId && (!controlaPasto || pastosOrigemDisponiveis.length < 2)
-  const pastosDestinoDisponiveis = pastosOrigemDisponiveis.filter((p) => p.id !== pastoId)
+  const pastosDaFazenda = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId)
+  const bloqueadoPorPastoInsuficiente = !!fazendaId && (!controlaPasto || pastosDaFazenda.length < 2)
+
+  // módulo → pasto é uma cascata de dois níveis, aplicada de forma
+  // independente pro lado de origem e de destino (podem estar em módulos
+  // diferentes da mesma fazenda) — mesmo princípio já usado em Movimentações
+  const modulosDaFazenda = modulos.filter((m) => m.fazenda_id === fazendaId)
+  const mostrarSeletorModulo = modulosDaFazenda.length > 1
+  const pastosOrigemDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
+  const pastosDestinoDoModulo = pastos.filter((p) => p.modulo_id === moduloDestinoId && p.id !== pastoId)
 
   const fazendaSelecionada = fazendas.find((f) => f.id === fazendaId)
   const bloqueadoPorSaldoInicial = !estaEditando && !!fazendaSelecionada && !fazendaSelecionada.saldo_inicial_confirmado
 
   async function carregarAuxiliares() {
-    const [{ data: f }, { data: c }, { data: p }, { data: cfg }] = await Promise.all([
+    const [{ data: f }, { data: c }, { data: p }, { data: mods }, { data: cfg }] = await Promise.all([
       supabase.from('fazendas').select('id, nome, saldo_inicial_confirmado').eq('ativo', true).order('nome'),
       supabase.from('categorias_animal').select('id, nome').eq('ativa', true).order('nome'),
       supabase
@@ -98,11 +109,13 @@ export default function ControlePastoPage() {
         .select('id, modulo_id, nome, ativo, modulo:modulos!modulo_id(fazenda_id)')
         .eq('ativo', true)
         .order('nome'),
+      supabase.from('modulos').select('id, fazenda_id, nome, ativo, ordem').eq('ativo', true).order('ordem'),
       supabase.from('configuracoes').select('controla_pasto').single(),
     ])
     setFazendas(f || [])
     setCategorias(c || [])
     setPastos((p as unknown as Pasto[]) || [])
+    setModulos(mods || [])
     setControlaPasto(cfg?.controla_pasto ?? false)
   }
 
@@ -138,12 +151,54 @@ export default function ControlePastoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // trocar de fazenda invalida o pasto de origem/destino escolhidos
+  // trocar de fazenda invalida módulo/pasto de origem e destino escolhidos
   useEffect(() => {
+    setModuloId('')
     setPastoId('')
+    setModuloDestinoId('')
     setPastoDestinoId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
+
+  // módulo de origem: some sozinho quando a fazenda só tem um módulo ativo
+  useEffect(() => {
+    if (!fazendaId) {
+      setModuloId('')
+      return
+    }
+    if (!mostrarSeletorModulo) {
+      setModuloId(modulosDaFazenda[0]?.id ?? '')
+    } else if (!modulosDaFazenda.some((m) => m.id === moduloId)) {
+      setModuloId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId, mostrarSeletorModulo, modulos])
+
+  // trocar de módulo de origem invalida o pasto de origem escolhido
+  useEffect(() => {
+    setPastoId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduloId])
+
+  // módulo de destino — mesmo princípio do de origem, independente dele
+  useEffect(() => {
+    if (!fazendaId) {
+      setModuloDestinoId('')
+      return
+    }
+    if (!mostrarSeletorModulo) {
+      setModuloDestinoId(modulosDaFazenda[0]?.id ?? '')
+    } else if (!modulosDaFazenda.some((m) => m.id === moduloDestinoId)) {
+      setModuloDestinoId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId, mostrarSeletorModulo, modulos])
+
+  // trocar de módulo de destino invalida o pasto de destino escolhido
+  useEffect(() => {
+    setPastoDestinoId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduloDestinoId])
 
   useEffect(() => {
     if (pastoDestinoId === pastoId) setPastoDestinoId('')
@@ -184,6 +239,8 @@ export default function ControlePastoPage() {
   function limparFormulario() {
     setData('')
     setFazendaId('')
+    setModuloId('')
+    setModuloDestinoId('')
     setPastoId('')
     setPastoDestinoId('')
     setObservacao('')
@@ -209,7 +266,9 @@ export default function ControlePastoPage() {
     setData(primeira.data)
     setFazendaId(primeira.fazenda_id)
     setPastoId(primeira.pasto_id)
+    setModuloId(pastos.find((p) => p.id === primeira.pasto_id)?.modulo_id || '')
     setPastoDestinoId(primeira.pasto_destino_id)
+    setModuloDestinoId(pastos.find((p) => p.id === primeira.pasto_destino_id)?.modulo_id || '')
     setObservacao(primeira.observacao || '')
     setLinhas(
       rows.map((r) => ({
@@ -473,47 +532,92 @@ export default function ControlePastoPage() {
         )}
 
         {!!fazendaId && !bloqueadoPorPastoInsuficiente && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                Pasto origem
-                <Required />
-              </label>
-              <select
-                className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                value={pastoId}
-                onChange={(e) => setPastoId(e.target.value)}
-                required
-              >
-                <option value="">Selecione...</option>
-                {pastosOrigemDisponiveis.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nome}
-                  </option>
-                ))}
-              </select>
+          <>
+            {mostrarSeletorModulo && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                    Módulo origem
+                    <Required />
+                  </label>
+                  <select
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={moduloId}
+                    onChange={(e) => setModuloId(e.target.value)}
+                    required
+                  >
+                    <option value="">Selecione...</option>
+                    {modulosDaFazenda.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                    Módulo destino
+                    <Required />
+                  </label>
+                  <select
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={moduloDestinoId}
+                    onChange={(e) => setModuloDestinoId(e.target.value)}
+                    required
+                  >
+                    <option value="">Selecione...</option>
+                    {modulosDaFazenda.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                  Pasto origem
+                  <Required />
+                </label>
+                <select
+                  className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={pastoId}
+                  onChange={(e) => setPastoId(e.target.value)}
+                  disabled={!moduloId}
+                  required
+                >
+                  <option value="">Selecione...</option>
+                  {pastosOrigemDoModulo.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                  Pasto destino
+                  <Required />
+                </label>
+                <select
+                  className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={pastoDestinoId}
+                  onChange={(e) => setPastoDestinoId(e.target.value)}
+                  disabled={!pastoId || !moduloDestinoId}
+                  required
+                >
+                  <option value="">Selecione...</option>
+                  {pastosDestinoDoModulo.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                Pasto destino
-                <Required />
-              </label>
-              <select
-                className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                value={pastoDestinoId}
-                onChange={(e) => setPastoDestinoId(e.target.value)}
-                disabled={!pastoId}
-                required
-              >
-                <option value="">Selecione...</option>
-                {pastosDestinoDisponiveis.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          </>
         )}
 
         {!!fazendaId && !bloqueadoPorPastoInsuficiente && !!pastoId && !!pastoDestinoId && (

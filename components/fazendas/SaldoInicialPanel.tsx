@@ -28,6 +28,7 @@ type LinhaSaldo = {
 type Sexo = 'MACHO' | 'FEMEA'
 type GrupoCategoriaPapel = { id: string; nome: string; sexo: Sexo | null }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
+type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
 
 function round2(n: number) {
   return Math.round(n * 100) / 100
@@ -52,13 +53,19 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   const [salvandoCategoria, setSalvandoCategoria] = useState(false)
 
   const [pastos, setPastos] = useState<Pasto[]>([])
+  const [modulos, setModulos] = useState<Modulo[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
+  const [moduloId, setModuloId] = useState('')
   const [pastoId, setPastoId] = useState('')
 
   const supabase = createClient()
 
-  const pastosDisponiveis = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId)
-  const mostrarSeletorPasto = controlaPasto && pastosDisponiveis.length > 1
+  // módulo → pasto é uma cascata de dois níveis — mesmo princípio já
+  // usado em Movimentações/Mudança de Pasto/Pesagens
+  const modulosDisponiveis = modulos.filter((m) => m.fazenda_id === fazendaId)
+  const mostrarSeletorModulo = controlaPasto && modulosDisponiveis.length > 1
+  const pastosDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
+  const mostrarSeletorPasto = controlaPasto && pastosDoModulo.length > 1
 
   const papelSelecionado = papeis.find((p) => p.id === novaCategoriaPapelId)
   const sexoEhLivre = !!papelSelecionado && papelSelecionado.sexo === null
@@ -78,6 +85,12 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       .order('nome')
       .then(({ data }) => setPastos((data as unknown as Pasto[]) || []))
     supabase
+      .from('modulos')
+      .select('id, fazenda_id, nome, ativo, ordem')
+      .eq('ativo', true)
+      .order('ordem')
+      .then(({ data }) => setModulos(data || []))
+    supabase
       .from('configuracoes')
       .select('controla_pasto')
       .single()
@@ -90,18 +103,42 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     setNovaCategoriaEra('')
   }, [novaCategoriaPapelId])
 
-  // pasto: some pro "Geral" sozinho quando o seletor está escondido
-  // (grupo sem controla_pasto, ou só um pasto ativo) — mesmo princípio
-  // já usado em Movimentações e Controle de Pasto
+  // módulo: some sozinho quando o seletor está escondido (grupo sem
+  // controla_pasto, ou só um módulo ativo) — mesmo princípio já usado
+  // em Movimentações e Controle de Pasto
+  useEffect(() => {
+    if (!mostrarSeletorModulo) {
+      const geral = modulosDisponiveis.find((m) => m.nome === 'Geral') || modulosDisponiveis[0]
+      setModuloId(geral ? geral.id : '')
+    } else if (!modulosDisponiveis.some((m) => m.id === moduloId)) {
+      setModuloId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mostrarSeletorModulo, modulos, fazendaId])
+
+  // pasto: some pro "Geral" sozinho quando o seletor está escondido —
+  // depende do módulo selecionado acima
   useEffect(() => {
     if (!mostrarSeletorPasto) {
-      const geral = pastosDisponiveis.find((p) => p.nome === 'Geral') || pastosDisponiveis[0]
+      const geral = pastosDoModulo.find((p) => p.nome === 'Geral') || pastosDoModulo[0]
       setPastoId(geral ? geral.id : '')
-    } else if (!pastosDisponiveis.some((p) => p.id === pastoId)) {
+    } else if (!pastosDoModulo.some((p) => p.id === pastoId)) {
       setPastoId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mostrarSeletorPasto, pastos])
+  }, [mostrarSeletorPasto, pastos, moduloId])
+
+  // deriva o módulo do pasto já salvo (carregarLinhas define pastoId a
+  // partir da linha SALDO_INICIAL existente) sempre que pastos carrega —
+  // evita uma corrida entre o carregamento de pastos/módulos (efeito de
+  // montagem, sem depender de fazendaId) e o de linhas (depende de
+  // fazendaId, roda em paralelo já na primeira montagem)
+  useEffect(() => {
+    if (!pastoId) return
+    const pastoAtual = pastos.find((p) => p.id === pastoId)
+    if (pastoAtual && pastoAtual.modulo_id !== moduloId) setModuloId(pastoAtual.modulo_id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastoId, pastos])
 
   async function handleCriarCategoria(e: React.FormEvent) {
     e.preventDefault()
@@ -304,6 +341,22 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
           <label className="mb-1.5 block text-sm font-medium text-text-secondary">Data de referência</label>
           <input type="date" className={inputClass} value={data} onChange={(e) => setData(e.target.value)} />
         </div>
+        {mostrarSeletorModulo && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+              Módulo
+              <Required />
+            </label>
+            <select className={inputClass} value={moduloId} onChange={(e) => setModuloId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {modulosDisponiveis.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {mostrarSeletorPasto && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">
@@ -312,7 +365,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             </label>
             <select className={inputClass} value={pastoId} onChange={(e) => setPastoId(e.target.value)}>
               <option value="">Selecione...</option>
-              {pastosDisponiveis.map((p) => (
+              {pastosDoModulo.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.nome}
                 </option>
