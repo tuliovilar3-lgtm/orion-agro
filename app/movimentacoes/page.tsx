@@ -2965,15 +2965,20 @@ export default function MovimentacoesPage() {
                               )}
                               {isComPreco && (
                                 <td className="border-b border-border p-2 align-top">
-                                  <div className="flex gap-1">
+                                  {/* select e input empilhados (não lado a lado) — combinar
+                                      w-24 com inputSmClass (que já tem w-full embutido) no
+                                      mesmo elemento fazia as duas classes de largura brigarem
+                                      e o campo de valor quase sumia; empilhado, cada um usa a
+                                      largura cheia da coluna sem conflito */}
+                                  <div className="space-y-1">
                                     <select
-                                      className={`w-24 flex-none ${inputSmClass}`}
+                                      className={inputSmClass}
                                       value={linha.campoPreco}
                                       onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
                                     >
                                       {CAMPOS_PRECO.map((c) => (
                                         <option key={c.key} value={c.key}>
-                                          {CAMPOS_PRECO_CURTO[c.key]}
+                                          {c.label}
                                         </option>
                                       ))}
                                     </select>
