@@ -110,12 +110,6 @@ const DIRECAO_TIPO: Record<TipoMovimentacao, Direcao> = {
   TRANSFERENCIA: 'interno',
 }
 
-const DIRECAO_LABEL: Record<Direcao, string> = {
-  entrada: 'Entradas',
-  saida: 'Saídas',
-  interno: 'Reclassificação / interno',
-}
-
 const DIRECAO_GRUPOS: { direcao: Direcao; label: string }[] = [
   { direcao: 'entrada', label: 'Entradas' },
   { direcao: 'saida', label: 'Saídas' },
@@ -190,8 +184,10 @@ function IconeMovimentacao({ tipo }: { tipo: TipoMovimentacao }) {
     case 'CONSUMO_DOACAO':
       return (
         <svg {...p}>
-          <rect x="4" y="9" width="16" height="11" rx="1.5" />
-          <path d="M4 9h16M12 9v11M8 9c-1.5 0-3-1-3-2.5S6.5 4 8 5.5C9 4 12 5 12 9c0-4 3-5 4-3.5C17.5 4 19 5 19 6.5S17.5 9 16 9" />
+          <path d="M6 2v6a2 2 0 0 0 4 0V2" />
+          <path d="M8 8v14" />
+          <path d="M18 2v8c-1.7 0-3-1.8-3-4s1.3-4 3-4Z" />
+          <path d="M18 8v14" />
         </svg>
       )
     case 'DESMAME':
@@ -204,7 +200,8 @@ function IconeMovimentacao({ tipo }: { tipo: TipoMovimentacao }) {
     case 'MUDANCA_CATEGORIA':
       return (
         <svg {...p}>
-          <path d="M17 3l4 4-4 4M21 7H9M7 21l-4-4 4-4M3 17h12" />
+          <path d="M5 20V15M12 20V10M19 20V5" />
+          <path d="M3 20h18" />
         </svg>
       )
     case 'TRANSFERENCIA':
@@ -658,11 +655,6 @@ export default function MovimentacoesPage() {
     : isLoteCategoria
       ? linhas.reduce((s, l) => s + (parseInt(l.quantidade, 10) || 0), 0)
       : parseInt(quantidade, 10) || 0
-  const totalPesoFormulario = isDesmame
-    ? linhasDesmame.reduce((s, l) => s + (parseFloat(l.pesoMedio) || 0) * (parseInt(l.quantidade, 10) || 0), 0)
-    : isLoteCategoria
-      ? linhas.reduce((s, l) => s + (calcularLinha(l).pesoTotal ?? 0), 0)
-      : pesoTotalCalculado ?? 0
   // Desmame e Mudança de Categoria são reclassificação (não mudam o total
   // do rebanho da fazenda); Transferência tira da fazenda de origem, que é
   // a fazenda mostrada no resumo (fazendaOrigemParaPasto)
@@ -1194,6 +1186,25 @@ export default function MovimentacoesPage() {
     const d = new Date()
     d.setDate(d.getDate() + offsetDias)
     setData(d.toISOString().slice(0, 10))
+  }
+
+  // hint compacto de efetivo (antes → depois de salvar) exibido junto ao
+  // seletor de fazenda — substitui o antigo bloco "Efetivo da fazenda" da
+  // coluna lateral removida; "depois" só aparece quando já há alguma
+  // quantidade preenchida no formulário, senão seria só um "N → N" vazio
+  function renderEfetivoHint() {
+    if (efetivoFazenda == null) return null
+    return (
+      <p className="mt-1.5 text-xs text-text-secondary">
+        Efetivo atual: <span className="font-semibold text-text-primary">{formatQuantidade(efetivoFazenda)}</span> cabeças
+        {totalCabecasFormulario > 0 && (
+          <>
+            {' '}
+            → <span className="font-semibold text-brand-500">{formatQuantidade(efetivoDepois ?? efetivoFazenda)}</span> após salvar
+          </>
+        )}
+      </p>
+    )
   }
 
   function iniciarEdicao(m: Movimentacao) {
@@ -2182,7 +2193,7 @@ export default function MovimentacoesPage() {
           Fechar
         </button>
       </div>
-      <div className="mt-2 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mt-2">
         {/* FORMULÁRIO */}
         <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter}>
           {/* PASSO 1 — TIPO */}
@@ -2294,11 +2305,7 @@ export default function MovimentacoesPage() {
                         </option>
                       ))}
                     </select>
-                    {efetivoFazenda != null && (
-                      <p className="mt-1.5 text-xs text-text-secondary">
-                        Efetivo atual: <span className="font-semibold text-text-primary">{formatQuantidade(efetivoFazenda)}</span> cabeças
-                      </p>
-                    )}
+                    {renderEfetivoHint()}
                   </div>
                 )}
               </div>
@@ -2323,11 +2330,7 @@ export default function MovimentacoesPage() {
                         </option>
                       ))}
                     </select>
-                    {efetivoFazenda != null && (
-                      <p className="mt-1.5 text-xs text-text-secondary">
-                        Efetivo atual: <span className="font-semibold text-text-primary">{formatQuantidade(efetivoFazenda)}</span> cabeças
-                      </p>
-                    )}
+                    {renderEfetivoHint()}
                   </div>
                   <div>
                     <label className={labelClass}>
@@ -3299,58 +3302,6 @@ export default function MovimentacoesPage() {
             </div>
           </div>
         </form>
-
-        {/* RESUMO */}
-        <div className="sticky top-6 space-y-4">
-          <div className="rounded-card border border-border bg-surface">
-            <div className="border-b border-border p-4">
-              <h3 className="text-sm font-bold text-text-primary">Resumo em tempo real</h3>
-            </div>
-            <div className="flex items-center gap-3 p-4">
-              <span
-                className={`flex h-9 w-9 flex-none items-center justify-center rounded-control p-2 ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].bg} ${DIRECAO_CLASSES[DIRECAO_TIPO[tipo]].fg}`}
-              >
-                <IconeMovimentacao tipo={tipo} />
-              </span>
-              <div>
-                <div className="text-sm font-bold text-text-primary">{LABEL_TIPO[tipo]}</div>
-                <div className="text-xs text-text-secondary">{DIRECAO_LABEL[DIRECAO_TIPO[tipo]]}</div>
-              </div>
-            </div>
-            <div className="px-4 pb-4">
-              <div className="flex justify-between border-t border-border py-2 text-sm">
-                <span className="text-text-secondary">Data</span>
-                <span className="font-semibold text-text-primary">{data ? new Date(data + 'T00:00').toLocaleDateString('pt-BR') : '—'}</span>
-              </div>
-              <div className="flex justify-between border-t border-border py-2 text-sm">
-                <span className="text-text-secondary">Fazenda</span>
-                <span className="font-semibold text-text-primary">{fazendas.find((f) => f.id === fazendaOrigemParaPasto)?.nome ?? '—'}</span>
-              </div>
-              <div className="flex justify-between border-t border-border py-2 text-sm">
-                <span className="text-text-secondary">Total de animais</span>
-                <span className="font-semibold tabular-nums text-text-primary">{formatQuantidade(totalCabecasFormulario)}</span>
-              </div>
-              <div className="flex justify-between border-t border-border py-2 text-sm">
-                <span className="text-text-secondary">Peso total</span>
-                <span className="font-semibold tabular-nums text-text-primary">{totalPesoFormulario ? `${formatPeso(totalPesoFormulario)} kg` : '—'}</span>
-              </div>
-            </div>
-            <div className="border-t border-border p-4">
-              <h3 className="text-sm font-bold text-text-primary">Efetivo da fazenda</h3>
-            </div>
-            <div className="flex items-center justify-center gap-3 px-4 pb-5 pt-1">
-              <div className="text-center">
-                <div className="text-xl font-extrabold tabular-nums text-text-primary">{efetivoFazenda != null ? formatQuantidade(efetivoFazenda) : '—'}</div>
-                <div className="text-[10px] uppercase tracking-wide text-text-secondary">Antes</div>
-              </div>
-              <div className="text-text-muted">→</div>
-              <div className="text-center">
-                <div className="text-xl font-extrabold tabular-nums text-brand-500">{efetivoDepois != null ? formatQuantidade(efetivoDepois) : '—'}</div>
-                <div className="text-[10px] uppercase tracking-wide text-text-secondary">Após salvar</div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
       </>
       )}

@@ -2341,3 +2341,36 @@ pela confirmação inline "Excluir este lançamento? / Sim, excluir / Cancelar",
 sem chamar o banco (o caminho de exclusão em si não foi exercido contra dados reais nesta verificação,
 já que dependia de escolher uma linha de teste descartável — a garantia de não deixar saldo negativo
 vem da trigger já existente e testada em migrações anteriores, não de lógica nova no frontend).
+
+### Revisão pós-uso: ícones trocados, coluna lateral removida, formulário em largura total
+
+Dois ajustes pedidos pelo usuário depois de usar a tela redesenhada na prática:
+
+**Ícones corrigidos**: `IconeMovimentacao` tinha dois desenhos que não batiam com o conjunto de
+símbolos já aprovado antes da implementação (ver "Símbolos que você desenhou" na história do mockup)
+— Consumo/Doação estava saindo como uma caixa de presente (laço + fita), não o garfo+faca esperado;
+Mudança de Categoria estava usando um ícone de ciclo/atualização quase idêntico ao de Transferência
+(as duas viravam "setas circulares" indistinguíveis num relance). Corrigidos pra garfo+faca (dois
+talheres lado a lado, silhueta clássica de "consumo/restaurante") e barras ascendentes (3 barras de
+altura crescente + linha de base, remetendo a "evolução de categoria"), respectivamente — agora os 9
+ícones têm silhuetas claramente distintas entre si.
+
+**Coluna lateral "Resumo em tempo real" removida**: o usuário observou, com razão, que ela só repetia
+informação já visível no próprio formulário (tipo, data, fazenda) sem agregar nada novo — e reservar
+360px pra essa coluna espremia a tabela de categorias do passo 3 a ponto de precisar de rolagem
+horizontal mesmo com poucas colunas. `app/movimentacoes/page.tsx` teve o grid de duas colunas
+(`lg:grid-cols-[minmax(0,1fr)_360px]`) trocado por uma única coluna de largura total — o `<form>`
+sozinho, sem `<div className="sticky top-6">` ao lado. O bloco "Efetivo da fazenda" (antes/depois),
+que era a única informação daquela coluna que não duplicava nada, não foi descartado: virou um hint
+compacto (`renderEfetivoHint()`, função auxiliar reaproveitada nos dois seletores de fazenda —
+comum e o de origem em Transferência) logo abaixo do `<select>` de fazenda no passo 2 — mostra
+"Efetivo atual: N cabeças" sempre, e acrescenta "→ M após salvar" só quando já há alguma quantidade
+preenchida no formulário (evita um "N → N" vazio antes do usuário digitar qualquer coisa). Variáveis
+que só existiam pra alimentar a coluna removida (`totalPesoFormulario`, `DIRECAO_LABEL`) foram
+removidas junto — sem sobrar código morto.
+
+Verificado no navegador: type-check limpo; com a fazenda "FAZENDA TESTE" selecionada em Compra, o
+hint mostrou "Efetivo atual: 327 cabeças" corretamente posicionado; medição via `getBoundingClientRect`
+confirmou que o wrapper `overflow-x-auto` da tabela de categorias não tem mais rolagem horizontal em
+viewport 1280px (`scrollWidth === clientWidth`, tabela ocupando 901px, contra os ~700px que sobravam
+antes com a coluna lateral presente).
