@@ -1,10 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { MODULOS } from '@/lib/modulos'
 import { ICONS } from '@/lib/nav-icons'
+import AlterarSenhaModal from '@/components/AlterarSenhaModal'
 
 // layout alternativo pro Modo Campo: barra superior fina (marca + sair)
 // e uma barra de abas fixa embaixo com Painel + os módulos liberados —
@@ -14,6 +16,7 @@ import { ICONS } from '@/lib/nav-icons'
 export default function ModoCampoShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { usuarioApp, modulosPermitidos, signOut } = useAuth()
+  const [alterarSenhaAberto, setAlterarSenhaAberto] = useState(false)
 
   const abas = [
     { id: 'painel', label: 'Início', href: '/', icon: ICONS.painel },
@@ -28,6 +31,15 @@ export default function ModoCampoShell({ children }: { children: React.ReactNode
           <span className="max-w-[140px] truncate text-xs text-white/70">{usuarioApp?.nome}</span>
           <button
             type="button"
+            onClick={() => setAlterarSenhaAberto(true)}
+            title="Alterar senha"
+            aria-label="Alterar senha"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-white/60 hover:bg-white/10 hover:text-white"
+          >
+            {ICONS.senha}
+          </button>
+          <button
+            type="button"
             onClick={signOut}
             title="Sair"
             aria-label="Sair"
@@ -39,6 +51,8 @@ export default function ModoCampoShell({ children }: { children: React.ReactNode
       </div>
 
       <main className="flex-1 pb-20">{children}</main>
+
+      {alterarSenhaAberto && <AlterarSenhaModal onClose={() => setAlterarSenhaAberto(false)} />}
 
       <nav className="fixed inset-x-0 bottom-0 z-30 flex overflow-x-auto border-t border-border bg-surface">
         {abas.map((aba) => {

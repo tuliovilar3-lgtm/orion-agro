@@ -149,4 +149,12 @@ export const ICONS = {
       <path d="M21 12H9" />
     </Icon>
   ),
+  senha: (
+    <Icon>
+      <circle cx="8" cy="15" r="4" />
+      <path d="M11 12 20 3" />
+      <path d="M17 6l3 3" />
+      <path d="M14 9l2.5 2.5" />
+    </Icon>
+  ),
 }

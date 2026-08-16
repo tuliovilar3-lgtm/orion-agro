@@ -32,6 +32,8 @@ export default function UsuariosPage() {
   const [modalAberto, setModalAberto] = useState(false)
   const [salvandoId, setSalvandoId] = useState<string | null>(null)
   const [modulosExpandidos, setModulosExpandidos] = useState<Set<string>>(new Set())
+  const [confirmandoExclusaoId, setConfirmandoExclusaoId] = useState<string | null>(null)
+  const [senhaResetadaId, setSenhaResetadaId] = useState<string | null>(null)
 
   function alternarExpandido(id: string) {
     setModulosExpandidos((prev) => {
@@ -107,6 +109,26 @@ export default function UsuariosPage() {
     carregar()
   }
 
+  async function handleResetarSenha(u: UsuarioLinha) {
+    setSalvandoId(u.id)
+    await fetch(`/api/usuarios/${u.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resetSenha: true }),
+    })
+    setSalvandoId(null)
+    setSenhaResetadaId(u.id)
+    setTimeout(() => setSenhaResetadaId((atual) => (atual === u.id ? null : atual)), 5000)
+  }
+
+  async function handleExcluir(u: UsuarioLinha) {
+    setSalvandoId(u.id)
+    await fetch(`/api/usuarios/${u.id}`, { method: 'DELETE' })
+    setSalvandoId(null)
+    setConfirmandoExclusaoId(null)
+    carregar()
+  }
+
   if (loadingAuth || (loading && isDono)) {
     return (
       <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
@@ -170,16 +192,67 @@ export default function UsuariosPage() {
                 <div className="text-sm text-text-secondary">{u.email}</div>
               </div>
               {!u.dono && (
-                <button
-                  type="button"
-                  disabled={salvandoId === u.id}
-                  onClick={() => handleToggleAtivo(u)}
-                  className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg disabled:opacity-60"
-                >
-                  {u.ativo ? 'Inativar' : 'Ativar'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={salvandoId === u.id}
+                    onClick={() => handleResetarSenha(u)}
+                    className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg disabled:opacity-60"
+                  >
+                    Redefinir senha
+                  </button>
+                  <button
+                    type="button"
+                    disabled={salvandoId === u.id}
+                    onClick={() => handleToggleAtivo(u)}
+                    className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg disabled:opacity-60"
+                  >
+                    {u.ativo ? 'Inativar' : 'Ativar'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={salvandoId === u.id}
+                    onClick={() => setConfirmandoExclusaoId(u.id)}
+                    className="rounded-control border border-error px-3 py-1.5 text-xs font-medium text-error hover:bg-error-bg disabled:opacity-60"
+                  >
+                    Excluir
+                  </button>
+                </div>
               )}
             </div>
+
+            {senhaResetadaId === u.id && (
+              <div className="mt-3 rounded-control bg-success-bg px-3 py-2 text-xs text-success">
+                Senha redefinida para <span className="font-semibold">123456</span> — avise a pessoa
+                pra trocar depois de entrar.
+              </div>
+            )}
+
+            {confirmandoExclusaoId === u.id && (
+              <div className="mt-3 rounded-control bg-error-bg px-3 py-2.5 text-sm text-error">
+                <p>
+                  Excluir <span className="font-semibold">{u.nome}</span> permanentemente? A conta de
+                  login e todos os módulos liberados serão apagados — essa ação não pode ser desfeita.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={salvandoId === u.id}
+                    onClick={() => handleExcluir(u)}
+                    className="rounded-control bg-error px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+                  >
+                    {salvandoId === u.id ? 'Excluindo...' : 'Sim, excluir'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmandoExclusaoId(null)}
+                    className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
 
             {!u.dono && (
               <div className="mt-3 flex items-center gap-2 border-t border-border pt-3 text-sm">

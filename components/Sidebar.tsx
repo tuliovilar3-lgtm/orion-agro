@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import type { ModuloId } from '@/lib/modulos'
 import { ICONS } from '@/lib/nav-icons'
+import AlterarSenhaModal from '@/components/AlterarSenhaModal'
 
 type NavItem = { label: string; href: string; icon: React.ReactNode; modulo?: ModuloId }
 type NavGroup = { label: string; items: NavItem[] }
@@ -81,6 +82,7 @@ function NavLinks({
   collapsed?: boolean
 }) {
   const { usuarioApp, isDono, podeAcessar, signOut } = useAuth()
+  const [alterarSenhaAberto, setAlterarSenhaAberto] = useState(false)
 
   // grupos filtrados pelos módulos liberados pro usuário logado — dono
   // vê tudo (podeAcessar sempre true pra ele); grupo some inteiro se
@@ -188,6 +190,15 @@ function NavLinks({
             )}
             <button
               type="button"
+              onClick={() => setAlterarSenhaAberto(true)}
+              title="Alterar senha"
+              aria-label="Alterar senha"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-white/50 hover:bg-white/10 hover:text-white"
+            >
+              {ICONS.senha}
+            </button>
+            <button
+              type="button"
               onClick={signOut}
               title="Sair"
               aria-label="Sair"
@@ -198,6 +209,8 @@ function NavLinks({
           </div>
         )}
       </div>
+
+      {alterarSenhaAberto && <AlterarSenhaModal onClose={() => setAlterarSenhaAberto(false)} />}
     </div>
   )
 }

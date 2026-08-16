@@ -15,20 +15,29 @@ async function exigirDono() {
   return { user }
 }
 
+const SENHA_PADRAO = '123456'
+
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const checagem = await exigirDono()
   if (checagem.erro) return checagem.erro
   const { id } = await params
 
   const body = await request.json()
-  const { nome, ativo, modo, modulos } = body as {
+  const { nome, ativo, modo, modulos, resetSenha } = body as {
     nome?: string
     ativo?: boolean
     modo?: 'CAMPO' | 'GESTAO' | 'CONSULTA'
     modulos?: string[]
+    resetSenha?: boolean
   }
 
   const admin = createAdminClient()
+
+  if (resetSenha) {
+    const { error } = await admin.auth.admin.updateUserById(id, { password: SENHA_PADRAO })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ ok: true })
+  }
 
   const camposUpdate: Record<string, unknown> = {}
   if (nome !== undefined) camposUpdate.nome = nome
@@ -54,6 +63,27 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (erroInsert) return NextResponse.json({ error: erroInsert.message }, { status: 500 })
     }
   }
+
+  return NextResponse.json({ ok: true })
+}
+
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const checagem = await exigirDono()
+  if (checagem.erro) return checagem.erro
+  const { id } = await params
+
+  const supabase = await createClient()
+  const { data: alvo } = await supabase.from('usuarios_app').select('dono').eq('id', id).single()
+  if (alvo?.dono) {
+    return NextResponse.json({ error: 'Não é possível excluir a conta de administrador.' }, { status: 400 })
+  }
+
+  const admin = createAdminClient()
+  // apaga o login em auth.users — o "on delete cascade" das FKs
+  // (usuarios_app.id -> auth.users, usuario_modulos.usuario_id ->
+  // usuarios_app) já limpa o perfil e os módulos junto, sem código extra
+  const { error } = await admin.auth.admin.deleteUser(id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ ok: true })
 }
