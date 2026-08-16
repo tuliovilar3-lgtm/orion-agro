@@ -2374,3 +2374,57 @@ hint mostrou "Efetivo atual: 327 cabeças" corretamente posicionado; medição v
 confirmou que o wrapper `overflow-x-auto` da tabela de categorias não tem mais rolagem horizontal em
 viewport 1280px (`scrollWidth === clientWidth`, tabela ocupando 901px, contra os ~700px que sobravam
 antes com a coluna lateral presente).
+
+### Segunda rodada pós-uso: cálculo automático dos 4 preços, colunas mais largas, Safra/Lote condicional, proprietário no passo 2
+
+Quatro ajustes pedidos depois de um teste real de lançamento em lote (Compra, 40 cabeças, R$/@):
+
+**Cálculo automático dos 4 campos de preço equivalentes**: o formulário de categoria única já
+mostrava os outros 3 valores calculados assim que um campo de preço era preenchido
+(`valoresCalculados`), mas a tabela de lote (passo 3) só mostrava "Bruto: R$ X" — faltava o mesmo
+auto-cálculo por linha. Nova função `calcularValoresLinha(linha)` espelha exatamente a mesma conta
+de `valoresCalculados`, mas a partir do `valorTotal` já calculado por `calcularLinha(linha)` — cada
+linha da tabela agora mostra os 3 campos que **não** foram digitados (`CAMPOS_PRECO.filter(c => c.key
+!== linha.campoPreco)`), num texto compacto abaixo do input de valor.
+
+**Rótulos curtos no `<select>` de campo de preço da tabela**: o rótulo completo ("Valor por arroba
+(R$/@)") cortava dentro da coluna estreita da tabela. `CAMPOS_PRECO_CURTO` (novo, ao lado de
+`CAMPOS_PRECO`) mapeia os mesmos 4 `CampoPreco` pra rótulos de 1-2 palavras (`R$/@`, `R$/cab.`,
+`R$/kg`, `R$ total`) — usado só nesse `<select>` compacto e nos labels dos valores calculados; o
+formulário de categoria única continua com os rótulos completos nos radio buttons (mais espaço
+disponível ali).
+
+**Colunas Preço e Proprietário mais largas**: `min-w-[170px]` → `min-w-[240px]` (Preço, agora
+precisa caber o `<select>` de 96px + input + os 3 valores calculados embaixo) e `min-w-[140px]` →
+`min-w-[180px]` (Proprietário, pra não cortar nomes como "Carlos Cesar Pereira - Tinho").
+
+**Coluna Safra/Lote vira condicional**: antes aparecia sempre em qualquer tipo com lote, mostrando
+"—" em toda linha cuja categoria não fosse bezerro (ex.: Compra de Novilha). Confirmado com o
+usuário que isso só faz sentido pra bezerro — `mostrarColunaSafra` (novo derived value: `isNascimento
+|| linhas.some(l => categoriaEhBezerro(...))`) esconde a coluna inteira (cabeçalho e células) quando
+nenhuma linha atual envolve bezerro, reavaliado a cada mudança de categoria nas linhas — mesmo
+princípio já usado pras colunas de peso morto/rendimento (`isVendaAbate`) e preço (`isComPreco`), que
+também são condicionais ao tipo/conteúdo em vez de sempre visíveis com "—".
+
+**Proprietário sobe pro passo 2, só no formulário de categoria única**: avaliado como pergunta de
+design antes de implementar — mover o campo pra junto da fazenda faria sentido só quando há uma
+única categoria no lançamento (nesse caso o campo já é, na prática, do lançamento inteiro); na
+tabela de lote ele continua por linha, decisão de arquitetura já documentada acima ("Proprietário do
+lote de gado") que permite atribuir categorias diferentes do mesmo lançamento a donos diferentes
+(ex.: vender garrotes do Tulio e novilhas do Carlos pro mesmo comprador no mesmo dia) — mover pra um
+campo único no passo 2 quebraria esse caso de uso já testado. Na prática, como todo tipo de
+`TIPOS_COM_LOTE` abre em modo lote por padrão pra lançamento novo, esse campo no passo 2 só aparece
+ao **editar** um lançamento avulso já existente (`editandoId` setado, `isLoteCategoria === false`) —
+o bloco antigo (dentro do passo 3, logo depois do seletor de safra) foi removido e um novo bloco
+(condicionado também a `!isLoteCategoria`) foi inserido no passo 2, logo abaixo do grid de
+fazenda(s).
+
+Verificado no navegador: type-check limpo; lançamento de teste (Compra, Novilha, 40 cab., 220 kg,
+R$/@ 2.500) mostrou "R$/cab.: 18.333,33 · R$/kg: 83,33 · R$ total: 733.333,33" automaticamente
+abaixo do campo de valor (conferido manualmente: 40×220=8.800 kg → 8.800/30=293,33@ → 2.500×293,33=
+733.333,33 — bate); medição via `getBoundingClientRect` confirmou coluna Preço em 309px e
+Proprietário em 180px (ambas maiores que antes), sem rolagem horizontal (901px de tabela, viewport
+1280px); coluna Safra/Lote ausente do cabeçalho nesse mesmo teste (Novilha não é bezerro) e presente
+ao trocar pro tipo Nascimento; abrir a edição de uma Compra avulsa existente mostrou "Proprietário do
+lote" corretamente posicionado no passo 2, logo abaixo do hint "Efetivo atual: 600 cabeças → 601
+após salvar". Edição de teste fechada sem salvar ao final.

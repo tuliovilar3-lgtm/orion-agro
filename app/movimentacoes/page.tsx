@@ -86,6 +86,16 @@ const CAMPOS_PRECO = [
 
 type CampoPreco = (typeof CAMPOS_PRECO)[number]['key']
 
+// labels curtos dos mesmos 4 campos — usados só no <select> compacto da
+// tabela de lote (passo 3), onde o rótulo completo ("Valor por arroba
+// (R$/@)") ficava cortado pela largura da coluna
+const CAMPOS_PRECO_CURTO: Record<CampoPreco, string> = {
+  valor_arroba: 'R$/@',
+  valor_cabeca: 'R$/cab.',
+  valor_kg: 'R$/kg',
+  valor_total: 'R$ total',
+}
+
 function round2(n: number) {
   return Math.round(n * 100) / 100
 }
@@ -341,6 +351,23 @@ function calcularLinha(linha: LinhaCategoria) {
   }
 }
 
+// a partir do valor_total já calculado por calcularLinha, deriva os outros
+// 3 campos de preço equivalentes (mesma conta que o formulário de categoria
+// única já faz em `valoresCalculados`) — preenche um campo de preço na
+// tabela de lote e os outros 3 aparecem sozinhos, sem precisar digitar de
+// novo em unidades diferentes
+function calcularValoresLinha(linha: LinhaCategoria): Record<CampoPreco, number | null> {
+  const { pesoTotal, arrobaPorAnimal, valorTotal } = calcularLinha(linha)
+  const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
+  const totalArrobas = arrobaPorAnimal != null && quantidadeNum != null ? arrobaPorAnimal * quantidadeNum : null
+  return {
+    valor_total: valorTotal,
+    valor_arroba: valorTotal !== null && totalArrobas ? round2(valorTotal / totalArrobas) : null,
+    valor_cabeca: valorTotal !== null && quantidadeNum ? round2(valorTotal / quantidadeNum) : null,
+    valor_kg: valorTotal !== null && pesoTotal ? round2(valorTotal / pesoTotal) : null,
+  }
+}
+
 type Movimentacao = {
   id: string
   data: string
@@ -591,6 +618,16 @@ export default function MovimentacoesPage() {
   const categoriaAtualEhBezerro = categoriaEhBezerro(categoriaOrigemSelecionada)
   const mostrarCamposLoteSingular =
     !isDesmame && !isMudancaCategoria && TIPOS_COM_LOTE.includes(tipo) && (isNascimento || categoriaAtualEhBezerro)
+
+  // a coluna Safra/Lote da tabela de categorias só faz sentido aparecer
+  // quando pelo menos uma linha envolve bezerro (ou o tipo é Nascimento,
+  // sempre bezerro) — nos demais casos a coluna inteira fica escondida em
+  // vez de mostrar "—" em toda linha, mesmo princípio já usado pra
+  // esconder as colunas de peso morto/rendimento (isVendaAbate) e preço
+  // (isComPreco)
+  const mostrarColunaSafra =
+    isNascimento ||
+    linhas.some((l) => categoriaEhBezerro(categorias.find((c) => c.id === l.categoriaId)))
 
   // mudança de categoria entre sexos diferentes é permitida (ajuste de
   // estoque), mas exige confirmação explícita
@@ -2354,6 +2391,25 @@ export default function MovimentacoesPage() {
                 </div>
               )}
 
+              {/* proprietário aqui só faz sentido fora do modo lote — com
+                  2+ categorias na tabela do passo 3, cada linha tem seu
+                  próprio seletor de proprietário (ver TIPOS_COM_LOTE),
+                  já que categorias diferentes do mesmo lançamento podem
+                  pertencer a donos diferentes */}
+              {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && !isLoteCategoria && (
+                <div>
+                  <label className={labelClass}>Proprietário do lote</label>
+                  <select className={inputClass} value={proprietarioId} onChange={(e) => setProprietarioId(e.target.value)}>
+                    <option value="">Sem proprietário atribuído</option>
+                    {proprietariosDisponiveis.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {(mostrarSeletorModuloOrigem || mostrarSeletorPastoOrigem || mostrarSeletorModuloDestino || mostrarSeletorPastoDestino) && (
                 <div className="grid gap-4 sm:grid-cols-2">
                   {mostrarSeletorModuloOrigem && (
@@ -2758,20 +2814,6 @@ export default function MovimentacoesPage() {
                       </div>
                     ))}
 
-                  {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && (
-                    <div className="mt-4">
-                      <label className={labelClass}>Proprietário do lote</label>
-                      <select className={inputClass} value={proprietarioId} onChange={(e) => setProprietarioId(e.target.value)}>
-                        <option value="">Sem proprietário atribuído</option>
-                        {proprietariosDisponiveis.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.nome}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
                   {isVendaAbate && (
                     <div className="mt-4">
                       <label className={labelClass}>
@@ -2826,15 +2868,17 @@ export default function MovimentacoesPage() {
                             </th>
                           )}
                           {isComPreco && (
-                            <th className="min-w-[170px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            <th className="min-w-[240px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
                               Preço
                             </th>
                           )}
-                          <th className="w-32 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-                            Safra / Lote
-                          </th>
+                          {mostrarColunaSafra && (
+                            <th className="w-32 border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                              Safra / Lote
+                            </th>
+                          )}
                           {mostrarSeletorProprietario && (
-                            <th className="min-w-[140px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                            <th className="min-w-[180px] border-b border-border p-2 text-left text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
                               Proprietário
                             </th>
                           )}
@@ -2846,7 +2890,7 @@ export default function MovimentacoesPage() {
                       </thead>
                       <tbody>
                         {linhas.map((linha, i) => {
-                          const { pesoTotal: pesoTotalLinha, arrobaPorAnimal, valorTotal: valorTotalLinha } = calcularLinha(linha)
+                          const { pesoTotal: pesoTotalLinha, arrobaPorAnimal } = calcularLinha(linha)
                           const saldo = saldosLinhas[i]
                           const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : null
                           const catLinha = categorias.find((c) => c.id === linha.categoriaId)
@@ -2923,13 +2967,13 @@ export default function MovimentacoesPage() {
                                 <td className="border-b border-border p-2 align-top">
                                   <div className="flex gap-1">
                                     <select
-                                      className={inputSmClass}
+                                      className={`w-24 flex-none ${inputSmClass}`}
                                       value={linha.campoPreco}
                                       onChange={(e) => atualizarLinha(i, { campoPreco: e.target.value as CampoPreco })}
                                     >
                                       {CAMPOS_PRECO.map((c) => (
                                         <option key={c.key} value={c.key}>
-                                          {c.label}
+                                          {CAMPOS_PRECO_CURTO[c.key]}
                                         </option>
                                       ))}
                                     </select>
@@ -2942,36 +2986,49 @@ export default function MovimentacoesPage() {
                                       onChange={(e) => atualizarLinha(i, { valorPreco: e.target.value })}
                                     />
                                   </div>
-                                  <p className="mt-1 text-[11px] text-text-secondary">Bruto: {formatMoeda(valorTotalLinha)}</p>
+                                  {(() => {
+                                    const valoresLinha = calcularValoresLinha(linha)
+                                    return (
+                                      <p className="mt-1 text-[11px] text-text-secondary">
+                                        {CAMPOS_PRECO.filter((c) => c.key !== linha.campoPreco).map((c) => (
+                                          <span key={c.key} className="mr-2 whitespace-nowrap">
+                                            {CAMPOS_PRECO_CURTO[c.key]}: {formatDecimal(valoresLinha[c.key])}
+                                          </span>
+                                        ))}
+                                      </p>
+                                    )
+                                  })()}
                                 </td>
                               )}
-                              <td className="border-b border-border p-2 align-top">
-                                {!linhaEhBezerro ? (
-                                  <span className="text-xs text-text-muted">—</span>
-                                ) : isNascimento || tipo === 'COMPRA' ? (
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    className={inputSmClass}
-                                    value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                                    onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
-                                    onFocus={(e) => e.target.select()}
-                                  />
-                                ) : (
-                                  <select
-                                    className={inputSmClass}
-                                    value={linha.safraNascimento}
-                                    onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
-                                  >
-                                    <option value="">Selecione...</option>
-                                    {(lotesDisponiveisLinhas[i] || []).map((l) => (
-                                      <option key={l.safra} value={String(l.safra)}>
-                                        {formatSafra(l.safra)} ({formatQuantidade(l.saldo)})
-                                      </option>
-                                    ))}
-                                  </select>
-                                )}
-                              </td>
+                              {mostrarColunaSafra && (
+                                <td className="border-b border-border p-2 align-top">
+                                  {!linhaEhBezerro ? (
+                                    <span className="text-xs text-text-muted">—</span>
+                                  ) : isNascimento || tipo === 'COMPRA' ? (
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      className={inputSmClass}
+                                      value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                                      onChange={(e) => atualizarLinha(i, { safraNascimento: extrairAnoSafraDigitado(e.target.value) })}
+                                      onFocus={(e) => e.target.select()}
+                                    />
+                                  ) : (
+                                    <select
+                                      className={inputSmClass}
+                                      value={linha.safraNascimento}
+                                      onChange={(e) => atualizarLinha(i, { safraNascimento: e.target.value })}
+                                    >
+                                      <option value="">Selecione...</option>
+                                      {(lotesDisponiveisLinhas[i] || []).map((l) => (
+                                        <option key={l.safra} value={String(l.safra)}>
+                                          {formatSafra(l.safra)} ({formatQuantidade(l.saldo)})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </td>
+                              )}
                               {mostrarSeletorProprietario && (
                                 <td className="border-b border-border p-2 align-top">
                                   <select
