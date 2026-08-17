@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/lib/supabase/client'
+import CadastrarContaModal from './CadastrarContaModal'
 
 type Conta = { id: string; nome: string; ativo: boolean }
 
@@ -32,6 +33,7 @@ export default function SuporteHome() {
   const [loading, setLoading] = useState(true)
   const [entrandoId, setEntrandoId] = useState<string | null>(null)
   const [alternandoId, setAlternandoId] = useState<string | null>(null)
+  const [modalAberto, setModalAberto] = useState(false)
 
   useEffect(() => {
     carregar()
@@ -57,18 +59,36 @@ export default function SuporteHome() {
 
   async function handleAlternarAtivo(c: Conta) {
     setAlternandoId(c.id)
-    await supabase.from('contas').update({ ativo: !c.ativo }).eq('id', c.id)
+    // via Route Handler (cliente admin) — RLS de `contas` só libera
+    // UPDATE pra id = fn_conta_atual(), então um update direto daqui
+    // falharia silenciosamente pra qualquer conta que não a própria
+    await fetch(`/api/contas/${c.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !c.ativo }),
+    })
     setAlternandoId(null)
     carregar()
   }
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Suporte</h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        Área da equipe interna — nenhum dado de conta de cliente aparece aqui. Entre numa conta pra
-        navegar o sistema com os dados dela.
-      </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-text-primary">Suporte</h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            Área da equipe interna — nenhum dado de conta de cliente aparece aqui. Entre numa conta
+            pra navegar o sistema com os dados dela.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setModalAberto(true)}
+          className="shrink-0 rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover"
+        >
+          + Nova Conta
+        </button>
+      </div>
 
       <div className="mt-6 flex gap-1 border-b border-border">
         {ABAS.map((aba) => {
@@ -142,6 +162,16 @@ export default function SuporteHome() {
             })}
           </div>
         ))}
+
+      {modalAberto && (
+        <CadastrarContaModal
+          onClose={() => setModalAberto(false)}
+          onSaved={() => {
+            setModalAberto(false)
+            carregar()
+          }}
+        />
+      )}
     </div>
   )
 }

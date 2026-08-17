@@ -2913,3 +2913,71 @@ Verificado no navegador: `resetPasswordForEmail` chamado sem erro (confirma que 
 e-mail e o fluxo completo do link (troca de code, chegada em `/redefinir-senha` com sessão de
 recuperação) não foram exercidos ponta a ponta nesta verificação — dependeria de checar a caixa de
 entrada de verdade e do SMTP do projeto já estar configurado.
+
+## Onboarding de conta nova pela UI (Suporte cria conta de cliente, migração 049)
+
+Fecha o maior gargalo prático do multi-tenant: até aqui, criar uma conta de cliente nova só era
+possível via SQL direto (inserir em `contas`, rodar manualmente o seed de `categorias_animal`/
+`subtipos_uso_area` — que só existia pra "Conta Principal" —, inserir `conta_modulos`/
+`conta_limites`, e criar o primeiro usuário via Admin API). Agora um botão **"+ Nova Conta"** na aba
+"Contas" de `components/suporte/SuporteHome.tsx` abre `components/suporte/CadastrarContaModal.tsx`
+(mesmo molde de `CadastrarUsuarioModal.tsx`) e faz tudo numa passada só: nome da conta, dados do
+administrador (nome/e-mail/senha — vira o primeiro `dono` daquela conta, modo `GESTAO` fixo),
+checkbox de módulos contratados (`MODULOS` de `lib/modulos.ts`, mesmo componente visual já usado em
+`CadastrarUsuarioModal`) e uma seção "Limites (opcional)" colapsável (mesmo padrão accordion já
+usado em `/usuarios`) com os dois campos numéricos já existentes em `lib/conta-limites.ts`
+(`fazendas`/`proprietarios` — em branco = sem limite).
+
+**`fn_seed_categorias_subtipos_conta()`** (migração 049, trigger `after insert on contas`, mesmo
+princípio de `fn_criar_configuracoes_conta` já existente) replica pra `new.id` a mesma lógica de
+seed que até então só rodava manualmente pra "Conta Principal" no bloco final de
+`orion_agro_schema.sql` — as 11 categorias-sistema (via `grupos_categoria_papel`, catálogo global) e
+os subtipos de uso de área ("Geral" + sugestões de Pecuária/Agricultura, via `tipos_uso_area`,
+também global). Só grava linhas conta-scoped; não precisa de mudança de RLS porque `contas` só é
+inserida pelo cliente admin/service-role (que já bypassa RLS), e os inserts da trigger usam
+`conta_id = new.id` explícito. Não dispara retroativamente pra "Conta Principal" (inserida antes
+dessa trigger existir no arquivo consolidado) — o bloco de seed manual continua lá, inalterado.
+
+**`app/api/contas/route.ts`** (novo, `POST`) — `exigirSuporte()` (mesmo padrão de `exigirDono()`, mas
+checando `usuarios_app.suporte` em vez de `dono`) protege o endpoint. Sequência: cria o usuário de
+auth primeiro (`email_confirm: true`, mesmo motivo de `POST /api/usuarios` — quem cria é o próprio
+Suporte); insere `contas` (dispara as duas triggers de seed); insere `conta_modulos`/`conta_limites`
+se informados; insere `usuarios_app` com `dono: true`. Se o insert de `usuarios_app` falhar, desfaz o
+usuário de auth (mesmo padrão de "sem login órfão" já usado em `POST /api/usuarios`); falha nos
+passos de módulos/limites não tenta rollback (operação administrativa rara, corrigível manualmente —
+editar `conta_modulos`/`conta_limites` de uma conta já existente continua fora do escopo desta
+rodada, só via SQL).
+
+**Bug real encontrado e corrigido durante o teste (migração 049b)**: a constraint
+`uq_subtipo_nome_tipo_uso` (criada na migração 032, `unique (tipo_uso_id, nome)`) nunca foi
+atualizada pra incluir `conta_id` quando `subtipos_uso_area` virou conta-scoped na Fase 1 (migração
+046) — diferente de `fazendas.nome`, que recebeu esse tratamento corretamente na própria migração
+046 (`uq_fazendas_conta_nome`). Como `tipos_uso_area` é catálogo global (mesmo `tipo_uso_id` em todas
+as contas), a segunda conta a inserir um subtipo "Geral" pra qualquer tipo de uso colidia com a linha
+"Geral" já existente da primeira — só apareceu agora porque, até a trigger de seed automático
+existir, nunca tinha havido uma segunda conta inserindo `subtipos_uso_area`. Corrigido recriando a
+constraint como `unique (conta_id, tipo_uso_id, nome)`.
+
+**Segundo bug real encontrado e corrigido**: o toggle Ativar/Inativar de contas em `SuporteHome.tsx`
+(criado na rodada anterior, "home dedicada de Suporte") só funcionava pra conta do próprio usuário de
+Suporte — a migração 048 só liberou **SELECT** em `contas` pra qualquer `suporte = true`
+(`contas_visivel_suporte`), UPDATE continuou restrito a `id = fn_conta_atual()`. Como só existia
+"Conta Principal" até esta rodada, o bug nunca tinha sido exercido contra uma conta de verdade
+diferente da própria (o teste anterior só validou o caminho "toggle na própria conta", que sempre
+bateu com `fn_conta_atual()`). Corrigido roteando a ação por uma Route Handler nova,
+**`app/api/contas/[id]/route.ts`** (`PATCH`, `exigirSuporte()` + cliente admin) — mesmo padrão já
+usado pra `/api/usuarios/[id]`, em vez de abrir uma policy de UPDATE ampla direto na tabela pra
+qualquer sessão de suporte.
+
+Verificado no navegador de ponta a ponta: criação de uma conta de teste completa (nome, administrador
+com senha própria, 3 módulos marcados, limite de 1 fazenda) pelo modal; login como o administrador
+recém-criado mostrando a Sidebar filtrada só com os 3 módulos escolhidos (confirma
+`modulosDaConta`); as 11 categorias-sistema presentes em `/categorias` (seed automático funcionando);
+criar a 1ª fazenda funcionou (dentro do limite), tentar criar a 2ª foi bloqueada com a mensagem de
+`excedeuLimiteConta` ("contrate o módulo Multifazendas..."); toggle Ativar/Inativar (após o hotfix)
+persistindo corretamente pra uma conta que não a do próprio Suporte. Dados de teste (conta, fazenda,
+pessoa proprietária, usuário administrador) removidos por completo ao final via SQL direto — exigiu
+respeitar a ordem de FK (fazendas antes de pessoas, por causa de `proprietario_id`) e desligar
+temporariamente os gatilhos de `categorias_animal`/`subtipos_uso_area` (que bloqueiam excluir linha
+`sistema = true`, exatamente o que o seed automático cria) e limpar `suporte_conta_ativa`/
+`suporte_auditoria` (referenciam `contas`) antes do delete final.
