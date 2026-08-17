@@ -15,12 +15,12 @@ import AlterarSenhaModal from '@/components/AlterarSenhaModal'
 // navegação muda.
 export default function ModoCampoShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { usuarioApp, modulosPermitidos, signOut } = useAuth()
+  const { usuarioApp, podeAcessar, signOut } = useAuth()
   const [alterarSenhaAberto, setAlterarSenhaAberto] = useState(false)
 
   const abas = [
     { id: 'painel', label: 'Início', href: '/', icon: ICONS.painel },
-    ...MODULOS.filter((m) => modulosPermitidos.has(m.id)),
+    ...MODULOS.filter((m) => podeAcessar(m.id)),
   ]
 
   return (

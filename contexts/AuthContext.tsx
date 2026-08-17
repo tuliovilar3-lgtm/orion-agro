@@ -13,7 +13,10 @@ type UsuarioApp = {
   dono: boolean
   ativo: boolean
   modo: 'CAMPO' | 'GESTAO' | 'CONSULTA'
+  suporte: boolean
 }
+
+type ContaSuporteAtiva = { id: string; nome: string } | null
 
 type AuthValue = {
   user: User | null
@@ -21,6 +24,12 @@ type AuthValue = {
   modulosPermitidos: Set<ModuloId>
   modulosDaConta: Set<ModuloId>
   isDono: boolean
+  // conta que um usuário de suporte está navegando agora (migração 048)
+  // — null enquanto ele não "entrou" em nenhuma conta de cliente
+  contaSuporteAtiva: ContaSuporteAtiva
+  emModoSuporte: boolean
+  entrarNaConta: (contaId: string) => Promise<void>
+  sairDoSuporte: () => Promise<void>
   loading: boolean
   podeAcessar: (modulo: ModuloId) => boolean
   signOut: () => Promise<void>
@@ -37,16 +46,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // (o que o usuário específico tem liberado dentro da conta): mesmo o
   // dono não vê um módulo que a própria conta não contratou.
   const [modulosDaConta, setModulosDaConta] = useState<Set<ModuloId>>(new Set())
+  const [contaSuporteAtiva, setContaSuporteAtiva] = useState<ContaSuporteAtiva>(null)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
   const router = useRouter()
 
   async function carregarDadosApp(u: User) {
-    const [{ data: perfil }, { data: modulos }, { data: modulosConta }] = await Promise.all([
-      supabase.from('usuarios_app').select('id, nome, email, dono, ativo, modo').eq('id', u.id).maybeSingle(),
+    const [{ data: perfil }, { data: modulos }, { data: modulosConta }, { data: suporteAtivo }] = await Promise.all([
+      supabase.from('usuarios_app').select('id, nome, email, dono, ativo, modo, suporte').eq('id', u.id).maybeSingle(),
       supabase.from('usuario_modulos').select('modulo').eq('usuario_id', u.id),
       supabase.from('conta_modulos').select('modulo').eq('ativo', true),
+      supabase.from('suporte_conta_ativa').select('conta:contas(id, nome)').eq('usuario_id', u.id).maybeSingle(),
     ])
 
     // usuário inativado continua com login válido no Supabase Auth (só
@@ -61,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUsuarioApp(null)
       setModulosPermitidos(new Set())
       setModulosDaConta(new Set())
+      setContaSuporteAtiva(null)
       window.location.href = '/login?inativo=1'
       return
     }
@@ -68,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUsuarioApp(perfil as UsuarioApp | null)
     setModulosPermitidos(new Set((modulos || []).map((m) => m.modulo as ModuloId)))
     setModulosDaConta(new Set((modulosConta || []).map((m) => m.modulo as ModuloId)))
+    setContaSuporteAtiva(((suporteAtivo as any)?.conta as ContaSuporteAtiva) || null)
   }
 
   useEffect(() => {
@@ -90,6 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUsuarioApp(null)
         setModulosPermitidos(new Set())
         setModulosDaConta(new Set())
+        setContaSuporteAtiva(null)
       }
     })
 
@@ -98,12 +112,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const isDono = usuarioApp?.dono === true
+  // "navegando numa conta de cliente" — só true quando o usuário é
+  // suporte E tem uma linha ativa em suporte_conta_ativa (fn_conta_atual()
+  // já resolveu pra essa conta no banco; este flag só espelha isso pro
+  // frontend saber quando mostrar o banner e liberar acesso total)
+  const emModoSuporte = usuarioApp?.suporte === true && contaSuporteAtiva !== null
 
   function podeAcessar(modulo: ModuloId) {
+    // suporte navegando numa conta de cliente enxerga tudo, sem passar
+    // pela checagem normal de conta_modulos/usuario_modulos (que é
+    // sobre o que aquele CLIENTE comprou/liberou, não sobre a equipe
+    // interna do fornecedor)
+    if (emModoSuporte) return true
     // a conta precisa ter contratado o módulo (migração 047) E o
     // usuário específico precisa ter acesso dentro da conta — dono
     // bypassa só a segunda checagem, nunca a primeira
     return modulosDaConta.has(modulo) && (isDono || modulosPermitidos.has(modulo))
+  }
+
+  // as duas ações abaixo forçam um reload completo (não router.push) de
+  // propósito: entrar/sair de uma conta muda o que fn_conta_atual()
+  // resolve no banco pra toda query do app — um reload garante que
+  // cada tela já montada refaça sua busca sob o novo escopo, em vez de
+  // continuar mostrando dado da conta anterior até ser remontada
+  async function entrarNaConta(contaId: string) {
+    if (!usuarioApp) return
+    await supabase.from('suporte_conta_ativa').upsert({ usuario_id: usuarioApp.id, conta_id: contaId })
+    window.location.href = '/'
+  }
+
+  async function sairDoSuporte() {
+    if (!usuarioApp) return
+    await supabase.from('suporte_conta_ativa').delete().eq('usuario_id', usuarioApp.id)
+    window.location.href = '/'
   }
 
   async function signOut() {
@@ -113,7 +154,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, usuarioApp, modulosPermitidos, modulosDaConta, isDono, loading, podeAcessar, signOut }}
+      value={{
+        user,
+        usuarioApp,
+        modulosPermitidos,
+        modulosDaConta,
+        isDono,
+        contaSuporteAtiva,
+        emModoSuporte,
+        entrarNaConta,
+        sairDoSuporte,
+        loading,
+        podeAcessar,
+        signOut,
+      }}
     >
       {children}
     </AuthContext.Provider>

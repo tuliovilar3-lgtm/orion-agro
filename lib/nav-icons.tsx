@@ -142,6 +142,14 @@ export const ICONS = {
       <path d="m9 12 2 2 4-4" />
     </Icon>
   ),
+  suporte: (
+    <Icon>
+      <path d="M4 13v-1a8 8 0 0 1 16 0v1" />
+      <rect x="2" y="13" width="5" height="7" rx="1.5" />
+      <rect x="17" y="13" width="5" height="7" rx="1.5" />
+      <path d="M20 20v1a2 2 0 0 1-2 2h-3" />
+    </Icon>
+  ),
   sair: (
     <Icon>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

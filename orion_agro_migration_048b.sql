@@ -1,0 +1,29 @@
+-- =====================================================================
+-- Migração 048b — hotfix: fn_existe_dono() precisa ser security definer
+-- =====================================================================
+--
+-- Bug encontrado durante o teste da Fase 4 (papel de Suporte), mas a
+-- causa raiz é da Fase 1 (migração 046): fn_existe_dono() é chamada
+-- pela tela de /login ANTES de qualquer sessão existir (com a chave
+-- anônima), pra decidir entre mostrar o formulário normal de entrar ou
+-- o de "criar conta de administrador". Desde que RLS foi reativado em
+-- usuarios_app (migração 046), essa função — que roda como SECURITY
+-- INVOKER por padrão — passou a enxergar zero linhas de usuarios_app
+-- pra um visitante anônimo (auth.uid() é null, então a policy
+-- `id = auth.uid() or conta_id = fn_conta_atual()` nunca bate),
+-- fazendo `exists(select 1 from usuarios_app where dono = true)`
+-- retornar false mesmo já existindo um administrador — a tela de login
+-- oferecia "criar conta de administrador" de novo, indefinidamente.
+--
+-- Nunca foi pego antes porque todo teste no navegador desde a migração
+-- 046 partiu de uma sessão já autenticada (cookie persistido entre
+-- reinícios do servidor de desenvolvimento); esta foi a primeira vez
+-- que uma aba realmente sem sessão bateu na tela de login depois do
+-- RLS entrar.
+--
+-- Correção: marcar security definer + search_path fixo, mesmo padrão
+-- já usado em fn_conta_atual() — a função só retorna um boolean, nunca
+-- expõe dado nenhum, então bypassar RLS aqui é seguro.
+-- =====================================================================
+
+alter function fn_existe_dono() security definer set search_path = public;

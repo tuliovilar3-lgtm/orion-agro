@@ -14,6 +14,9 @@ export default function LoginPage() {
   const [erro, setErro] = useState<string | null>(null)
   const [avisoConfirmacao, setAvisoConfirmacao] = useState(false)
   const [avisoInativo, setAvisoInativo] = useState(false)
+  const [modoRecuperarSenha, setModoRecuperarSenha] = useState(false)
+  const [emailRecuperacao, setEmailRecuperacao] = useState('')
+  const [avisoRecuperacaoEnviada, setAvisoRecuperacaoEnviada] = useState(false)
 
   const supabase = createClient()
   const router = useRouter()
@@ -40,6 +43,21 @@ export default function LoginPage() {
     }
     router.push('/')
     router.refresh()
+  }
+
+  async function handleRecuperarSenha(e: React.FormEvent) {
+    e.preventDefault()
+    setErro(null)
+    setEnviando(true)
+    const { error } = await supabase.auth.resetPasswordForEmail(emailRecuperacao, {
+      redirectTo: `${window.location.origin}/api/auth/confirmar?next=/redefinir-senha`,
+    })
+    setEnviando(false)
+    if (error) {
+      setErro(error.message)
+      return
+    }
+    setAvisoRecuperacaoEnviada(true)
   }
 
   async function handleCriarConta(e: React.FormEvent) {
@@ -93,47 +111,125 @@ export default function LoginPage() {
               <div className="h-9 rounded-control bg-border" />
             </div>
           ) : existeDono ? (
-            <>
-              <h1 className="text-lg font-bold text-text-primary">Entrar</h1>
-              {avisoInativo && (
-                <div className="mt-3 rounded-control bg-warning-bg px-3 py-2 text-xs text-warning">
-                  Esse usuário foi inativado. Fale com o administrador do sistema se isso for um engano.
-                </div>
-              )}
-              <form onSubmit={handleEntrar} onKeyDown={bloquearEnvioPorEnter} className="mt-4 space-y-3">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">E-mail</label>
-                  <input
-                    type="email"
-                    required
-                    autoFocus
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">Senha</label>
-                  <input
-                    type="password"
-                    required
-                    value={senha}
-                    onChange={(e) => setSenha(e.target.value)}
-                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                  />
-                </div>
-                {erro && (
-                  <div className="rounded-control bg-error-bg px-3 py-2 text-xs text-error">{erro}</div>
+            modoRecuperarSenha ? (
+              <>
+                <h1 className="text-lg font-bold text-text-primary">Esqueci minha senha</h1>
+                {avisoRecuperacaoEnviada ? (
+                  <>
+                    <div className="mt-4 rounded-control bg-brand-100 px-3 py-2.5 text-sm text-brand-700">
+                      Se {emailRecuperacao} tiver uma conta no sistema, enviamos um link pra redefinir a senha.
+                      Verifique também a caixa de spam.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModoRecuperarSenha(false)
+                        setAvisoRecuperacaoEnviada(false)
+                        setErro(null)
+                      }}
+                      className="mt-4 text-sm font-medium text-brand-500 hover:underline"
+                    >
+                      Voltar pra tela de entrar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      Informe seu e-mail — enviamos um link pra você definir uma senha nova.
+                    </p>
+                    <form
+                      onSubmit={handleRecuperarSenha}
+                      onKeyDown={bloquearEnvioPorEnter}
+                      className="mt-4 space-y-3"
+                    >
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-text-secondary">E-mail</label>
+                        <input
+                          type="email"
+                          required
+                          autoFocus
+                          value={emailRecuperacao}
+                          onChange={(e) => setEmailRecuperacao(e.target.value)}
+                          className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                        />
+                      </div>
+                      {erro && (
+                        <div className="rounded-control bg-error-bg px-3 py-2 text-xs text-error">{erro}</div>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={enviando}
+                        className="w-full rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-60"
+                      >
+                        {enviando ? 'Enviando...' : 'Enviar link de recuperação'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModoRecuperarSenha(false)
+                          setErro(null)
+                        }}
+                        className="w-full text-center text-sm font-medium text-text-secondary hover:underline"
+                      >
+                        Cancelar
+                      </button>
+                    </form>
+                  </>
                 )}
-                <button
-                  type="submit"
-                  disabled={enviando}
-                  className="w-full rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-60"
-                >
-                  {enviando ? 'Entrando...' : 'Entrar'}
-                </button>
-              </form>
-            </>
+              </>
+            ) : (
+              <>
+                <h1 className="text-lg font-bold text-text-primary">Entrar</h1>
+                {avisoInativo && (
+                  <div className="mt-3 rounded-control bg-warning-bg px-3 py-2 text-xs text-warning">
+                    Esse usuário foi inativado. Fale com o administrador do sistema se isso for um engano.
+                  </div>
+                )}
+                <form onSubmit={handleEntrar} onKeyDown={bloquearEnvioPorEnter} className="mt-4 space-y-3">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">E-mail</label>
+                    <input
+                      type="email"
+                      required
+                      autoFocus
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">Senha</label>
+                    <input
+                      type="password"
+                      required
+                      value={senha}
+                      onChange={(e) => setSenha(e.target.value)}
+                      className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    />
+                  </div>
+                  {erro && (
+                    <div className="rounded-control bg-error-bg px-3 py-2 text-xs text-error">{erro}</div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={enviando}
+                    className="w-full rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-60"
+                  >
+                    {enviando ? 'Entrando...' : 'Entrar'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoRecuperarSenha(true)
+                      setErro(null)
+                    }}
+                    className="w-full text-center text-sm font-medium text-brand-500 hover:underline"
+                  >
+                    Esqueci minha senha
+                  </button>
+                </form>
+              </>
+            )
           ) : (
             <>
               <h1 className="text-lg font-bold text-text-primary">Criar conta de administrador</h1>

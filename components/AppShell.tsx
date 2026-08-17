@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import ModoCampoShell from './campo/ModoCampoShell'
+import SuporteBanner from './SuporteBanner'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { FiltroGlobalProvider } from '@/contexts/FiltroGlobalContext'
 
@@ -24,8 +25,18 @@ function LayoutPorModo({
 }) {
   const { usuarioApp } = useAuth()
 
+  // banner de suporte entra como a primeira coisa dentro de <main> nos
+  // dois layouts — em vez de um elemento fixed próprio, que brigaria
+  // com o posicionamento fixed já calculado da Sidebar/topbar
+  const conteudo = (
+    <>
+      <SuporteBanner />
+      {children}
+    </>
+  )
+
   if (usuarioApp?.modo === 'CAMPO') {
-    return <ModoCampoShell>{children}</ModoCampoShell>
+    return <ModoCampoShell>{conteudo}</ModoCampoShell>
   }
 
   return (
@@ -36,7 +47,7 @@ function LayoutPorModo({
           collapsed ? 'md:pl-16' : 'md:pl-60'
         }`}
       >
-        <main className="flex-1">{children}</main>
+        <main className="flex-1">{conteudo}</main>
       </div>
     </>
   )
@@ -60,10 +71,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     })
   }
 
-  // /login não usa a sidebar nem o filtro global — é a única tela
-  // acessível sem sessão, então não faz sentido montar navegação nem
-  // buscar fazendas ali
-  if (pathname === '/login') {
+  // /login e /redefinir-senha não usam a sidebar nem o filtro global —
+  // são as únicas telas acessíveis sem uma sessão "de verdade" (a
+  // segunda usa uma sessão de recuperação, só serve pra trocar a
+  // senha), então não faz sentido montar navegação nem buscar fazendas
+  // ali
+  if (pathname === '/login' || pathname === '/redefinir-senha') {
     return <AuthProvider>{children}</AuthProvider>
   }
 

@@ -66,6 +66,7 @@ const GROUPS: NavGroup[] = [
 
 const PAINEL: NavItem = { label: 'Painel', href: '/', icon: ICONS.painel }
 const USUARIOS: NavItem = { label: 'Usuários', href: '/usuarios', icon: ICONS.acesso }
+const SUPORTE: NavItem = { label: 'Suporte', href: '/suporte', icon: ICONS.suporte }
 
 const PLACEHOLDERS: NavItem[] = [
   { label: 'Financeiro', href: '#', icon: ICONS.financeiro },
@@ -160,6 +161,29 @@ function NavLinks({
           >
             {USUARIOS.icon}
             {!collapsed && USUARIOS.label}
+          </Link>
+        </div>
+      )}
+
+      {usuarioApp?.suporte && (
+        <div>
+          {!collapsed && (
+            <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+              Equipe interna
+            </div>
+          )}
+          <Link
+            href={SUPORTE.href}
+            onClick={onNavigate}
+            title={collapsed ? SUPORTE.label : undefined}
+            className={`flex items-center gap-2.5 rounded-r-control border-l-[3px] px-2.5 py-2 text-[13px] font-medium transition-colors ${
+              pathname === SUPORTE.href
+                ? 'border-brand-500 bg-white/8 text-white font-semibold'
+                : 'border-transparent text-white/70 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            {SUPORTE.icon}
+            {!collapsed && SUPORTE.label}
           </Link>
         </div>
       )}

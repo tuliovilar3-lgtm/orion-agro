@@ -2682,3 +2682,154 @@ valor`), já coberta pelo type-check.
 `orion_agro_schema.sql` sincronizado: `conta_modulos`/`conta_limites` inseridas logo depois de
 `usuario_modulos` (mesma vizinhança temática — módulo/permissão), com o mesmo seed de
 `conta_modulos` pra "Conta Principal" replicado do arquivo de migração.
+
+## Multi-tenant — Fase 4 (migração 048): papel de Suporte
+
+Terceiro passo implementado do roadmap multi-tenant (Fase 3 — RLS — já tinha sido absorvida na Fase
+1; ver memória `project_multi_tenant_saas`). Dá pra equipe interna do fornecedor acessar/gerenciar a
+conta de qualquer cliente pra dar suporte técnico, via **seletor de conta** (escolhe uma conta numa
+lista e passa a navegar o app normal com os dados dela) — não personificação de usuário específico,
+não painel administrativo separado. Decisão confirmada com o usuário antes de implementar: o
+primeiro usuário de suporte é a própria conta que já existia (dono da "Conta Principal"), não um
+login separado — ele continua sendo dono normal da própria conta, e ganha a opção extra de "entrar"
+em qualquer outra conta.
+
+**`suporte_conta_ativa`** (usuario_id PK, conta_id) guarda em qual conta um usuário de suporte está
+navegando agora — "entrar" faz upsert, "sair" apaga a linha. Preferida a uma variável de sessão do
+Postgres porque o Supabase usa pool de conexões — uma session var não sobreviveria de forma confiável
+entre requisições. RLS restringe cada usuário a só ver/alterar a própria linha
+(`usuario_id = auth.uid()`); uma trigger (`fn_validar_suporte_conta_ativa`) é defesa em profundidade
+garantindo que só `usuarios_app.suporte = true` pode ganhar uma linha aqui, mesmo que a policy de RLS
+sozinha só garanta "é o próprio usuário".
+
+**`fn_conta_atual()` ganhou um fallback** (era só `select conta_id from usuarios_app where id =
+auth.uid()`): agora checa `suporte_conta_ativa` primeiro (só vale pra quem é suporte) e cai pro
+`conta_id` próprio se não houver linha ativa lá. Cobre os 3 casos sem nenhuma bifurcação de código no
+resto do sistema — usuário comum sempre usa o próprio `conta_id`; suporte "em casa" (sem entrar em
+nenhuma conta) se comporta exatamente como um usuário comum; suporte navegando numa conta de cliente
+usa a conta selecionada. Como **toda** tabela do sistema já usa `conta_id = fn_conta_atual()` na sua
+policy de RLS (Fase 1), essa única mudança faz **cada query do app inteiro** (Painel, Movimentações,
+Fazendas, etc.) passar a mostrar os dados da conta selecionada automaticamente — nenhuma tela
+precisou de código novo pra respeitar o modo suporte.
+
+**`suporte_auditoria`** é um log append-only (usuario_id, conta_id, acao ENTROU/SAIU, created_at),
+populado só por uma trigger (`fn_registrar_auditoria_suporte`, `security definer`) em cima de
+`insert/update/delete` em `suporte_conta_ativa` — nunca por código do app diretamente, e sem nenhuma
+policy de RLS permissiva pra ninguém autenticado ler/escrever direto (só a trigger, que bypassa RLS
+com `security definer`, consegue inserir).
+
+**RLS em `contas` ganhou uma policy adicional de SELECT** (`contas_visivel_suporte`, soma via OR com
+a policy original) liberando qualquer usuário `suporte = true` ver **todas** as contas — necessário
+pra montar o seletor. Não afeta INSERT/UPDATE/DELETE, que continuam restritos à própria conta
+(onboarding de conta nova via UI é fora do escopo desta fase).
+
+**`usuarios_app` precisou de um ajuste sutil na própria policy**: um usuário de suporte precisa
+continuar enxergando o **próprio** perfil (nome, dono, modo, suporte) mesmo enquanto está navegando
+em outra conta — `fn_conta_atual()` nesse momento aponta pra conta selecionada, não mais pro
+`conta_id` do próprio usuário, então a policy antiga (`conta_id = fn_conta_atual()`) bloquearia o
+carregamento da própria sessão assim que o modo suporte fosse ativado. Corrigido pra
+`id = auth.uid() or conta_id = fn_conta_atual()` — pra um usuário comum isso não muda nada (as duas
+metades já apontavam pra mesma linha).
+
+**`contexts/AuthContext.tsx`**: `usuarioApp` ganha o campo `suporte`; novo estado
+`contaSuporteAtiva` (join `suporte_conta_ativa` + `contas`, carregado em paralelo no mesmo
+`carregarDadosApp`) e `emModoSuporte` derivado (`usuarioApp?.suporte && contaSuporteAtiva !== null`).
+`podeAcessar(modulo)` ganha um bypass total no topo: suporte navegando numa conta de cliente enxerga
+**tudo**, sem passar pela checagem normal de `conta_modulos`/`usuario_modulos` (que é sobre o que
+aquele CLIENTE comprou/liberou, não sobre a equipe interna do fornecedor). `entrarNaConta(contaId)`/
+`sairDoSuporte()` fazem upsert/delete em `suporte_conta_ativa` e então **forçam um reload completo**
+(`window.location.href = '/'`, não `router.push`) — decisão deliberada: entrar/sair de uma conta muda
+o que `fn_conta_atual()` resolve no banco pra toda query do app, e um reload garante que cada tela já
+montada refaça sua busca sob o novo escopo, em vez de continuar mostrando dado da conta anterior até
+ser remontada por navegação normal.
+
+**`app/suporte/page.tsx`** é o seletor — gate próprio por `usuarioApp?.suporte` (mesmo padrão de
+`/usuarios` com `isDono`, não usa `ModuloGate` porque não é um módulo liberável do catálogo). Lista
+todas as `contas` (via a policy nova), com "Entrar" por linha e destaque + "Sair" na conta ativa.
+Link "Suporte" na Sidebar num grupo próprio "Equipe interna", gated por `usuarioApp?.suporte`
+(separado do grupo "Administração", gated por `isDono` — hoje a mesma pessoa tem os dois, mas são
+flags independentes).
+
+**`components/SuporteBanner.tsx`** é o indicador visual persistente ("Você está vendo [Conta] como
+Suporte" + "Sair") — renderizado como a **primeira coisa dentro de `<main>`**, nos dois layouts
+(Sidebar/Modo Gestão e ModoCampoShell/Modo Campo), via `AppShell.tsx`. Decisão deliberada de não usar
+um elemento `fixed` próprio: a Sidebar (desktop) já é `fixed inset-y-0`, então um banner fixed
+brigaria com esse posicionamento já calculado; injetar como conteúdo normal no topo do fluxo de
+`<main>` evita qualquer ajuste de offset/z-index nos layouts existentes.
+
+**Bug pré-existente encontrado durante o teste desta fase, não relacionado ao Suporte em si**
+(migração 048b, hotfix): `fn_existe_dono()` — chamada pela tela de `/login` **antes de qualquer
+sessão existir**, pra decidir entre mostrar o formulário normal de entrar ou o de "criar conta de
+administrador" — nunca tinha sido marcada `security definer`. Desde que RLS foi reativado em
+`usuarios_app` (Fase 1, migração 046), essa função (rodando como SECURITY INVOKER) passou a enxergar
+zero linhas de `usuarios_app` pra um visitante anônimo (`auth.uid()` é null, a policy nunca bate), e
+`exists(select 1 from usuarios_app where dono = true)` sempre retornava `false` mesmo já existindo um
+administrador — a tela de login ficaria presa oferecendo "criar conta de administrador" de novo,
+indefinidamente. Nunca foi pego antes porque todo teste no navegador desde a Fase 1 partiu de uma
+sessão já autenticada (cookie persistido entre reinícios do servidor de desenvolvimento) — esta foi a
+primeira vez que uma aba genuinamente sem sessão bateu em `/login` depois do RLS entrar. Corrigido com
+`security definer set search_path = public`, mesmo padrão já usado em `fn_conta_atual()` — a função só
+retorna um boolean, nunca expõe dado, então bypassar RLS aqui é seguro.
+
+Verificado no navegador de ponta a ponta: `fn_existe_dono()` confirmada retornando `true` via RPC
+anônima direta (REST) antes e depois do hotfix, provando a causa raiz e a correção; login normal
+funcionando depois do hotfix; Sidebar mostrando os grupos "Administração" e "Equipe interna" pro
+usuário dono+suporte; página `/suporte` listando as contas existentes; criação de uma conta de teste
+via acesso direto ao banco (só pra ter uma segunda conta pra testar a troca), "Entrar" nela mostrando
+o banner correto e o Painel imediatamente vazio (fazendas/movimentações zeradas — confirma que
+`fn_conta_atual()` redirecionou toda query do app pra conta de teste, sem nenhum código novo em
+nenhuma tela); log de auditoria registrando `ENTROU` corretamente; "Sair" pelo banner voltando ao
+Painel real da Conta Principal (956 cabeças) e registrando `SAIU`; `suporte_conta_ativa` confirmada
+vazia depois de sair. Conta de teste e registros de auditoria de teste removidos ao final via acesso
+direto ao banco.
+
+`orion_agro_schema.sql` sincronizado: `suporte_conta_ativa`/`suporte_auditoria` + triggers inseridas
+logo após `usuarios_app`, antes da definição (atualizada) de `fn_conta_atual()` — ordem necessária já
+que a função passa a consultar `suporte_conta_ativa`, que por sua vez precisa existir antes dela.
+Policy `contas_visivel_suporte` e a policy atualizada de `usuarios_app` também sincronizadas, e
+`fn_existe_dono()` já nasce `security definer` no schema consolidado (reflete o hotfix, não o bug).
+
+## Esqueci minha senha (self-service, via e-mail)
+
+Complementa "Redefinir senha" (dono reseta a senha de um funcionário pra `123456` direto em
+`/usuarios`, já existente) com um fluxo pra quando é o próprio administrador (ou qualquer usuário)
+que esqueceu a senha e não tem ninguém pra resetar por ele — os dois convivem sem conflito, cobrindo
+casos diferentes. Usa o fluxo padrão do Supabase Auth (`resetPasswordForEmail`/`updateUser`), sem
+tabela nem lógica de negócio nova.
+
+**Fluxo**: `/login` ganha um link "Esqueci minha senha" (só na tela normal de entrar, não na de
+bootstrap do primeiro administrador) que abre um formulário de e-mail inline (mesmo card, sem
+navegar pra outra rota) — `supabase.auth.resetPasswordForEmail(email, { redirectTo:
+".../api/auth/confirmar?next=/redefinir-senha" })`. Mensagem de confirmação é genérica ("se esse
+e-mail tiver conta, enviamos um link") — não revela se o e-mail existe ou não no sistema.
+
+**`app/api/auth/confirmar/route.ts`** (Route Handler, fora do proxy de autenticação — a rota `/api`
+já é excluída pelo matcher) troca o `code` do link recebido por e-mail por uma sessão de verdade via
+`exchangeCodeForSession`, depois redireciona pro `next` (`/redefinir-senha`). Precisa ser um Route
+Handler, não uma página client-side, porque a troca de code por sessão é feita no cliente Supabase de
+servidor (`lib/supabase/server.ts`, cookies) — a mesma peça que o proxy já usa pra ler sessão em toda
+rota.
+
+**`app/redefinir-senha/page.tsx`**: formulário de nova senha + confirmar (mesma validação de
+`AlterarSenhaModal.tsx` — mínimo 6 caracteres, as duas senhas precisam bater — mas como página
+própria, não modal, já que chega aqui direto de um link de e-mail, fora de qualquer sessão normal de
+uso do app). Chama só `supabase.auth.updateUser({ password })` — a sessão de recuperação já
+estabelecida pelo Route Handler é suficiente, sem precisar saber quem é o usuário. Excluída do shell
+completo (`AppShell.tsx`, mesmo tratamento de `/login`) — não faz sentido montar Sidebar/
+`FiltroGlobalProvider` pra alguém que só está aqui pra trocar a senha. Sem sessão nenhuma (visita
+direta, sem passar pelo link), o proxy já redireciona pro `/login` sozinho — não está na lista de
+rotas públicas.
+
+**Dependência de infraestrutura, fora do código**: o e-mail de recuperação só chega de verdade se o
+projeto Supabase tiver um provedor de SMTP configurado (Project Settings → Auth → SMTP Settings) — o
+serviço de e-mail padrão do Supabase (compartilhado entre todos os projetos gratuitos) tem limite
+baixo de envios e frequentemente cai em spam/é bloqueado por provedores como Gmail. Pra produção,
+configurar um SMTP próprio (Resend, SendGrid, Amazon SES, etc.) no painel do Supabase é necessário —
+isso não muda nada no código deste fluxo, só a entrega de fato do e-mail.
+
+Verificado no navegador: `resetPasswordForEmail` chamado sem erro (confirma que a chamada em si e o
+`redirectTo` estão corretos); mensagem de confirmação genérica exibida; visita direta a
+`/redefinir-senha` sem sessão corretamente redirecionada pro `/login` pelo proxy. A entrega real do
+e-mail e o fluxo completo do link (troca de code, chegada em `/redefinir-senha` com sessão de
+recuperação) não foram exercidos ponta a ponta nesta verificação — dependeria de checar a caixa de
+entrada de verdade e do SMTP do projeto já estar configurado.

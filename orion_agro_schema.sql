@@ -197,12 +197,97 @@ comment on table usuarios_app is
   'Dados de app por usuário autenticado (auth.users é só identidade/senha). Um dono por grupo — os demais são funcionários com módulos liberados individualmente.';
 
 -- ---------------------------------------------------------------------
--- fn_conta_atual() (migração 046) — resolve a conta do usuário
--- autenticado. Usada tanto como DEFAULT automático de conta_id em toda
--- tabela abaixo (uma linha nova criada sem informar conta_id herda a do
--- usuário logado sozinha, sem o app precisar mencionar essa coluna)
--- quanto nas policies de RLS logo a seguir. Só pode ser criada aqui,
--- depois que usuarios_app já existe (a função consulta essa tabela).
+-- Papel de Suporte (migração 048, Fase 4 do multi-tenant) — em qual
+-- conta um usuário de suporte está navegando agora. Uma linha por
+-- usuário de suporte (chave primária = usuario_id): "entrar" numa
+-- conta faz upsert, "sair" apaga a linha. Preferida a uma variável de
+-- sessão do Postgres porque o Supabase usa pool de conexões — uma
+-- session var não sobreviveria de forma confiável entre requisições.
+-- Precisa existir antes de fn_conta_atual() (definida logo abaixo),
+-- que passa a consultar esta tabela.
+-- ---------------------------------------------------------------------
+create table suporte_conta_ativa (
+  usuario_id uuid primary key references usuarios_app(id) on delete cascade,
+  conta_id   uuid not null references contas(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- só o próprio usuário de suporte lê/altera sua própria linha
+alter table suporte_conta_ativa enable row level security;
+create policy suporte_conta_ativa_propria on suporte_conta_ativa for all
+  using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+-- defesa em profundidade: garante que só usuário com suporte = true
+-- pode ganhar uma linha aqui, mesmo que a policy de RLS acima seja
+-- respeitada (ela só garante "é o próprio usuário", não "é suporte")
+create or replace function fn_validar_suporte_conta_ativa()
+returns trigger as $$
+begin
+  if not exists (select 1 from usuarios_app where id = new.usuario_id and suporte = true) then
+    raise exception 'Só um usuário de suporte pode navegar em outra conta.';
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_suporte_conta_ativa
+before insert or update on suporte_conta_ativa
+for each row execute function fn_validar_suporte_conta_ativa();
+
+-- suporte_auditoria — log append-only de quem entrou/saiu de qual
+-- conta e quando. Populado só pela trigger abaixo (nunca por código do
+-- app diretamente) — sem policy permissiva pra ninguém autenticado, só
+-- a função security definer consegue inserir.
+create table suporte_auditoria (
+  id         uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references usuarios_app(id),
+  conta_id   uuid not null references contas(id),
+  acao       text not null check (acao in ('ENTROU', 'SAIU')),
+  created_at timestamptz not null default now()
+);
+
+alter table suporte_auditoria enable row level security;
+-- nenhuma policy permissiva: ninguém lê/escreve direto por aqui, só a
+-- trigger abaixo (security definer) consegue inserir
+
+create or replace function fn_registrar_auditoria_suporte()
+returns trigger as $$
+begin
+  if tg_op = 'INSERT' then
+    insert into suporte_auditoria (usuario_id, conta_id, acao) values (new.usuario_id, new.conta_id, 'ENTROU');
+  elsif tg_op = 'UPDATE' then
+    if new.conta_id <> old.conta_id then
+      insert into suporte_auditoria (usuario_id, conta_id, acao) values (old.usuario_id, old.conta_id, 'SAIU');
+      insert into suporte_auditoria (usuario_id, conta_id, acao) values (new.usuario_id, new.conta_id, 'ENTROU');
+    end if;
+  elsif tg_op = 'DELETE' then
+    insert into suporte_auditoria (usuario_id, conta_id, acao) values (old.usuario_id, old.conta_id, 'SAIU');
+  end if;
+  return null;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+create trigger trg_registrar_auditoria_suporte
+after insert or update or delete on suporte_conta_ativa
+for each row execute function fn_registrar_auditoria_suporte();
+
+-- ---------------------------------------------------------------------
+-- fn_conta_atual() (migração 046, atualizada na migração 048) —
+-- resolve a conta do usuário autenticado. Usada tanto como DEFAULT
+-- automático de conta_id em toda tabela abaixo (uma linha nova criada
+-- sem informar conta_id herda a do usuário logado sozinha, sem o app
+-- precisar mencionar essa coluna) quanto nas policies de RLS logo a
+-- seguir. Só pode ser criada aqui, depois que usuarios_app e
+-- suporte_conta_ativa já existem (a função consulta as duas).
+--
+-- Checa suporte_conta_ativa primeiro (só vale quando o usuário é
+-- suporte); sem linha ativa lá, cai pro conta_id próprio de sempre.
+-- Cobre os 3 casos: usuário comum (sempre usa o próprio conta_id),
+-- usuário de suporte "em casa" (mesma coisa, sem nenhuma mudança de
+-- comportamento), usuário de suporte navegando numa conta de cliente
+-- (usa a conta selecionada).
 --
 -- security definer + search_path fixo: evita recursão de RLS — a
 -- própria policy de usuarios_app (mais abaixo) também chama essa
@@ -218,7 +303,15 @@ security definer
 set search_path = public
 stable
 as $$
-  select conta_id from usuarios_app where id = auth.uid();
+  select coalesce(
+    (
+      select sca.conta_id
+      from suporte_conta_ativa sca
+      join usuarios_app u on u.id = sca.usuario_id
+      where u.id = auth.uid() and u.suporte = true
+    ),
+    (select conta_id from usuarios_app where id = auth.uid())
+  );
 $$;
 
 -- fazendas e configuracoes são definidas mais acima no arquivo (antes
@@ -262,6 +355,14 @@ alter table contas enable row level security;
 create policy contas_por_conta on contas for all
   using (id = fn_conta_atual()) with check (id = fn_conta_atual());
 
+-- migração 048: suporte precisa enxergar TODAS as contas (pra montar o
+-- seletor), não só a própria. Policy adicional de SELECT (soma com a
+-- de cima via OR) — não afeta INSERT/UPDATE/DELETE, que continuam
+-- restritos pela policy original (onboarding de conta nova é fora do
+-- escopo desta fase).
+create policy contas_visivel_suporte on contas for select
+  using (exists (select 1 from usuarios_app where id = auth.uid() and suporte = true));
+
 alter table fazendas enable row level security;
 create policy fazendas_por_conta on fazendas for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
@@ -270,9 +371,17 @@ alter table configuracoes enable row level security;
 create policy configuracoes_por_conta on configuracoes for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
+-- migração 048: um usuário de suporte precisa continuar enxergando o
+-- PRÓPRIO perfil mesmo enquanto está navegando em outra conta
+-- (fn_conta_atual() aponta pra conta selecionada nesse momento, não
+-- mais pro conta_id próprio do usuário) — sem o "id = auth.uid()", o
+-- carregamento de sessão quebraria assim que o modo suporte fosse
+-- ativado. Pra um usuário comum isso não muda nada (as duas metades
+-- da condição já apontavam pra mesma linha).
 alter table usuarios_app enable row level security;
 create policy usuarios_app_por_conta on usuarios_app for all
-  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+  using (id = auth.uid() or conta_id = fn_conta_atual())
+  with check (id = auth.uid() or conta_id = fn_conta_atual());
 
 -- catálogo de módulos é só uma convenção de string usada pelo frontend
 -- (mesmos ids de rota já usados na Sidebar) — sem tabela de módulos
@@ -344,11 +453,23 @@ where c.nome = 'Conta Principal';
 -- usada pelo /login (com a chave anônima, antes de qualquer sessão
 -- existir) pra decidir entre mostrar o formulário normal de entrar ou o
 -- formulário único de "criar conta de dono" — só retorna um boolean,
--- sem expor nenhum dado, então é seguro chamar sem autenticação
+-- sem expor nenhum dado, então é seguro chamar sem autenticação.
+-- security definer + search_path fixo (migração 048b, hotfix): sem
+-- isso, um visitante anônimo (sem sessão nenhuma) não enxerga nenhuma
+-- linha de usuarios_app sob RLS (auth.uid() é null pra ele), e a
+-- função sempre retornaria false mesmo já existindo um administrador
+-- — a própria razão de existir desta função (ser chamada ANTES de
+-- qualquer sessão) só funciona bypassando RLS aqui, igual já feito em
+-- fn_conta_atual().
 create or replace function fn_existe_dono()
-returns boolean as $$
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
   select exists(select 1 from usuarios_app where dono = true);
-$$ language sql stable;
+$$;
 
 -- ---------------------------------------------------------------------
 -- Rascunho original não utilizado — ver comentário acima
