@@ -2618,3 +2618,67 @@ que o próprio arquivo já semeia). Diferente da migração real (que precisou d
 disable-trigger/backfill/enable-trigger por rodar contra dados já existentes), o schema consolidado
 representa uma instalação nova do zero — sem dado legado pra reconciliar, então `conta_id` entra
 direto como `not null` já na própria `CREATE TABLE`, sem nenhuma ginástica de ALTER TABLE.
+
+## Multi-tenant — Fase 2 (migração 047): módulos e limites vendidos avulsos por conta
+
+Segundo passo do roadmap multi-tenant (ver Fase 1 acima) — introduz o mecanismo de venda de módulo
+individual, confirmado com o usuário: "a ideia inicial é vender cada módulo individualmente
+(rebanho, multifazendas, controle por pasto, financeiro, agrícola, clima, máquinas...)". Nesta
+rodada, dois recursos concretos usam o mecanismo — Multifazendas e Multiproprietário —, ambos
+sugeridos pelo próprio usuário durante a conversa como exemplos do que precisa ser opcional/pago.
+
+**`conta_modulos`** (conta_id, modulo, ativo) é a **fonte da verdade** de quais módulos uma conta
+contratou — não uma tabela de planos fixos, cada módulo liga/desliga independente (decisão já
+registrada em `project_multi_tenant_saas`, "planos" ficam como atalho de marketing opcional, ainda
+não implementado por não ter uso real hoje). **`conta_limites`** (conta_id, tipo_limite, valor) é
+genérica pra limites numéricos que não são "tela que aparece/some" — hoje cobre `'fazendas'`
+(Multifazendas) e `'proprietarios'` (Multiproprietário), mas o desenho comporta qualquer limite
+futuro (ex.: nº de usuários) sem migração de schema nova. **Ausência de linha em `conta_limites` pra
+um tipo = sem limite (ilimitado)** — decisão deliberada pra não exigir seed nenhum pra contas com uso
+irrestrito; é por isso que a "Conta Principal" não ganha nenhuma linha em `conta_limites` nesta
+migração, só em `conta_modulos` (grandfather clause com todos os 10 módulos do catálogo atual
+liberados, senão a interseção módulo-da-conta ∩ módulo-do-usuário daria vazio e o usuário atual
+perderia acesso ao sistema inteiro no mesmo instante em que a migração rodasse).
+
+**Permissão final de módulo** (`contexts/AuthContext.tsx`, `podeAcessar`) passa a exigir
+`modulosDaConta.has(modulo) && (isDono || modulosPermitidos.has(modulo))` — antes era só
+`isDono || modulosPermitidos.has(modulo)`. Mudança importante: **mesmo o dono da conta não vê um
+módulo que a própria conta não contratou** — dono continua bypassando só a checagem de
+`usuario_modulos` (é dono *dentro* da conta), nunca a de `conta_modulos` (o que a conta *comprou*).
+`modulosDaConta` é carregado em paralelo com `usuarios_app`/`usuario_modulos` no mesmo
+`carregarDadosApp`, via `supabase.from('conta_modulos').select('modulo').eq('ativo', true)` — sob
+RLS, isso já retorna só as linhas da conta do usuário logado, sem filtro explícito de `conta_id` no
+código (mesmo padrão "o banco resolve sozinho" já estabelecido na Fase 1). Resetado junto com
+`modulosPermitidos` nos dois pontos onde este já era limpo (usuário inativado, logout).
+
+**Multifazendas e Multiproprietário reaproveitam o mesmo mecanismo genérico** —
+`lib/conta-limites.ts` exporta `excedeuLimiteConta(supabase, tipoLimite, contagemAtual)`: busca a
+linha de `conta_limites` pro tipo (nenhuma linha = `false`, nunca bloqueia) e compara
+`contagemAtual >= valor`. Dois pontos de checagem:
+- **Fazenda** (`components/fazendas/CadastrarFazendaModal.tsx`, `handleSubmit`): só ao **criar**
+  fazenda nova (nunca ao editar) — conta as fazendas existentes (`count` de `fazendas`) e bloqueia
+  com `alert()` antes do insert se o limite `'fazendas'` já foi atingido.
+- **Proprietário**: dois pontos criam pessoa com papel PROPRIETARIO — o "+ Novo" inline dentro do
+  cadastro de fazenda (`handleCriarProprietario`, sempre atribui PROPRIETARIO) e o checkbox de papéis
+  em `components/pessoas/CadastrarPessoaModal.tsx` (`handleSubmit`). Neste último, a checagem só roda
+  quando PROPRIETARIO está sendo **adicionado agora** — `papeis.includes('PROPRIETARIO') &&
+  !papeisOriginais.includes('PROPRIETARIO')` (novo estado `papeisOriginais`, capturado ao carregar a
+  pessoa pra editar) — editar uma pessoa que já tinha esse papel não é barrado de novo pelo mesmo
+  limite. Escolha deliberada de reaproveitar o mesmo mecanismo do limite de fazenda em vez de um gate
+  de tela novo: o seletor de proprietário em Movimentações já só aparece com 2+ proprietários
+  cadastrados (`proprietarios.length > 1`, ver "Proprietário do lote de gado vira lista global"
+  acima) — travar o limite em 1 já desativa a funcionalidade inteira sem precisar de nenhuma UI nova.
+
+Verificado no navegador: Painel e todos os 10 links da Sidebar carregando normalmente pro usuário
+atual (confirma que o seed de `conta_modulos` da "Conta Principal" preservou o acesso de sempre, sem
+regressão); criação de uma fazenda de teste completa (com proprietário existente) através do
+formulário real, confirmando que o novo `excedeuLimiteConta` executa sem erro e não bloqueia
+indevidamente quando não há linha em `conta_limites` (caminho "ilimitado"); exclusão da fazenda de
+teste ao final, sem sobra de dado. O caminho de **bloqueio de fato** (conta que já atingiu o limite)
+não foi exercido ao vivo nesta verificação — exigiria inserir uma linha temporária em `conta_limites`
+via acesso direto ao banco; a lógica em si é uma comparação numérica simples (`contagemAtual >=
+valor`), já coberta pelo type-check.
+
+`orion_agro_schema.sql` sincronizado: `conta_modulos`/`conta_limites` inseridas logo depois de
+`usuario_modulos` (mesma vizinhança temática — módulo/permissão), com o mesmo seed de
+`conta_modulos` pra "Conta Principal" replicado do arquivo de migração.

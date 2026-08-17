@@ -290,6 +290,57 @@ create policy usuario_modulos_por_conta on usuario_modulos for all
 comment on table usuario_modulos is
   'Um módulo liberado por linha, por usuário — sem perfis/papéis nomeados (decisão em memória permission_model_design). Dono não precisa de linhas aqui: bypassa a checagem inteira.';
 
+-- ---------------------------------------------------------------------
+-- Módulos e limites por conta (migração 047, Fase 2 do multi-tenant) —
+-- conta_modulos é a fonte da verdade de quais módulos uma conta
+-- contratou (vendidos avulsos, não por plano fixo — confirmado com o
+-- usuário). conta_limites é genérica pra limites numéricos que não são
+-- "tela que aparece/some" (Multifazendas, Multiproprietário, e outros
+-- limites futuros sem precisar de migração de schema nova). Permissão
+-- final de módulo é checada só no frontend (AuthContext.podeAcessar):
+-- conta_modulos ∩ usuario_modulos — mesmo o dono da conta não vê um
+-- módulo que a própria conta não contratou. Ausência de linha em
+-- conta_limites pra um tipo_limite = sem limite (ilimitado).
+-- ---------------------------------------------------------------------
+create table conta_modulos (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  modulo     text not null,
+  ativo      boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint uq_conta_modulo unique (conta_id, modulo)
+);
+alter table conta_modulos enable row level security;
+create policy conta_modulos_por_conta on conta_modulos for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+create table conta_limites (
+  id          uuid primary key default gen_random_uuid(),
+  conta_id    uuid not null references contas(id) default fn_conta_atual(),
+  tipo_limite text not null,
+  valor       int not null check (valor >= 0),
+  created_at  timestamptz not null default now(),
+  constraint uq_conta_limite unique (conta_id, tipo_limite)
+);
+alter table conta_limites enable row level security;
+create policy conta_limites_por_conta on conta_limites for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+-- seed: "Conta Principal" ganha todos os módulos do catálogo atual
+-- liberados (lib/modulos.ts) — grandfather clause só pra esta conta
+-- específica, que já usava o sistema inteiro antes de módulos por
+-- plano existirem. Contas novas nascem sem nenhuma linha aqui —
+-- módulo vendido avulso precisa ser atribuído explicitamente.
+insert into conta_modulos (conta_id, modulo)
+select c.id, m.modulo
+from contas c
+cross join (values
+  ('fazendas'), ('categorias'), ('pessoas'), ('movimentacoes'), ('pesagens'),
+  ('resumo_movimentacao'), ('relatorios_movimentacoes'), ('relatorio_lotacao'),
+  ('mudanca_pasto'), ('rebanho_por_pasto')
+) as m(modulo)
+where c.nome = 'Conta Principal';
+
 -- usada pelo /login (com a chave anônima, antes de qualquer sessão
 -- existir) pra decidir entre mostrar o formulário normal de entrar ou o
 -- formulário único de "criar conta de dono" — só retorna um boolean,

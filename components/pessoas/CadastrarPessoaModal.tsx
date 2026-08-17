@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
+import { excedeuLimiteConta } from '@/lib/conta-limites'
 
 type TipoPessoa = 'FISICA' | 'JURIDICA'
 type Papel = 'CLIENTE' | 'FORNECEDOR' | 'PROPRIETARIO' | 'FUNCIONARIO'
@@ -35,6 +36,10 @@ export default function CadastrarPessoaModal({
 
   const [tipoPessoa, setTipoPessoa] = useState<TipoPessoa>('FISICA')
   const [papeis, setPapeis] = useState<Papel[]>([])
+  // papéis como estavam ao abrir o modal — usado só pra saber se
+  // PROPRIETARIO está sendo adicionado agora (checa limite) ou já
+  // existia antes (edição, não precisa checar de novo)
+  const [papeisOriginais, setPapeisOriginais] = useState<Papel[]>([])
   const [nome, setNome] = useState('')
   const [documento, setDocumento] = useState('')
   const [rg, setRg] = useState('')
@@ -84,7 +89,9 @@ export default function CadastrarPessoaModal({
         setEmail(data.email || '')
         setObservacoes(data.observacoes || '')
       }
-      setPapeis(((papeisData || []) as any[]).map((p) => p.papel as Papel))
+      const papeisCarregados = ((papeisData || []) as any[]).map((p) => p.papel as Papel)
+      setPapeis(papeisCarregados)
+      setPapeisOriginais(papeisCarregados)
       setCarregando(false)
     })
   }, [pessoaId, supabase])
@@ -96,6 +103,20 @@ export default function CadastrarPessoaModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!nome.trim()) return
+
+    // só checa o limite quando PROPRIETARIO está sendo adicionado agora
+    // — editar uma pessoa que já tinha esse papel não deve ser bloqueado
+    // de novo pelo mesmo limite
+    if (papeis.includes('PROPRIETARIO') && !papeisOriginais.includes('PROPRIETARIO')) {
+      const { count } = await supabase
+        .from('pessoa_papeis')
+        .select('id', { count: 'exact', head: true })
+        .eq('papel', 'PROPRIETARIO')
+      if (await excedeuLimiteConta(supabase, 'proprietarios', count || 0)) {
+        alert('Sua conta atingiu o limite de proprietários do plano contratado — contrate o módulo Multiproprietário pra adicionar mais.')
+        return
+      }
+    }
 
     setSalvando(true)
     const payload = {

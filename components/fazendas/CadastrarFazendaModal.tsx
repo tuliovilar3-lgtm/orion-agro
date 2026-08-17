@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
+import { excedeuLimiteConta } from '@/lib/conta-limites'
 
 type SistemaProdutivo = 'CRIA' | 'RECRIA' | 'RECRIA_ENGORDA' | 'CICLO_COMPLETO' | 'AGRICULTURA'
 
@@ -144,6 +145,17 @@ export default function CadastrarFazendaModal({
     e.preventDefault()
     if (!novoProprietarioNome.trim()) return
     setSalvandoProprietario(true)
+
+    const { count } = await supabase
+      .from('pessoa_papeis')
+      .select('id', { count: 'exact', head: true })
+      .eq('papel', 'PROPRIETARIO')
+    if (await excedeuLimiteConta(supabase, 'proprietarios', count || 0)) {
+      alert('Sua conta atingiu o limite de proprietários do plano contratado — contrate o módulo Multiproprietário pra cadastrar mais.')
+      setSalvandoProprietario(false)
+      return
+    }
+
     const { data: nova, error } = await supabase
       .from('pessoas')
       .insert({ nome: novoProprietarioNome.trim() })
@@ -170,6 +182,14 @@ export default function CadastrarFazendaModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!nome.trim() || !proprietarioId || !areaTotalHa || !areaUtilHa) return
+
+    if (!editando) {
+      const { count } = await supabase.from('fazendas').select('id', { count: 'exact', head: true })
+      if (await excedeuLimiteConta(supabase, 'fazendas', count || 0)) {
+        alert('Sua conta atingiu o limite de fazendas do plano contratado — contrate o módulo Multifazendas pra cadastrar mais.')
+        return
+      }
+    }
 
     setSalvando(true)
     const payload = {

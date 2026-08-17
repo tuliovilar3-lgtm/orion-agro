@@ -19,6 +19,7 @@ type AuthValue = {
   user: User | null
   usuarioApp: UsuarioApp | null
   modulosPermitidos: Set<ModuloId>
+  modulosDaConta: Set<ModuloId>
   isDono: boolean
   loading: boolean
   podeAcessar: (modulo: ModuloId) => boolean
@@ -31,15 +32,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [usuarioApp, setUsuarioApp] = useState<UsuarioApp | null>(null)
   const [modulosPermitidos, setModulosPermitidos] = useState<Set<ModuloId>>(new Set())
+  // módulos que a CONTA (empresa cliente) contratou — migração 047. A
+  // permissão final é a interseção desta lista com modulosPermitidos
+  // (o que o usuário específico tem liberado dentro da conta): mesmo o
+  // dono não vê um módulo que a própria conta não contratou.
+  const [modulosDaConta, setModulosDaConta] = useState<Set<ModuloId>>(new Set())
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
   const router = useRouter()
 
   async function carregarDadosApp(u: User) {
-    const [{ data: perfil }, { data: modulos }] = await Promise.all([
+    const [{ data: perfil }, { data: modulos }, { data: modulosConta }] = await Promise.all([
       supabase.from('usuarios_app').select('id, nome, email, dono, ativo, modo').eq('id', u.id).maybeSingle(),
       supabase.from('usuario_modulos').select('modulo').eq('usuario_id', u.id),
+      supabase.from('conta_modulos').select('modulo').eq('ativo', true),
     ])
 
     // usuário inativado continua com login válido no Supabase Auth (só
@@ -53,12 +60,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null)
       setUsuarioApp(null)
       setModulosPermitidos(new Set())
+      setModulosDaConta(new Set())
       window.location.href = '/login?inativo=1'
       return
     }
 
     setUsuarioApp(perfil as UsuarioApp | null)
     setModulosPermitidos(new Set((modulos || []).map((m) => m.modulo as ModuloId)))
+    setModulosDaConta(new Set((modulosConta || []).map((m) => m.modulo as ModuloId)))
   }
 
   useEffect(() => {
@@ -80,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setUsuarioApp(null)
         setModulosPermitidos(new Set())
+        setModulosDaConta(new Set())
       }
     })
 
@@ -90,7 +100,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isDono = usuarioApp?.dono === true
 
   function podeAcessar(modulo: ModuloId) {
-    return isDono || modulosPermitidos.has(modulo)
+    // a conta precisa ter contratado o módulo (migração 047) E o
+    // usuário específico precisa ter acesso dentro da conta — dono
+    // bypassa só a segunda checagem, nunca a primeira
+    return modulosDaConta.has(modulo) && (isDono || modulosPermitidos.has(modulo))
   }
 
   async function signOut() {
@@ -99,7 +112,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, usuarioApp, modulosPermitidos, isDono, loading, podeAcessar, signOut }}>
+    <AuthContext.Provider
+      value={{ user, usuarioApp, modulosPermitidos, modulosDaConta, isDono, loading, podeAcessar, signOut }}
+    >
       {children}
     </AuthContext.Provider>
   )
