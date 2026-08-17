@@ -16,6 +16,7 @@ import FluxoRebanho, { LinhaFluxoRebanho, somarFluxoRebanho } from '@/components
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import { useAuth } from '@/contexts/AuthContext'
 import InicioCampo from '@/components/campo/InicioCampo'
+import SuporteHome from '@/components/suporte/SuporteHome'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
 import { ICONE_SRC } from '@/lib/categoria-icones'
 import {
@@ -61,11 +62,13 @@ function formaSetor(props: any) {
 }
 
 export default function PainelPage() {
-  // Modo Campo mostra uma home simplificada (botões grandes por módulo
-  // liberado) em vez do dashboard completo — checado antes de qualquer
-  // outro hook do dashboard pra não disparar as buscas de dados dele à
-  // toa pra quem não vai ver esse conteúdo
-  const { usuarioApp, loading: loadingAuth } = useAuth()
+  // suporte "em casa" (não entrou em nenhuma conta ainda) vê a home de
+  // Suporte, nunca o dashboard — checado ANTES do Modo Campo e de
+  // qualquer hook do dashboard pra não disparar buscas de dado de conta
+  // nenhuma à toa. Modo Campo mostra uma home simplificada (botões
+  // grandes por módulo liberado) em vez do dashboard completo.
+  const { usuarioApp, emModoSuporte, loading: loadingAuth } = useAuth()
+  if (!loadingAuth && usuarioApp?.suporte && !emModoSuporte) return <SuporteHome />
   if (!loadingAuth && usuarioApp?.modo === 'CAMPO') return <InicioCampo />
 
   return <PainelDashboard />

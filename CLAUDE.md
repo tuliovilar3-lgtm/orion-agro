@@ -2683,6 +2683,86 @@ valor`), já coberta pelo type-check.
 `usuario_modulos` (mesma vizinhança temática — módulo/permissão), com o mesmo seed de
 `conta_modulos` pra "Conta Principal" replicado do arquivo de migração.
 
+## Multi-tenant — Fase 4: home dedicada de Suporte (bloqueio total fora de uma conta)
+
+Reorganização da tela de Suporte (a Fase 4 original, migração 048, já tinha criado o papel
+`usuarios_app.suporte` com uma página `/suporte` simples de "escolher conta e entrar") — motivada
+pelo uso real: o usuário é ao mesmo tempo dono da própria Conta Principal (sua fazenda de verdade) e
+suporte da equipe interna, e percebeu que a tela inicial (`/`, Painel) continuava mostrando os dados
+da Conta Principal por padrão, mesmo sem ter clicado "Entrar" em nenhuma conta pelo seletor de
+Suporte — o `podeAcessar` de então caía no fallback de `isDono`/`modulosDaConta` da própria conta
+mesmo fora do modo suporte. Confirmado explicitamente com o usuário (via pergunta direta): o bloqueio
+deve ser total, **mesmo pra própria Conta Principal** — os dois chapéus (dono de fazenda, suporte da
+equipe) exigem o mesmo gesto explícito de "Entrar" antes de qualquer dado de conta aparecer, sem
+exceção.
+
+**`contexts/AuthContext.tsx`, `podeAcessar`** ganha uma trava checada antes de tudo: se
+`usuarioApp.suporte === true` e `emModoSuporte === false` (não entrou em nenhuma conta ainda),
+retorna `false` pra **qualquer** módulo, sem cair no fallback de `isDono`/`modulosDaConta` — nem
+pra própria conta do usuário. Com `emModoSuporte === true` (já entrou nalguma conta), continua `true`
+pra tudo, como antes.
+
+**Tela inicial vira uma home própria de Suporte, não mais uma rota separada `/suporte`** — usa
+exatamente o mesmo precedente de bifurcação já usado pro Modo Campo (`app/page.tsx`,
+`PainelPage`/`PainelDashboard`, decidido **antes** de qualquer hook de busca de dado do dashboard
+rodar, pra não disparar query nenhuma de conta à toa):
+```
+if (!loadingAuth && usuarioApp?.suporte && !emModoSuporte) return <SuporteHome />
+if (!loadingAuth && usuarioApp?.modo === 'CAMPO') return <InicioCampo />
+return <PainelDashboard />
+```
+`components/suporte/SuporteHome.tsx` (novo) é o conteúdo que antes vivia em `app/suporte/page.tsx`
+(removido, junto da rota `/suporte` — redundante agora que `/` já mostra a mesma coisa) —
+reestruturado com abas (mesmo padrão visual de botão de aba já usado em `app/relatorios/page.tsx`),
+hoje só com uma aba real, **"Contas"**: lista todas as `contas` com botão "Entrar" (`entrarNaConta`,
+já existia) por linha, e um **toggle inline Ativar/Inativar** novo (`contas.ativo`, coluna que já
+existia sem UI nenhuma até agora) — mesmo padrão de toggle inline já usado em módulo/pasto/pessoa/
+fazenda, sem confirmação (ação reversível, sem nenhum efeito de bloqueio de login hoje — é só um
+sinalizador de controle administrativo). O array de abas (`const ABAS = [{ id: 'contas', label:
+'Contas' }]`) já está pronto pra crescer quando indicadores técnicos por conta forem implementados
+(explicitamente fora do escopo desta rodada, conversa futura).
+
+**`components/suporte/SuporteShell.tsx`** (novo) — layout de navegação alternativo pro estado
+suporte-em-casa, escolhido em `components/AppShell.tsx`/`LayoutPorModo` (mesmo padrão de bifurcação
+de 3 ramos: suporte-em-casa → `SuporteShell`, Modo Campo → `ModoCampoShell`, senão → `Sidebar`
+normal, nessa ordem de prioridade). Barra superior simples (mesmo estilo do topo de
+`ModoCampoShell.tsx`: marca + nome do usuário + botão Alterar senha + botão Sair, reaproveitando
+`AlterarSenhaModal`/`ICONS.senha`/`ICONS.sair`) — sem sidebar, sem grupo de módulo nenhum, porque não
+há módulo pra navegar nesse estado. `components/Sidebar.tsx` perdeu o link "Suporte"/grupo "Equipe
+interna" que a Fase 4 original tinha adicionado — redundante agora: suporte-em-casa não vê a Sidebar
+(vê o `SuporteShell`), e suporte-dentro-de-uma-conta já tem o `SuporteBanner` com "Sair" no topo.
+
+**Consistência de gate em `/usuarios`**: o gate dessa página é próprio (`isDono`, não passa por
+`ModuloGate`/`podeAcessar` porque "Usuários" não é um módulo liberável) — sem ajuste, ficaria
+inconsistente com a trava nova (dono/suporte gerenciaria os funcionários da própria Conta Principal
+mesmo suporte-em-casa). `podeGerenciar = isDono && !(usuarioApp?.suporte && !emModoSuporte)`
+substitui as 4 checagens que usavam `isDono` puro, com uma mensagem de "Acesso restrito" própria pra
+esse caso ("Entre em uma conta pela tela de Suporte pra gerenciar os usuários dela"). Mesmo
+princípio em `components/ModuloGate.tsx`: quando `podeAcessar` barra por causa dessa trava
+específica (não por falta de módulo comprado/liberado), a mensagem muda de "Fale com o administrador
+do sistema" (sem sentido pro próprio administrador) pra "Entre em uma conta pela tela de Suporte pra
+acessar este módulo".
+
+**Banner de suporte (`components/SuporteBanner.tsx`) vira sticky** — reportado pelo usuário depois de
+ver o banner "Você está vendo [Conta] como Suporte" rolar junto com o conteúdo da página em vez de
+ficar fixo. O componente ganhou um prop `className`, deixando cada shell decidir o `sticky top-*`
+certo pra sua própria topbar (a barra superior de cada layout tem altura/presença diferente):
+`Sidebar` só tem topbar no mobile (`md:hidden`), então o banner ali usa `sticky top-14 md:top-0`
+(gruda logo abaixo da topbar de 56px no mobile, no topo absoluto no desktop, que não tem topbar
+nenhuma); `ModoCampoShell` tem topbar fixa em **qualquer** tamanho de tela, então o banner ali usa só
+`sticky top-14`, sem variante desktop. Verificado via `getBoundingClientRect` nos dois breakpoints:
+desktop com a página rolada 800px manteve o banner em `top: 0`; mobile (375×812) manteve o banner em
+`top: 56px`, sem sobrepor a topbar da Sidebar (que termina em `bottom: 45px`, ~11px de folga).
+
+Verificado no navegador de ponta a ponta (usuário suporte + dono da Conta Principal): `/` mostra a
+home de Suporte (aba Contas, "Conta Principal" com Entrar/Inativar) sem nenhum dado de fazenda;
+digitar `/fazendas` ou `/usuarios` direto na URL sem ter entrado em conta nenhuma mostra "Acesso
+restrito" com a mensagem nova, inclusive pra Conta Principal; clicar "Entrar" mostra o Painel normal
++ Sidebar completa + banner sticky no topo; "Sair" no banner volta pra home de Suporte sem dado
+nenhum; toggle Ativar/Inativar numa conta real (Conta Principal, revertido ao final — a coluna não
+bloqueia login nem tem nenhum outro efeito hoje, então o teste foi seguro) mudou o badge e o texto do
+botão corretamente e reverteu limpo.
+
 ## Multi-tenant — Fase 4 (migração 048): papel de Suporte
 
 Terceiro passo implementado do roadmap multi-tenant (Fase 3 — RLS — já tinha sido absorvida na Fase

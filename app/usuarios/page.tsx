@@ -25,7 +25,13 @@ function CardSkeleton() {
 }
 
 export default function UsuariosPage() {
-  const { isDono, loading: loadingAuth } = useAuth()
+  const { isDono, usuarioApp, emModoSuporte, loading: loadingAuth } = useAuth()
+  // dono da própria conta pode gerenciar os funcionários dela — exceto
+  // se for suporte "em casa" (não entrou em nenhuma conta ainda): sem
+  // essa checagem extra, ele gerenciaria os funcionários da própria
+  // Conta Principal sem precisar ter "Entrado" nela, inconsistente com
+  // a trava geral de suporte (ver AuthContext.podeAcessar)
+  const podeGerenciar = isDono && !(usuarioApp?.suporte && !emModoSuporte)
   const [usuarios, setUsuarios] = useState<UsuarioLinha[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -60,10 +66,10 @@ export default function UsuariosPage() {
   }
 
   useEffect(() => {
-    if (!loadingAuth && isDono) carregar()
+    if (!loadingAuth && podeGerenciar) carregar()
     else if (!loadingAuth) setLoading(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadingAuth, isDono])
+  }, [loadingAuth, podeGerenciar])
 
   async function handleToggleAtivo(u: UsuarioLinha) {
     setSalvandoId(u.id)
@@ -129,7 +135,7 @@ export default function UsuariosPage() {
     carregar()
   }
 
-  if (loadingAuth || (loading && isDono)) {
+  if (loadingAuth || (loading && podeGerenciar)) {
     return (
       <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
         <div className="space-y-3">
@@ -140,13 +146,15 @@ export default function UsuariosPage() {
     )
   }
 
-  if (!isDono) {
+  if (!podeGerenciar) {
     return (
       <div className="mx-auto max-w-2xl px-6 py-12">
         <div className="rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
           <p className="text-base font-semibold text-text-primary">Acesso restrito</p>
           <p className="mx-auto mt-1.5 max-w-sm text-sm text-text-secondary">
-            Só o administrador do sistema pode gerenciar usuários.
+            {usuarioApp?.suporte && !emModoSuporte
+              ? 'Entre em uma conta pela tela de Suporte pra gerenciar os usuários dela.'
+              : 'Só o administrador do sistema pode gerenciar usuários.'}
           </p>
         </div>
       </div>

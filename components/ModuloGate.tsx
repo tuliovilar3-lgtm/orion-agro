@@ -11,7 +11,7 @@ import type { ModuloId } from '@/lib/modulos'
 // reativado é o passo que fecha essa lacuna de verdade (ver memória
 // deployment_roadmap).
 export default function ModuloGate({ modulo, children }: { modulo: ModuloId; children: React.ReactNode }) {
-  const { loading, podeAcessar } = useAuth()
+  const { loading, podeAcessar, usuarioApp, emModoSuporte } = useAuth()
 
   if (loading) {
     return (
@@ -22,12 +22,19 @@ export default function ModuloGate({ modulo, children }: { modulo: ModuloId; chi
   }
 
   if (!podeAcessar(modulo)) {
+    // suporte "em casa" (não entrou em nenhuma conta ainda) barrado por
+    // essa trava específica, não por falta de módulo comprado/liberado
+    // — "fale com o administrador" não faz sentido pro próprio
+    // administrador, então a mensagem muda pra apontar o caminho certo
+    const suporteEmCasa = usuarioApp?.suporte && !emModoSuporte
     return (
       <div className="mx-auto max-w-2xl px-6 py-12">
         <div className="rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
           <p className="text-base font-semibold text-text-primary">Acesso restrito</p>
           <p className="mx-auto mt-1.5 max-w-sm text-sm text-text-secondary">
-            Você não tem permissão para acessar este módulo. Fale com o administrador do sistema se precisar dele.
+            {suporteEmCasa
+              ? 'Entre em uma conta pela tela de Suporte pra acessar este módulo.'
+              : 'Você não tem permissão para acessar este módulo. Fale com o administrador do sistema se precisar dele.'}
           </p>
         </div>
       </div>

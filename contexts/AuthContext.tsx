@@ -119,6 +119,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const emModoSuporte = usuarioApp?.suporte === true && contaSuporteAtiva !== null
 
   function podeAcessar(modulo: ModuloId) {
+    // suporte "em casa" (não entrou em nenhuma conta ainda) não enxerga
+    // NENHUM módulo de conta nenhuma — nem a própria (o usuário pode
+    // ser dono da própria Conta Principal e suporte ao mesmo tempo; os
+    // dois chapéus exigem o mesmo gesto explícito de "Entrar", sem
+    // exceção pra conta própria). Sem esse bloqueio, o fallback de
+    // isDono/modulosDaConta abaixo vazaria o dado da própria conta.
+    if (usuarioApp?.suporte && !emModoSuporte) return false
     // suporte navegando numa conta de cliente enxerga tudo, sem passar
     // pela checagem normal de conta_modulos/usuario_modulos (que é
     // sobre o que aquele CLIENTE comprou/liberou, não sobre a equipe

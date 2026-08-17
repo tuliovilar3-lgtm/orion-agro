@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import ModoCampoShell from './campo/ModoCampoShell'
 import SuporteBanner from './SuporteBanner'
+import SuporteShell from './suporte/SuporteShell'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { FiltroGlobalProvider } from '@/contexts/FiltroGlobalContext'
 
@@ -23,20 +24,22 @@ function LayoutPorModo({
   collapsed: boolean
   onToggleCollapsed: () => void
 }) {
-  const { usuarioApp } = useAuth()
+  const { usuarioApp, emModoSuporte } = useAuth()
 
-  // banner de suporte entra como a primeira coisa dentro de <main> nos
-  // dois layouts — em vez de um elemento fixed próprio, que brigaria
-  // com o posicionamento fixed já calculado da Sidebar/topbar
-  const conteudo = (
-    <>
-      <SuporteBanner />
-      {children}
-    </>
-  )
+  if (usuarioApp?.suporte && !emModoSuporte) {
+    return <SuporteShell>{children}</SuporteShell>
+  }
 
   if (usuarioApp?.modo === 'CAMPO') {
-    return <ModoCampoShell>{conteudo}</ModoCampoShell>
+    // ModoCampoShell tem barra superior fixa em qualquer tamanho de tela
+    // (diferente da Sidebar, que só tem topbar no mobile) — o banner
+    // sempre gruda em top-14 (56px, altura da barra), nunca top-0
+    return (
+      <ModoCampoShell>
+        <SuporteBanner className="sticky top-14" />
+        {children}
+      </ModoCampoShell>
+    )
   }
 
   return (
@@ -47,7 +50,12 @@ function LayoutPorModo({
           collapsed ? 'md:pl-16' : 'md:pl-60'
         }`}
       >
-        <main className="flex-1">{conteudo}</main>
+        <main className="flex-1">
+          {/* mobile tem a topbar fixa da Sidebar (top-14 gruda embaixo
+          dela); desktop não tem topbar nenhuma ali, então top-0 */}
+          <SuporteBanner className="sticky top-14 md:top-0" />
+          {children}
+        </main>
       </div>
     </>
   )
