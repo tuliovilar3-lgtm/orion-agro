@@ -124,7 +124,11 @@ export default function RelatorioMovimentacaoPage() {
         p_fazenda_ids: fazendaIds,
         p_data_inicio: dataInicio,
         p_data_fim: dataFim,
-        p_proprietario_ids: proprietarioIds.length > 0 ? proprietarioIds : null,
+        // vazio OU todos marcados = sem filtro (nunca esconder lançamentos
+        // sem proprietário atribuído, a maioria); só filtra de verdade
+        // quando é uma seleção parcial deliberada
+        p_proprietario_ids:
+          proprietarioIds.length > 0 && proprietarioIds.length < proprietarios.length ? proprietarioIds : null,
       })
       .then(({ data, error }) => {
         if (error) {

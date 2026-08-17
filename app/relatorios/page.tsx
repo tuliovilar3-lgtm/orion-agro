@@ -127,7 +127,10 @@ export default function RelatoriosPage() {
     if (categoriaId) {
       query = query.or(`categoria_id.eq.${categoriaId},categoria_destino_id.eq.${categoriaId}`)
     }
-    if (proprietarioIds.length > 0) {
+    // vazio OU todos marcados = sem filtro (nunca esconder lançamentos sem
+    // proprietário atribuído, a maioria); só filtra de verdade quando é
+    // uma seleção parcial deliberada
+    if (proprietarioIds.length > 0 && proprietarioIds.length < proprietarios.length) {
       query = query.in('proprietario_id', proprietarioIds)
     }
 
