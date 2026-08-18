@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import type { ModuloId } from '@/lib/modulos'
+import type { DominioId } from '@/lib/modulos'
 import type { TipoLimiteConta } from '@/lib/conta-limites'
+import { RECURSOS, type RecursoId } from '@/lib/conta-recursos'
 
 // checa sessão + suporte usando o cliente de servidor (lê o cookie de
 // sessão) — mesmo padrão de exigirDono() em app/api/usuarios/route.ts,
@@ -29,15 +30,17 @@ export async function POST(request: Request) {
   if (checagem.erro) return checagem.erro
 
   const body = await request.json()
-  const { nomeConta, donoNome, donoEmail, donoSenha, modulos, limiteFazendas, limiteProprietarios } = body as {
-    nomeConta?: string
-    donoNome?: string
-    donoEmail?: string
-    donoSenha?: string
-    modulos?: ModuloId[]
-    limiteFazendas?: number
-    limiteProprietarios?: number
-  }
+  const { nomeConta, donoNome, donoEmail, donoSenha, dominios, recursos, limiteFazendas, limiteProprietarios } =
+    body as {
+      nomeConta?: string
+      donoNome?: string
+      donoEmail?: string
+      donoSenha?: string
+      dominios?: DominioId[]
+      recursos?: RecursoId[]
+      limiteFazendas?: number
+      limiteProprietarios?: number
+    }
   if (!nomeConta || !donoNome || !donoEmail || !donoSenha) {
     return NextResponse.json(
       { error: 'Nome da conta, nome, e-mail e senha do administrador são obrigatórios.' },
@@ -74,11 +77,35 @@ export async function POST(request: Request) {
   }
   const contaId = contaCriada.id as string
 
-  if (modulos && modulos.length > 0) {
-    const { error: erroModulos } = await admin
+  if (dominios && dominios.length > 0) {
+    const { error: erroDominios } = await admin
       .from('conta_modulos')
-      .insert(modulos.map((modulo) => ({ conta_id: contaId, modulo, ativo: true })))
-    if (erroModulos) return NextResponse.json({ error: erroModulos.message }, { status: 500 })
+      .insert(dominios.map((dominio) => ({ conta_id: contaId, dominio, ativo: true })))
+    if (erroDominios) return NextResponse.json({ error: erroDominios.message }, { status: 500 })
+  }
+
+  if (recursos && recursos.length > 0) {
+    const { error: erroRecursos } = await admin.from('conta_recursos').insert(
+      recursos.map((recurso) => ({
+        conta_id: contaId,
+        dominio: RECURSOS.find((r) => r.id === recurso)!.dominio,
+        recurso,
+        ativo: true,
+      }))
+    )
+    if (erroRecursos) return NextResponse.json({ error: erroRecursos.message }, { status: 500 })
+
+    // 'controle_pasto' alimenta configuracoes.controla_pasto — todo o
+    // resto do app (Movimentações, Pesagens, Gestão de Áreas, Relatório
+    // de Lotação, Painel...) já lê essa coluna, então nenhuma tela
+    // precisa saber de conta_recursos pra respeitar esse recurso
+    if (recursos.includes('controle_pasto')) {
+      const { error: erroConfig } = await admin
+        .from('configuracoes')
+        .update({ controla_pasto: true })
+        .eq('conta_id', contaId)
+      if (erroConfig) return NextResponse.json({ error: erroConfig.message }, { status: 500 })
+    }
   }
 
   const limites: { conta_id: string; tipo_limite: TipoLimiteConta; valor: number }[] = []

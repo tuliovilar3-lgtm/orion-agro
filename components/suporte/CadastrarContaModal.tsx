@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
-import { MODULOS, type ModuloId } from '@/lib/modulos'
+import { DOMINIOS, type DominioId } from '@/lib/modulos'
+import { RECURSOS, type RecursoId } from '@/lib/conta-recursos'
 
 // onboarding de conta de cliente nova (migração 049 + app/api/contas)
 // — mesmo molde visual de components/usuarios/CadastrarUsuarioModal.tsx
@@ -16,15 +17,33 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
   const [donoNome, setDonoNome] = useState('')
   const [donoEmail, setDonoEmail] = useState('')
   const [donoSenha, setDonoSenha] = useState('')
-  const [modulosSelecionados, setModulosSelecionados] = useState<Set<ModuloId>>(new Set())
+  const [dominiosSelecionados, setDominiosSelecionados] = useState<Set<DominioId>>(new Set())
+  const [recursosSelecionados, setRecursosSelecionados] = useState<Set<RecursoId>>(new Set())
   const [limitesAbertos, setLimitesAbertos] = useState(false)
   const [limiteFazendas, setLimiteFazendas] = useState('')
   const [limiteProprietarios, setLimiteProprietarios] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
-  function alternarModulo(id: ModuloId) {
-    setModulosSelecionados((prev) => {
+  const recursosDisponiveis = RECURSOS.filter((r) => dominiosSelecionados.has(r.dominio))
+
+  function alternarDominio(id: DominioId) {
+    const desmarcando = dominiosSelecionados.has(id)
+    setDominiosSelecionados((prev) => {
+      const novo = new Set(prev)
+      if (desmarcando) novo.delete(id)
+      else novo.add(id)
+      return novo
+    })
+    // desmarcar um domínio poda os recursos que dependiam dele — evita
+    // mandar um recurso de um domínio que não foi contratado
+    if (desmarcando) {
+      setRecursosSelecionados((prev) => new Set([...prev].filter((r) => RECURSOS.find((rc) => rc.id === r)?.dominio !== id)))
+    }
+  }
+
+  function alternarRecurso(id: RecursoId) {
+    setRecursosSelecionados((prev) => {
       const novo = new Set(prev)
       if (novo.has(id)) novo.delete(id)
       else novo.add(id)
@@ -44,7 +63,8 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
         donoNome,
         donoEmail,
         donoSenha,
-        modulos: Array.from(modulosSelecionados),
+        dominios: Array.from(dominiosSelecionados),
+        recursos: Array.from(recursosSelecionados),
         limiteFazendas: limiteFazendas ? Number(limiteFazendas) : undefined,
         limiteProprietarios: limiteProprietarios ? Number(limiteProprietarios) : undefined,
       }),
@@ -130,14 +150,14 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
           <div className="border-t border-border pt-4">
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">Módulos contratados</label>
             <div className="grid grid-cols-1 gap-1.5 rounded-control border border-border p-3 sm:grid-cols-2">
-              {MODULOS.map((m) => (
-                <label key={m.id} className="flex items-center gap-2 text-sm text-text-primary">
+              {DOMINIOS.map((d) => (
+                <label key={d.id} className="flex items-center gap-2 text-sm text-text-primary">
                   <input
                     type="checkbox"
-                    checked={modulosSelecionados.has(m.id)}
-                    onChange={() => alternarModulo(m.id)}
+                    checked={dominiosSelecionados.has(d.id)}
+                    onChange={() => alternarDominio(d.id)}
                   />
-                  {m.label}
+                  {d.label}
                 </label>
               ))}
             </div>
@@ -145,6 +165,24 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
               Sem nenhum módulo marcado, o administrador consegue entrar mas só vê o Painel.
             </p>
           </div>
+
+          {recursosDisponiveis.length > 0 && (
+            <div className="border-t border-border pt-4">
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">Recursos adicionais</label>
+              <div className="grid grid-cols-1 gap-1.5 rounded-control border border-border p-3 sm:grid-cols-2">
+                {recursosDisponiveis.map((r) => (
+                  <label key={r.id} className="flex items-center gap-2 text-sm text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={recursosSelecionados.has(r.id)}
+                      onChange={() => alternarRecurso(r.id)}
+                    />
+                    {r.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="border-t border-border pt-4">
             <button

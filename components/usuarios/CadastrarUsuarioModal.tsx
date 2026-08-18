@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { MODULOS, MODULOS_CONSULTA, type ModuloId } from '@/lib/modulos'
+import { useAuth } from '@/contexts/AuthContext'
 
 export default function CadastrarUsuarioModal({
   onClose,
@@ -19,8 +20,13 @@ export default function CadastrarUsuarioModal({
   const [modulosSelecionados, setModulosSelecionados] = useState<Set<ModuloId>>(new Set())
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+  const { dominiosDaConta } = useAuth()
 
-  const modulosDisponiveis = modo === 'CONSULTA' ? MODULOS.filter((m) => m.somenteLeitura) : MODULOS
+  // só oferece telas de domínio que a conta realmente contratou — sem
+  // isso o dono marcaria uma tela que não faz nada em runtime (já
+  // bloqueada por podeAcessar), só clareza de UI, não correção de bug
+  const modulosDoDominio = MODULOS.filter((m) => dominiosDaConta.has(m.dominio))
+  const modulosDisponiveis = modo === 'CONSULTA' ? modulosDoDominio.filter((m) => m.somenteLeitura) : modulosDoDominio
 
   function handleMudarModo(novoModo: 'GESTAO' | 'CAMPO' | 'CONSULTA') {
     setModo(novoModo)

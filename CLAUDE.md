@@ -2981,3 +2981,73 @@ respeitar a ordem de FK (fazendas antes de pessoas, por causa de `proprietario_i
 temporariamente os gatilhos de `categorias_animal`/`subtipos_uso_area` (que bloqueiam excluir linha
 `sistema = true`, exatamente o que o seed automático cria) e limpar `suporte_conta_ativa`/
 `suporte_auditoria` (referenciam `contas`) antes do delete final.
+
+## Módulos de domínio + recursos (migração 050)
+
+Reestruturação do catálogo de módulos vendidos por conta, discutida e planejada com o usuário logo
+depois do onboarding acima: `conta_modulos` (migração 047) era granular por **tela** (Fazendas,
+Movimentações, Pesagens... — 8-10 entradas soltas em `lib/modulos.ts`), mas na prática todas as
+telas de hoje são sub-partes de um único domínio implícito "Pecuária". Confirmado com o usuário: o
+catálogo real de venda é em dois eixos — **módulo de domínio** (Pecuária, Agricultura, Máquinas,
+Clima, Financeiro — só Pecuária tem telas reais hoje, os demais ficam reservados) e **recurso**
+dentro de um domínio já contratado (flags independentes, combináveis livremente, por cima do básico
+— ex.: dentro de Pecuária, "controle por pasto" e um futuro "controle individual" podem coexistir,
+cada um vendido à parte). `conta_limites` (Multifazendas/Multiproprietário) continua como terceiro
+eixo, transversal, sem mudança.
+
+**`conta_modulos.modulo` foi renomeada pra `conta_modulos.dominio`** — reinterpreta a coluna
+existente em vez de criar tabela nova (só muda a granularidade do valor: id de tela → id de domínio).
+Migração 050 fez isso direto (sem coluna de transição) porque só existia uma conta real em produção
+("Conta Principal") — mesmo raciocínio de risco já aceito nas migrações 046/049: guarda os `conta_id`
+que tinham qualquer linha, apaga tudo, renomeia a coluna, reinsere uma linha `dominio = 'pecuaria'`
+por `conta_id` guardado (qualquer tela liberada antes implica que a conta "tem" o domínio agora).
+
+**`conta_recursos`** (conta_id, dominio, recurso, ativo) é a tabela nova, mesmo molde de
+`conta_limites`/`conta_modulos` (RLS igual). `lib/conta-recursos.ts` só guarda o catálogo
+(`RecursoId = 'controle_pasto'`, `RECURSOS: {id, dominio, label}[]`) — **sem nenhum helper de leitura
+em runtime**, porque nenhuma tela lê `conta_recursos` diretamente: o único recurso hoje
+(`controle_pasto`) só alimenta `configuracoes.controla_pasto` no momento em que é concedido (ver
+abaixo), e é essa coluna que todo o resto do app já lia antes desta migração (Movimentações,
+Pesagens, Gestão de Áreas, Relatório de Lotação, Painel...) — **nenhuma dessas telas precisou mudar**,
+só a origem de quem liga a flag mudou.
+
+**"Controle por pasto" vira recurso pago** — confirmado com o usuário: antes era um toggle grátis
+self-service em `app/fazendas/page.tsx` (`handleToggleControlaPasto`, removido); agora só o Suporte
+libera, via `app/api/contas/route.ts` (onboarding) marcando `conta_recursos` **e** fazendo
+`configuracoes.controla_pasto = true` na mesma chamada. O toggle em Fazendas virou um badge
+somente-leitura ("Ativo" em `success`/"Não contratado" em cinza + texto explicativo) — `controlaPasto`
+(estado, já lido de `configuracoes`) continua controlando exatamente o que já controlava antes (aba
+"Módulos e Pastos" só aparece se ativo). **`controla_subtipo_area` não muda** — fica de fora desta
+rodada, continua toggle grátis self-service (só "controle por pasto" foi confirmado como pago). A
+migração dá o recurso de graça pra toda conta que já tinha `controla_pasto = true` (backfill em
+`conta_recursos`), sem perder a funcionalidade que já usava.
+
+**`contexts/AuthContext.tsx`**: `modulosDaConta` virou `dominiosDaConta: Set<DominioId>` (busca
+`conta_modulos.select('dominio')`). `podeAcessar(modulo)` agora resolve o domínio da tela
+(`MODULOS.find(m => m.id === modulo)?.dominio`) e checa `dominiosDaConta.has(dominio)` no lugar do
+antigo `modulosDaConta.has(modulo)` — `usuario_modulos` (por tela, por usuário, dentro da conta) não
+muda em nada.
+
+**`components/suporte/CadastrarContaModal.tsx`**: "Módulos contratados" virou checkbox de
+**domínio** (`DOMINIOS`, ~5 opções) em vez de tela (~10 opções antes) — mais simples, já que o dono
+de uma conta nova enxerga automaticamente todas as telas do domínio contratado (`isDono` bypassa
+`usuario_modulos`, não precisa marcar telas individuais pra ele mesmo). Nova seção "Recursos
+adicionais", só aparece quando o domínio dono do recurso está marcado (`RECURSOS.filter(r =>
+dominiosSelecionados.has(r.dominio))`) — hoje só "Controle por pasto" some/aparece junto com
+"Pecuária". Desmarcar um domínio poda os recursos que dependiam dele.
+
+**Polimento aplicado também em `components/usuarios/CadastrarUsuarioModal.tsx` e
+`app/usuarios/page.tsx`** (accordion de módulos por funcionário): os checkboxes de tela agora só
+listam `MODULOS` cujo domínio está em `dominiosDaConta` — evita o dono marcar uma tela de um domínio
+que a própria conta não comprou (já era bloqueado em runtime por `podeAcessar`, isso é só clareza de
+UI).
+
+Verificado no navegador de ponta a ponta: Conta Principal sem regressão (Sidebar completa, badge
+"Controle por pasto: Ativo" preservado depois da migração — confirma que o backfill de
+`conta_recursos` funcionou); modal de onboarding mostrando os 5 domínios em vez de 10 telas, com
+"Recursos adicionais → Controle por pasto" aparecendo/sumindo junto com o checkbox de Pecuária;
+conta de teste criada com domínio Pecuária + recurso Controle por pasto — login como o administrador
+mostrou a Sidebar completa de Pecuária (confirma `dominiosDaConta`/`podeAcessar` via domínio) e
+`/fazendas` já mostrou "Controle por pasto: Ativo" sem nenhum toque manual (confirma que o recurso
+alimentou `configuracoes.controla_pasto` direto no onboarding). Dados de teste removidos ao final via
+SQL direto (mesmo processo já usado na rodada anterior, adaptado pra `conta_recursos`/`dominio`).

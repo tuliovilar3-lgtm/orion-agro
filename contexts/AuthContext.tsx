@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import type { ModuloId } from '@/lib/modulos'
+import { MODULOS, type ModuloId, type DominioId } from '@/lib/modulos'
 
 type UsuarioApp = {
   id: string
@@ -22,7 +22,7 @@ type AuthValue = {
   user: User | null
   usuarioApp: UsuarioApp | null
   modulosPermitidos: Set<ModuloId>
-  modulosDaConta: Set<ModuloId>
+  dominiosDaConta: Set<DominioId>
   isDono: boolean
   // conta que um usuário de suporte está navegando agora (migração 048)
   // — null enquanto ele não "entrou" em nenhuma conta de cliente
@@ -41,11 +41,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [usuarioApp, setUsuarioApp] = useState<UsuarioApp | null>(null)
   const [modulosPermitidos, setModulosPermitidos] = useState<Set<ModuloId>>(new Set())
-  // módulos que a CONTA (empresa cliente) contratou — migração 047. A
-  // permissão final é a interseção desta lista com modulosPermitidos
-  // (o que o usuário específico tem liberado dentro da conta): mesmo o
-  // dono não vê um módulo que a própria conta não contratou.
-  const [modulosDaConta, setModulosDaConta] = useState<Set<ModuloId>>(new Set())
+  // domínios que a CONTA (empresa cliente) contratou — migração 047,
+  // reinterpretada como domínio (Pecuária/Agricultura/...) na migração
+  // 050 (antes era por tela). A permissão final de uma tela é: o
+  // domínio dela está contratado E (dono OU o usuário específico tem
+  // essa tela liberada em modulosPermitidos) — mesmo o dono não vê
+  // tela de um domínio que a própria conta não contratou.
+  const [dominiosDaConta, setDominiosDaConta] = useState<Set<DominioId>>(new Set())
   const [contaSuporteAtiva, setContaSuporteAtiva] = useState<ContaSuporteAtiva>(null)
   const [loading, setLoading] = useState(true)
 
@@ -56,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [{ data: perfil }, { data: modulos }, { data: modulosConta }, { data: suporteAtivo }] = await Promise.all([
       supabase.from('usuarios_app').select('id, nome, email, dono, ativo, modo, suporte').eq('id', u.id).maybeSingle(),
       supabase.from('usuario_modulos').select('modulo').eq('usuario_id', u.id),
-      supabase.from('conta_modulos').select('modulo').eq('ativo', true),
+      supabase.from('conta_modulos').select('dominio').eq('ativo', true),
       supabase.from('suporte_conta_ativa').select('conta:contas(id, nome)').eq('usuario_id', u.id).maybeSingle(),
     ])
 
@@ -71,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null)
       setUsuarioApp(null)
       setModulosPermitidos(new Set())
-      setModulosDaConta(new Set())
+      setDominiosDaConta(new Set())
       setContaSuporteAtiva(null)
       window.location.href = '/login?inativo=1'
       return
@@ -79,7 +81,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setUsuarioApp(perfil as UsuarioApp | null)
     setModulosPermitidos(new Set((modulos || []).map((m) => m.modulo as ModuloId)))
-    setModulosDaConta(new Set((modulosConta || []).map((m) => m.modulo as ModuloId)))
+    setDominiosDaConta(new Set((modulosConta || []).map((m) => m.dominio as DominioId)))
     setContaSuporteAtiva(((suporteAtivo as any)?.conta as ContaSuporteAtiva) || null)
   }
 
@@ -102,7 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         setUsuarioApp(null)
         setModulosPermitidos(new Set())
-        setModulosDaConta(new Set())
+        setDominiosDaConta(new Set())
         setContaSuporteAtiva(null)
       }
     })
@@ -124,17 +126,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // ser dono da própria Conta Principal e suporte ao mesmo tempo; os
     // dois chapéus exigem o mesmo gesto explícito de "Entrar", sem
     // exceção pra conta própria). Sem esse bloqueio, o fallback de
-    // isDono/modulosDaConta abaixo vazaria o dado da própria conta.
+    // isDono/dominiosDaConta abaixo vazaria o dado da própria conta.
     if (usuarioApp?.suporte && !emModoSuporte) return false
     // suporte navegando numa conta de cliente enxerga tudo, sem passar
     // pela checagem normal de conta_modulos/usuario_modulos (que é
     // sobre o que aquele CLIENTE comprou/liberou, não sobre a equipe
     // interna do fornecedor)
     if (emModoSuporte) return true
-    // a conta precisa ter contratado o módulo (migração 047) E o
-    // usuário específico precisa ter acesso dentro da conta — dono
+    // o DOMÍNIO da tela precisa estar contratado pela conta (migração
+    // 050 — antes era a tela em si, migração 047) E o usuário
+    // específico precisa ter acesso a essa tela dentro da conta — dono
     // bypassa só a segunda checagem, nunca a primeira
-    return modulosDaConta.has(modulo) && (isDono || modulosPermitidos.has(modulo))
+    const dominio = MODULOS.find((m) => m.id === modulo)?.dominio
+    return dominio !== undefined && dominiosDaConta.has(dominio) && (isDono || modulosPermitidos.has(modulo))
   }
 
   // as duas ações abaixo forçam um reload completo (não router.push) de
@@ -165,7 +169,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         usuarioApp,
         modulosPermitidos,
-        modulosDaConta,
+        dominiosDaConta,
         isDono,
         contaSuporteAtiva,
         emModoSuporte,

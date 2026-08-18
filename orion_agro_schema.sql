@@ -458,27 +458,48 @@ comment on table usuario_modulos is
   'Um módulo liberado por linha, por usuário — sem perfis/papéis nomeados (decisão em memória permission_model_design). Dono não precisa de linhas aqui: bypassa a checagem inteira.';
 
 -- ---------------------------------------------------------------------
--- Módulos e limites por conta (migração 047, Fase 2 do multi-tenant) —
--- conta_modulos é a fonte da verdade de quais módulos uma conta
--- contratou (vendidos avulsos, não por plano fixo — confirmado com o
--- usuário). conta_limites é genérica pra limites numéricos que não são
--- "tela que aparece/some" (Multifazendas, Multiproprietário, e outros
--- limites futuros sem precisar de migração de schema nova). Permissão
--- final de módulo é checada só no frontend (AuthContext.podeAcessar):
--- conta_modulos ∩ usuario_modulos — mesmo o dono da conta não vê um
--- módulo que a própria conta não contratou. Ausência de linha em
--- conta_limites pra um tipo_limite = sem limite (ilimitado).
+-- Módulos de domínio, recursos e limites por conta (migração 047, Fase
+-- 2 do multi-tenant; conta_modulos reinterpretada de tela pra domínio,
+-- e conta_recursos criada, na migração 050) — conta_modulos é a fonte
+-- da verdade de quais DOMÍNIOS (Pecuária, Agricultura, Máquinas,
+-- Clima, Financeiro — lib/modulos.ts) uma conta contratou (vendidos
+-- avulsos, não por plano fixo). conta_recursos é o segundo eixo: flags
+-- independentes, combináveis livremente, contratadas por dentro de um
+-- domínio já ativo (ex.: "controle por pasto" dentro de Pecuária —
+-- lib/conta-recursos.ts). conta_limites é genérica pra limites
+-- numéricos que não são "tela que aparece/some" (Multifazendas,
+-- Multiproprietário, e outros limites futuros sem precisar de
+-- migração de schema nova). Permissão final de uma TELA é checada só
+-- no frontend (AuthContext.podeAcessar): o domínio dela precisa estar
+-- em conta_modulos, E (dono OU a tela específica em usuario_modulos)
+-- — mesmo o dono da conta não vê tela de um domínio que a própria
+-- conta não contratou. Ausência de linha em conta_limites pra um
+-- tipo_limite = sem limite (ilimitado); ausência de linha em
+-- conta_recursos = recurso não contratado.
 -- ---------------------------------------------------------------------
 create table conta_modulos (
   id         uuid primary key default gen_random_uuid(),
   conta_id   uuid not null references contas(id) default fn_conta_atual(),
-  modulo     text not null,
+  dominio    text not null,
   ativo      boolean not null default true,
   created_at timestamptz not null default now(),
-  constraint uq_conta_modulo unique (conta_id, modulo)
+  constraint uq_conta_modulo unique (conta_id, dominio)
 );
 alter table conta_modulos enable row level security;
 create policy conta_modulos_por_conta on conta_modulos for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+create table conta_recursos (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  dominio    text not null,
+  recurso    text not null,
+  ativo      boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint uq_conta_recurso unique (conta_id, dominio, recurso)
+);
+alter table conta_recursos enable row level security;
+create policy conta_recursos_por_conta on conta_recursos for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 create table conta_limites (
@@ -493,20 +514,13 @@ alter table conta_limites enable row level security;
 create policy conta_limites_por_conta on conta_limites for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
--- seed: "Conta Principal" ganha todos os módulos do catálogo atual
--- liberados (lib/modulos.ts) — grandfather clause só pra esta conta
--- específica, que já usava o sistema inteiro antes de módulos por
--- plano existirem. Contas novas nascem sem nenhuma linha aqui —
--- módulo vendido avulso precisa ser atribuído explicitamente.
-insert into conta_modulos (conta_id, modulo)
-select c.id, m.modulo
-from contas c
-cross join (values
-  ('fazendas'), ('categorias'), ('pessoas'), ('movimentacoes'), ('pesagens'),
-  ('resumo_movimentacao'), ('relatorios_movimentacoes'), ('relatorio_lotacao'),
-  ('mudanca_pasto'), ('rebanho_por_pasto')
-) as m(modulo)
-where c.nome = 'Conta Principal';
+-- seed: "Conta Principal" ganha o domínio Pecuária liberado —
+-- grandfather clause só pra esta conta específica, que já usava o
+-- sistema inteiro antes de módulos por plano existirem. Contas novas
+-- nascem sem nenhuma linha aqui — domínio vendido avulso precisa ser
+-- atribuído explicitamente (via onboarding de Suporte).
+insert into conta_modulos (conta_id, dominio)
+select id, 'pecuaria' from contas where nome = 'Conta Principal';
 
 -- usada pelo /login (com a chave anônima, antes de qualquer sessão
 -- existir) pra decidir entre mostrar o formulário normal de entrar ou o

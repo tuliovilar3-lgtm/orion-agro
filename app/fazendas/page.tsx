@@ -125,17 +125,6 @@ export default function FazendasPage() {
 
   const fazendaSelecionada = fazendas.find((f) => f.id === fazendaSelecionadaId)
 
-  async function handleToggleControlaPasto() {
-    if (!configuracaoId) return
-    const novoValor = !controlaPasto
-    setControlaPasto(novoValor)
-    const { error } = await supabase.from('configuracoes').update({ controla_pasto: novoValor }).eq('id', configuracaoId)
-    if (error) {
-      alert('Erro ao atualizar: ' + error.message)
-      setControlaPasto(!novoValor)
-    }
-  }
-
   async function handleToggleControlaSubtipoArea() {
     if (!configuracaoId) return
     const novoValor = !controlaSubtipoArea
@@ -157,17 +146,25 @@ export default function FazendasPage() {
       <p className="mt-1 text-sm text-text-secondary">Cadastre e acompanhe as fazendas do grupo.</p>
 
       <div className="mt-6 space-y-3 rounded-card border border-border bg-surface p-5">
-        <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
-          <input
-            type="checkbox"
-            className="accent-brand-500"
-            checked={controlaPasto}
-            disabled={!configuracaoId}
-            onChange={handleToggleControlaPasto}
-          />
-          Controle de rebanho por pasto
-        </label>
-        <p className="text-sm text-text-secondary">Habilita o cadastro e controle do rebanho por pastos.</p>
+        <div>
+          <p className="flex items-center gap-2 text-sm font-medium text-text-primary">
+            Controle de rebanho por pasto
+            {controlaPasto ? (
+              <span className="rounded-control bg-success-bg px-2 py-0.5 text-xs font-semibold text-success">
+                Ativo
+              </span>
+            ) : (
+              <span className="rounded-control bg-bg px-2 py-0.5 text-xs font-semibold text-text-muted">
+                Não contratado
+              </span>
+            )}
+          </p>
+          <p className="text-sm text-text-secondary">
+            {controlaPasto
+              ? 'Habilita o cadastro e controle do rebanho por pastos.'
+              : 'Recurso vendido à parte — fale com o Suporte pra contratar.'}
+          </p>
+        </div>
 
         <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
           <input

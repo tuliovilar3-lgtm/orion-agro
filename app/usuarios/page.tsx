@@ -25,7 +25,7 @@ function CardSkeleton() {
 }
 
 export default function UsuariosPage() {
-  const { isDono, usuarioApp, emModoSuporte, loading: loadingAuth } = useAuth()
+  const { isDono, usuarioApp, emModoSuporte, dominiosDaConta, loading: loadingAuth } = useAuth()
   // dono da própria conta pode gerenciar os funcionários dela — exceto
   // se for suporte "em casa" (não entrou em nenhuma conta ainda): sem
   // essa checagem extra, ele gerenciaria os funcionários da própria
@@ -292,7 +292,10 @@ export default function UsuariosPage() {
                 </button>
                 {modulosExpandidos.has(u.id) && (
                   <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                    {(u.modo === 'CONSULTA' ? MODULOS.filter((m) => m.somenteLeitura) : MODULOS).map((m) => (
+                    {(u.modo === 'CONSULTA'
+                      ? MODULOS.filter((m) => m.somenteLeitura && dominiosDaConta.has(m.dominio))
+                      : MODULOS.filter((m) => dominiosDaConta.has(m.dominio))
+                    ).map((m) => (
                       <label key={m.id} className="flex items-center gap-2 text-sm text-text-primary">
                         <input
                           type="checkbox"
