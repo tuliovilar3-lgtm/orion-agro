@@ -8,17 +8,13 @@ import { formatMoeda, formatQuantidade, formatPeso, formatDecimal } from '@/lib/
 import { PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
 import { safraSugeridaParaData, formatSafra, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
 import ModuloGate from '@/components/ModuloGate'
-
-type TipoMovimentacao =
-  | 'NASCIMENTO'
-  | 'DESMAME'
-  | 'COMPRA'
-  | 'VENDA_PE'
-  | 'VENDA_ABATE'
-  | 'MORTE'
-  | 'CONSUMO_DOACAO'
-  | 'MUDANCA_CATEGORIA'
-  | 'TRANSFERENCIA'
+import {
+  type TipoMovimentacao,
+  DIRECAO_TIPO,
+  DIRECAO_GRUPOS,
+  DIRECAO_CLASSES,
+  IconeMovimentacao,
+} from '@/lib/movimentacao-icones'
 
 type SubtipoConsumoDoacao = 'CONSUMO_INTERNO' | 'DOACAO'
 type TipoClienteFornecedor = 'CLIENTE' | 'FORNECEDOR' | 'AMBOS'
@@ -100,128 +96,12 @@ function round2(n: number) {
   return Math.round(n * 100) / 100
 }
 
-// ---------------------------------------------------------------------
-// redesign: ícone + cor por direção (entrada/saída/interno). Nunca usa
-// success/error (reservados pra confirmação/bloqueio — mesmo princípio já
-// documentado em FluxoRebanho: saída não é "ruim", é o propósito comercial
-// do rebanho).
-// ---------------------------------------------------------------------
-type Direcao = 'entrada' | 'saida' | 'interno'
-
-const DIRECAO_TIPO: Record<TipoMovimentacao, Direcao> = {
-  NASCIMENTO: 'entrada',
-  COMPRA: 'entrada',
-  VENDA_PE: 'saida',
-  VENDA_ABATE: 'saida',
-  MORTE: 'saida',
-  CONSUMO_DOACAO: 'saida',
-  DESMAME: 'interno',
-  MUDANCA_CATEGORIA: 'interno',
-  TRANSFERENCIA: 'interno',
-}
-
-const DIRECAO_GRUPOS: { direcao: Direcao; label: string }[] = [
-  { direcao: 'entrada', label: 'Entradas' },
-  { direcao: 'saida', label: 'Saídas' },
-  { direcao: 'interno', label: 'Reclassificação / interno' },
-]
-
-const DIRECAO_CLASSES: Record<Direcao, { bg: string; fg: string }> = {
-  entrada: { bg: 'bg-brand-100', fg: 'text-brand-500' },
-  saida: { bg: 'bg-warning-bg', fg: 'text-warning' },
-  interno: { bg: 'bg-bg', fg: 'text-text-secondary' },
-}
-
 function StepBadge({ n }: { n: number }) {
   return (
     <div className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">
       {n}
     </div>
   )
-}
-
-// símbolos por tipo — recriados como traço (mesmo padrão de ícone já usado
-// no resto do app: viewBox 24, stroke 1.75), inspirados nos símbolos que o
-// usuário desenhou (seta de entrada/saída espelhadas, cifrão, círculo com X
-// vazado, garfo+faca, gota cortada, setas de ciclo/troca)
-function IconeMovimentacao({ tipo }: { tipo: TipoMovimentacao }) {
-  const p = {
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.75,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    className: 'h-full w-full',
-  }
-  switch (tipo) {
-    case 'NASCIMENTO':
-      return (
-        <svg {...p}>
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      )
-    case 'COMPRA':
-      return (
-        <svg {...p}>
-          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
-          <path d="M7 10l5 5 5-5" />
-          <path d="M12 15V3" />
-        </svg>
-      )
-    case 'VENDA_PE':
-      return (
-        <svg {...p}>
-          <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
-          <path d="M7 9l5-5 5 5" />
-          <path d="M12 4v11" />
-        </svg>
-      )
-    case 'VENDA_ABATE':
-      return (
-        <svg {...p}>
-          <path d="M12 3v18" />
-          <path d="M16.5 8c0-1.9-1.8-3-4.5-3-3 0-4.8 1.4-4.8 3.2 0 1.9 1.8 2.7 4.8 3.3 3 .6 4.8 1.4 4.8 3.3 0 1.8-1.8 3.2-4.8 3.2-2.7 0-4.5-1.1-4.5-3" />
-        </svg>
-      )
-    case 'MORTE':
-      return (
-        <svg {...p}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M9 9l6 6M15 9l-6 6" />
-        </svg>
-      )
-    case 'CONSUMO_DOACAO':
-      return (
-        <svg {...p}>
-          <path d="M6 2v6a2 2 0 0 0 4 0V2" />
-          <path d="M8 8v14" />
-          <path d="M18 2v8c-1.7 0-3-1.8-3-4s1.3-4 3-4Z" />
-          <path d="M18 8v14" />
-        </svg>
-      )
-    case 'DESMAME':
-      return (
-        <svg {...p}>
-          <path d="M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11Z" />
-          <path d="M4 4l16 16" />
-        </svg>
-      )
-    case 'MUDANCA_CATEGORIA':
-      return (
-        <svg {...p}>
-          <path d="M5 20V15M12 20V10M19 20V5" />
-          <path d="M3 20h18" />
-        </svg>
-      )
-    case 'TRANSFERENCIA':
-      return (
-        <svg {...p}>
-          <path d="M4 7h11l-3-3M4 7l3 3" />
-          <path d="M20 17H9l3 3M20 17l-3-3" />
-        </svg>
-      )
-  }
 }
 
 const inputClass =

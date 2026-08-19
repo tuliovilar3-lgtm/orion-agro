@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatQuantidade } from '@/lib/format'
 import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
-import FluxoRebanho, { somarFluxoRebanho } from '@/components/FluxoRebanho'
 import ModuloGate from '@/components/ModuloGate'
+import { type TipoMovimentacao, IconeMovimentacao } from '@/lib/movimentacao-icones'
 
 type RelatorioLinha = {
   categoria_id: string
@@ -27,22 +28,39 @@ type RelatorioLinha = {
   estoque_final: number
 }
 
-const COLUNAS_ENTRADA = [
-  { key: 'entrada_nascimento', label: 'Nascim.' },
-  { key: 'entrada_compra', label: 'Compra' },
-  { key: 'entrada_desmame', label: 'Desmame' },
-  { key: 'entrada_transferencia', label: 'Transf.' },
-  { key: 'entrada_mudanca_categoria', label: 'Categ.' },
-] as const
+// cada coluna sabe seu próprio ícone de tipo de movimentação (mora no
+// cabeçalho, colorido por entrada/saída — nunca repetido dentro de cada
+// célula) e, quando faz sentido, pra qual aba de Relatórios de
+// Movimentações um número dessa coluna deveria linkar. `tipoRelatorio`
+// ausente com `linkavel: true` (só a coluna Venda) ainda linka pra
+// Relatórios filtrado por categoria, sem forçar uma aba — Venda em Pé e
+// Venda Abate vêm somadas nessa coluna, sem tipo único pra escolher.
+// Mudança de Categoria não tem aba própria em Relatórios (a mudança em si
+// não é elencada lá), então não é clicável.
+type ColunaMovimentacao = {
+  key: keyof RelatorioLinha
+  label: string
+  icone: TipoMovimentacao
+  linkavel: boolean
+  tipoRelatorio?: string
+}
 
-const COLUNAS_SAIDA = [
-  { key: 'saida_morte', label: 'Morte' },
-  { key: 'saida_venda', label: 'Venda' },
-  { key: 'saida_desmame', label: 'Desmame' },
-  { key: 'saida_transferencia', label: 'Transf.' },
-  { key: 'saida_consumo_doacao', label: 'Cons/Doaç' },
-  { key: 'saida_mudanca_categoria', label: 'Categ.' },
-] as const
+const COLUNAS_ENTRADA: ColunaMovimentacao[] = [
+  { key: 'entrada_nascimento', label: 'Nasc.', icone: 'NASCIMENTO', linkavel: true, tipoRelatorio: 'NASCIMENTO' },
+  { key: 'entrada_compra', label: 'Compra', icone: 'COMPRA', linkavel: true, tipoRelatorio: 'COMPRA' },
+  { key: 'entrada_desmame', label: 'Desmame', icone: 'DESMAME', linkavel: true, tipoRelatorio: 'DESMAME' },
+  { key: 'entrada_transferencia', label: 'Transf.', icone: 'TRANSFERENCIA', linkavel: true, tipoRelatorio: 'TRANSFERENCIA' },
+  { key: 'entrada_mudanca_categoria', label: 'Categ.', icone: 'MUDANCA_CATEGORIA', linkavel: false },
+]
+
+const COLUNAS_SAIDA: ColunaMovimentacao[] = [
+  { key: 'saida_morte', label: 'Morte', icone: 'MORTE', linkavel: true, tipoRelatorio: 'MORTE' },
+  { key: 'saida_venda', label: 'Venda', icone: 'VENDA_PE', linkavel: true },
+  { key: 'saida_desmame', label: 'Desmame', icone: 'DESMAME', linkavel: true, tipoRelatorio: 'DESMAME' },
+  { key: 'saida_transferencia', label: 'Transf.', icone: 'TRANSFERENCIA', linkavel: true, tipoRelatorio: 'TRANSFERENCIA' },
+  { key: 'saida_consumo_doacao', label: 'Cons/Doaç', icone: 'CONSUMO_DOACAO', linkavel: true, tipoRelatorio: 'CONSUMO_DOACAO' },
+  { key: 'saida_mudanca_categoria', label: 'Categ.', icone: 'MUDANCA_CATEGORIA', linkavel: false },
+]
 
 function nomeMes(mes: string) {
   const [ano, mesNum] = mes.split('-').map(Number)
@@ -53,6 +71,10 @@ function nomeMes(mes: string) {
 function formatarData(iso: string) {
   const [ano, mes, dia] = iso.split('-')
   return `${dia}/${mes}/${ano}`
+}
+
+function hrefRelatorio(categoriaId: string, tipoRelatorio?: string) {
+  return `/relatorios?categoria=${categoriaId}${tipoRelatorio ? `&tipo=${tipoRelatorio}` : ''}`
 }
 
 // categoria sem nenhum dado no período (nem estoque, nem movimento) não
@@ -73,6 +95,111 @@ function linhaEstaZerada(l: RelatorioLinha) {
     l.saida_consumo_doacao === 0 &&
     l.saida_mudanca_categoria === 0 &&
     l.estoque_final === 0
+  )
+}
+
+function IconeCabecalho({ coluna, direcao }: { coluna: ColunaMovimentacao; direcao: 'entrada' | 'saida' }) {
+  const cor = direcao === 'entrada' ? 'text-brand-500' : 'text-warning'
+  return (
+    <span className="flex flex-col items-center gap-0.5" title={coluna.label}>
+      <span className={`h-[18px] w-[18px] ${cor}`}>
+        <IconeMovimentacao tipo={coluna.icone} />
+      </span>
+      <span className="text-[10px] font-semibold normal-case tracking-normal text-text-muted">{coluna.label}</span>
+    </span>
+  )
+}
+
+// número de uma célula da tabela — vira link pra Relatórios de
+// Movimentações (já filtrado por categoria + tipo, quando a coluna tem um
+// tipo único) quando há valor e a coluna é linkável; senão só o número, ou
+// um traço sutil quando zerado.
+function CelulaValor({
+  valor,
+  categoriaId,
+  coluna,
+  direcao,
+}: {
+  valor: number
+  categoriaId: string
+  coluna: ColunaMovimentacao
+  direcao: 'entrada' | 'saida'
+}) {
+  if (!valor) return <span className="text-border">—</span>
+  const corTexto = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
+  if (!coluna.linkavel) return <span className={`font-semibold tabular-nums ${corTexto}`}>{formatQuantidade(valor)}</span>
+  return (
+    <Link
+      href={hrefRelatorio(categoriaId, coluna.tipoRelatorio)}
+      className={`rounded font-semibold tabular-nums ${corTexto} hover:underline hover:decoration-2 hover:underline-offset-2`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {formatQuantidade(valor)}
+    </Link>
+  )
+}
+
+// painel de detalhe (accordion) — mesma informação já visível nas colunas
+// da linha, só reorganizada em chips maiores com ícone + rótulo, mais
+// legível que a tabela densa quando o usuário quer focar numa categoria
+// só. Cada chip clicável já é o mesmo link de CelulaValor.
+function PainelDetalhe({
+  linha,
+  colunas,
+  direcao,
+  titulo,
+}: {
+  linha: RelatorioLinha
+  colunas: ColunaMovimentacao[]
+  direcao: 'entrada' | 'saida'
+  titulo: string
+}) {
+  const itens = colunas.filter((c) => (linha[c.key] as number) > 0)
+  const total = itens.reduce((s, c) => s + (linha[c.key] as number), 0)
+  const corTitulo = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
+  const chipBg = direcao === 'entrada' ? 'bg-brand-100' : 'bg-warning-bg'
+  const chipFg = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
+  const iconFg = direcao === 'entrada' ? 'text-brand-500' : 'text-warning'
+
+  return (
+    <div className="rounded-control border border-border bg-surface p-3.5">
+      <h4 className={`text-xs font-extrabold uppercase tracking-wide ${corTitulo}`}>
+        {titulo} {itens.length > 0 && `(${direcao === 'entrada' ? '+' : '-'}${total})`}
+      </h4>
+      {itens.length === 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          Nenhuma movimentação de {direcao === 'entrada' ? 'entrada' : 'saída'} no período.
+        </p>
+      ) : (
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {itens.map((c) => {
+            const valor = linha[c.key] as number
+            const conteudo = (
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-bold ${chipBg} ${chipFg}`}
+              >
+                <span className={`h-3.5 w-3.5 ${iconFg}`}>
+                  <IconeMovimentacao tipo={c.icone} />
+                </span>
+                {c.label}: {direcao === 'entrada' ? '+' : '-'}
+                {formatQuantidade(valor)}
+              </span>
+            )
+            if (!c.linkavel) return <span key={c.key}>{conteudo}</span>
+            return (
+              <Link
+                key={c.key}
+                href={hrefRelatorio(linha.categoria_id, c.tipoRelatorio)}
+                className="transition-transform hover:-translate-y-0.5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {conteudo}
+              </Link>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -106,6 +233,8 @@ export default function RelatorioMovimentacaoPage() {
   const [linhas, setLinhas] = useState<RelatorioLinha[]>([])
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+  const [busca, setBusca] = useState('')
+  const [categoriaAbertaId, setCategoriaAbertaId] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -142,6 +271,9 @@ export default function RelatorioMovimentacaoPage() {
   }, [fazendaIds, dataInicio, dataFim, proprietarioIds])
 
   const linhasVisiveis = linhas.filter((l) => !linhaEstaZerada(l))
+  const linhasExibidas = busca.trim()
+    ? linhasVisiveis.filter((l) => l.categoria_nome.toLowerCase().includes(busca.trim().toLowerCase()))
+    : linhasVisiveis
 
   const totais = linhasVisiveis.reduce(
     (acc, l) => ({
@@ -176,6 +308,19 @@ export default function RelatorioMovimentacaoPage() {
     }
   )
 
+  // Entradas/Saídas dos KPIs (e da variação) somam só movimentação real de
+  // entrada/saída do rebanho — Desmame e Mudança de Categoria ficam de
+  // fora de propósito, mesmo princípio já usado em FluxoRebanho: são
+  // reclassificação interna (a saída de uma categoria = a entrada de
+  // outra), sempre se cancelam quando somadas em todas as categorias, e
+  // contá-las aqui infla os dois totais sem representar nenhum animal
+  // entrando ou saindo de fato.
+  const totalEntradas = totais.entrada_nascimento + totais.entrada_compra + totais.entrada_transferencia
+  const totalSaidas = totais.saida_morte + totais.saida_venda + totais.saida_consumo_doacao + totais.saida_transferencia
+  const variacaoPeriodo = totais.estoque_final - totais.estoque_inicial
+  const variacaoPct = totais.estoque_inicial > 0 ? (variacaoPeriodo / totais.estoque_inicial) * 100 : null
+  const variacaoPositiva = variacaoPeriodo >= 0
+
   const distribuicao = linhas
     .filter((l) => l.estoque_final > 0)
     .sort((a, b) => b.estoque_final - a.estoque_final)
@@ -183,290 +328,462 @@ export default function RelatorioMovimentacaoPage() {
 
   return (
     <ModuloGate modulo="resumo_movimentacao">
-    <div className="p-8 max-w-6xl">
-      <h1 className="text-2xl font-bold mb-6">Resumo de Movimentação de Rebanho</h1>
+      <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
+        <h1 className="text-2xl font-extrabold text-text-primary">Resumo de Movimentação de Rebanho</h1>
+        <p className="mt-1 text-sm text-text-secondary">
+          Estoque, entradas e saídas do rebanho por categoria — clique numa categoria pra ver o detalhe, ou num
+          número pra abrir em Relatórios de Movimentações já filtrado.
+        </p>
 
-      <div className="flex flex-wrap gap-4 mb-6 border p-4 rounded">
-        <div>
-          <div className="flex items-center justify-between gap-4 mb-1">
-            <label className="block text-sm">
-              Fazendas
-              <Required />
-            </label>
-            <button type="button" className="text-xs text-blue-600 underline" onClick={alternarTodas}>
-              {todasSelecionadas ? 'Desmarcar todas' : 'Marcar todas'}
-            </button>
-          </div>
-          <div className="border rounded p-2 w-56 max-h-32 overflow-y-auto space-y-1">
-            {fazendas.length === 0 ? (
-              <p className="text-xs text-gray-500">Nenhuma fazenda cadastrada.</p>
-            ) : (
-              fazendas.map((f) => (
-                <label key={f.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={fazendaIds.includes(f.id)}
-                    onChange={() => alternarFazenda(f.id)}
-                  />
-                  {f.nome}
-                </label>
-              ))
-            )}
-          </div>
-        </div>
-        {proprietarios.length > 1 && (
+        <div className="mt-5 flex flex-wrap gap-5 rounded-card border border-border bg-surface p-5">
           <div>
-            <label className="block text-sm mb-1">Proprietário</label>
-            <div className="border rounded p-2 w-56 max-h-32 overflow-y-auto space-y-1">
-              {proprietarios.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={proprietarioIds.includes(p.id)} onChange={() => alternarProprietario(p.id)} />
-                  {p.nome}
-                </label>
-              ))}
+            <div className="mb-1.5 flex items-center justify-between gap-4">
+              <label className="text-sm font-medium text-text-secondary">
+                Fazendas
+                <Required />
+              </label>
+              <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={alternarTodas}>
+                {todasSelecionadas ? 'Desmarcar todas' : 'Marcar todas'}
+              </button>
+            </div>
+            <div className="w-56 max-h-32 space-y-1 overflow-y-auto rounded-control border border-border p-2">
+              {fazendas.length === 0 ? (
+                <p className="text-xs text-text-muted">Nenhuma fazenda cadastrada.</p>
+              ) : (
+                fazendas.map((f) => (
+                  <label key={f.id} className="flex items-center gap-2 text-sm text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={fazendaIds.includes(f.id)}
+                      onChange={() => alternarFazenda(f.id)}
+                    />
+                    {f.nome}
+                  </label>
+                ))
+              )}
             </div>
           </div>
-        )}
-        <div>
-          <label className="block text-sm mb-1">Período</label>
-          <div className="flex flex-wrap gap-3 mb-1 text-sm">
-            <label className="flex items-center gap-1">
+          {proprietarios.length > 1 && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietário</label>
+              <div className="w-56 max-h-32 space-y-1 overflow-y-auto rounded-control border border-border p-2">
+                {proprietarios.map((p) => (
+                  <label key={p.id} className="flex items-center gap-2 text-sm text-text-primary">
+                    <input
+                      type="checkbox"
+                      checked={proprietarioIds.includes(p.id)}
+                      onChange={() => alternarProprietario(p.id)}
+                    />
+                    {p.nome}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Período</label>
+            <div className="mb-1.5 flex flex-wrap gap-3 text-sm text-text-primary">
+              <label className="flex items-center gap-1.5">
+                <input type="radio" name="modoFiltro" checked={modoFiltro === 'mes'} onChange={() => setModoFiltro('mes')} />
+                Mês
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" name="modoFiltro" checked={modoFiltro === 'safra'} onChange={() => setModoFiltro('safra')} />
+                Ano Safra
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" name="modoFiltro" checked={modoFiltro === 'ano'} onChange={() => setModoFiltro('ano')} />
+                Ano Calendário
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="modoFiltro"
+                  checked={modoFiltro === 'periodo'}
+                  onChange={() => setModoFiltro('periodo')}
+                />
+                Período personalizado
+              </label>
+            </div>
+            {modoFiltro === 'mes' ? (
               <input
-                type="radio"
-                name="modoFiltro"
-                checked={modoFiltro === 'mes'}
-                onChange={() => setModoFiltro('mes')}
+                type="month"
+                max={mesAtual}
+                className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                value={mes}
+                onChange={(e) => setMes(e.target.value)}
               />
-              Mês
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                name="modoFiltro"
-                checked={modoFiltro === 'safra'}
-                onChange={() => setModoFiltro('safra')}
-              />
-              Ano Safra
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                name="modoFiltro"
-                checked={modoFiltro === 'ano'}
-                onChange={() => setModoFiltro('ano')}
-              />
-              Ano Calendário
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="radio"
-                name="modoFiltro"
-                checked={modoFiltro === 'periodo'}
-                onChange={() => setModoFiltro('periodo')}
-              />
-              Período personalizado
-            </label>
+            ) : modoFiltro === 'safra' ? (
+              <div className="flex items-center gap-2">
+                <select
+                  className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={safraAnoInicio}
+                  onChange={(e) => setSafraAnoInicio(Number(e.target.value))}
+                >
+                  {opcoesSafra().map((ano) => (
+                    <option key={ano} value={ano}>
+                      {ano}/{ano + 1}
+                      {ano === anoInicioSafraAtual() ? ' (atual)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-sm text-text-secondary">
+                  {formatarData(dataInicio)} até {formatarData(dataFim)}
+                </p>
+              </div>
+            ) : modoFiltro === 'ano' ? (
+              <div className="flex items-center gap-2">
+                <select
+                  className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={anoCalendarioSelecionado}
+                  onChange={(e) => setAnoCalendarioSelecionado(Number(e.target.value))}
+                >
+                  {opcoesAno().map((ano) => (
+                    <option key={ano} value={ano}>
+                      {ano}
+                      {ano === anoCalendarioAtual() ? ' (atual)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-sm text-text-secondary">
+                  {formatarData(dataInicio)} até {formatarData(dataFim)}
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  max={hoje}
+                  className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={dataInicioCustom}
+                  onChange={(e) => setDataInicioCustom(e.target.value)}
+                />
+                <span className="text-text-secondary">até</span>
+                <input
+                  type="date"
+                  max={hoje}
+                  className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                  value={dataFimCustom}
+                  onChange={(e) => setDataFimCustom(e.target.value)}
+                />
+              </div>
+            )}
+            {periodoInvalido && <p className="mt-1 text-xs text-error">A data inicial não pode ser depois da data final.</p>}
           </div>
-          {modoFiltro === 'mes' ? (
-            <input
-              type="month"
-              max={mesAtual}
-              className="border rounded px-3 py-2"
-              value={mes}
-              onChange={(e) => setMes(e.target.value)}
-            />
-          ) : modoFiltro === 'safra' ? (
-            <div className="flex items-center gap-2">
-              <select
-                className="border rounded px-3 py-2"
-                value={safraAnoInicio}
-                onChange={(e) => setSafraAnoInicio(Number(e.target.value))}
-              >
-                {opcoesSafra().map((ano) => (
-                  <option key={ano} value={ano}>
-                    {ano}/{ano + 1}
-                    {ano === anoInicioSafraAtual() ? ' (atual)' : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="text-sm text-gray-500">
-                {formatarData(dataInicio)} até {formatarData(dataFim)}
-              </p>
-            </div>
-          ) : modoFiltro === 'ano' ? (
-            <div className="flex items-center gap-2">
-              <select
-                className="border rounded px-3 py-2"
-                value={anoCalendarioSelecionado}
-                onChange={(e) => setAnoCalendarioSelecionado(Number(e.target.value))}
-              >
-                {opcoesAno().map((ano) => (
-                  <option key={ano} value={ano}>
-                    {ano}
-                    {ano === anoCalendarioAtual() ? ' (atual)' : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="text-sm text-gray-500">
-                {formatarData(dataInicio)} até {formatarData(dataFim)}
-              </p>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                max={hoje}
-                className="border rounded px-3 py-2"
-                value={dataInicioCustom}
-                onChange={(e) => setDataInicioCustom(e.target.value)}
-              />
-              <span className="text-gray-500">até</span>
-              <input
-                type="date"
-                max={hoje}
-                className="border rounded px-3 py-2"
-                value={dataFimCustom}
-                onChange={(e) => setDataFimCustom(e.target.value)}
-              />
-            </div>
-          )}
-          {periodoInvalido && (
-            <p className="text-xs text-red-600 mt-1">A data inicial não pode ser depois da data final.</p>
-          )}
         </div>
+
+        {fazendaIds.length === 0 ? (
+          <p className="mt-6 text-text-secondary">Selecione ao menos uma fazenda para ver o relatório.</p>
+        ) : periodoInvalido ? (
+          <p className="mt-6 text-error">Corrija o período antes de continuar.</p>
+        ) : loading ? (
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="animate-pulse rounded-card border border-border bg-surface p-4">
+                <div className="h-3 w-20 rounded bg-bg" />
+                <div className="mt-3 h-7 w-16 rounded bg-bg" />
+                <div className="mt-2 h-3 w-24 rounded bg-bg" />
+              </div>
+            ))}
+          </div>
+        ) : erro ? (
+          <p className="mt-6 text-error">Erro: {erro}</p>
+        ) : (
+          <>
+            <p className="mt-5 text-sm capitalize text-text-secondary">
+              {modoFiltro === 'mes'
+                ? nomeMes(mes)
+                : modoFiltro === 'safra'
+                  ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1} (${formatarData(dataInicio)} até ${formatarData(dataFim)})`
+                  : modoFiltro === 'ano'
+                    ? `Ano ${anoCalendarioSelecionado} (${formatarData(dataInicio)} até ${formatarData(dataFim)})`
+                    : `${formatarData(dataInicio)} até ${formatarData(dataFim)}`}
+              {' · '}
+              {fazendaIds.length} fazenda{fazendaIds.length > 1 ? 's' : ''} selecionada{fazendaIds.length > 1 ? 's' : ''}
+            </p>
+
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-card border border-border bg-surface p-4">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Estoque inicial</div>
+                <div className="mt-1.5 text-[26px] font-extrabold tracking-tight tabular-nums text-text-primary">
+                  {formatQuantidade(totais.estoque_inicial)}
+                </div>
+                <div className="mt-0.5 text-xs font-medium text-text-secondary">cabeças em {formatarData(dataInicio)}</div>
+              </div>
+              <div className="relative overflow-hidden rounded-card border border-border bg-surface p-4">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Entradas</div>
+                <div className="mt-1.5 text-[26px] font-extrabold tracking-tight tabular-nums text-brand-700">
+                  +{formatQuantidade(totalEntradas)}
+                </div>
+                <div className="mt-0.5 text-xs font-medium text-text-secondary">cabeças no período</div>
+                <div className="absolute right-3.5 top-3.5 flex h-8 w-8 items-center justify-center rounded-control bg-brand-100 text-brand-500">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </div>
+              </div>
+              <div className="relative overflow-hidden rounded-card border border-border bg-surface p-4">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Saídas</div>
+                <div className="mt-1.5 text-[26px] font-extrabold tracking-tight tabular-nums text-warning">
+                  -{formatQuantidade(totalSaidas)}
+                </div>
+                <div className="mt-0.5 text-xs font-medium text-text-secondary">cabeças no período</div>
+                <div className="absolute right-3.5 top-3.5 flex h-8 w-8 items-center justify-center rounded-control bg-warning-bg text-warning">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M12 5v14M5 12l7 7 7-7" />
+                  </svg>
+                </div>
+              </div>
+              <div className="rounded-card border border-border bg-surface p-4">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Estoque final</div>
+                <div className="mt-1.5 text-[26px] font-extrabold tracking-tight tabular-nums text-text-primary">
+                  {formatQuantidade(totais.estoque_final)}
+                </div>
+                <div className="mt-0.5 text-xs font-medium text-text-secondary">cabeças em {formatarData(dataFim)}</div>
+              </div>
+            </div>
+
+            <div
+              className={`mt-4 flex flex-wrap items-center gap-3 rounded-control border p-3 text-sm ${
+                variacaoPositiva ? 'border-border bg-success-bg' : 'border-border bg-bg'
+              }`}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                className={variacaoPositiva ? 'text-success' : 'text-text-muted'}
+              >
+                {variacaoPositiva ? (
+                  <path d="M3 17l6-6 4 4 8-8M15 7h6v6" />
+                ) : (
+                  <path d="M3 7l6 6 4-4 8 8M15 17h6v-6" />
+                )}
+              </svg>
+              <span className="text-text-primary">
+                Variação do período:{' '}
+                <strong className="font-extrabold">
+                  {variacaoPeriodo > 0 ? `+${formatQuantidade(variacaoPeriodo)}` : formatQuantidade(variacaoPeriodo)} cabeças
+                </strong>
+              </span>
+              {variacaoPct !== null && (
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-bold text-white ${
+                    variacaoPositiva ? 'bg-success' : 'bg-text-muted'
+                  }`}
+                >
+                  {variacaoPct > 0 ? '+' : ''}
+                  {variacaoPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                </span>
+              )}
+              <div className="h-1.5 min-w-[120px] flex-1 overflow-hidden rounded-full bg-border">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${variacaoPositiva ? 'bg-success' : 'bg-text-muted'}`}
+                  style={{ width: `${Math.min(100, Math.abs(variacaoPct ?? 0))}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <div className="relative">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted"
+                >
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Buscar categoria..."
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  className="w-60 rounded-control border border-border bg-surface py-2 pl-8 pr-3 text-sm text-text-primary outline-none focus:border-brand-500"
+                />
+              </div>
+            </div>
+
+            <div className="mt-2 overflow-hidden rounded-card border border-border bg-surface">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1080px] border-collapse text-sm">
+                  <thead>
+                    <tr>
+                      <th className="p-2"></th>
+                      <th className="p-2"></th>
+                      <th colSpan={COLUNAS_ENTRADA.length} className="border-b border-border p-2 pb-0.5 text-center text-[10px] font-bold uppercase tracking-wide text-brand-500">
+                        Entradas
+                      </th>
+                      <th colSpan={COLUNAS_SAIDA.length} className="border-b border-border p-2 pb-0.5 text-center text-[10px] font-bold uppercase tracking-wide text-warning">
+                        Saídas
+                      </th>
+                      <th className="p-2"></th>
+                      <th className="p-2"></th>
+                    </tr>
+                    <tr>
+                      <th className="border-b border-border p-2 text-left text-[10.5px] font-bold uppercase tracking-wide text-text-muted">
+                        Categoria
+                      </th>
+                      <th className="border-b border-border p-2 text-center text-[10.5px] font-bold uppercase tracking-wide text-text-muted">
+                        Estoque inicial
+                        <div className="mt-0.5 font-normal normal-case text-text-muted">{formatarData(dataInicio)}</div>
+                      </th>
+                      {COLUNAS_ENTRADA.map((c) => (
+                        <th key={c.key} className="border-b border-border p-2 text-center">
+                          <IconeCabecalho coluna={c} direcao="entrada" />
+                        </th>
+                      ))}
+                      {COLUNAS_SAIDA.map((c) => (
+                        <th key={c.key} className="border-b border-border p-2 text-center">
+                          <IconeCabecalho coluna={c} direcao="saida" />
+                        </th>
+                      ))}
+                      <th className="border-b border-border p-2 text-center text-[10.5px] font-bold uppercase tracking-wide text-text-muted">
+                        Variação
+                      </th>
+                      <th className="border-b border-border p-2 text-center text-[10.5px] font-bold uppercase tracking-wide text-text-muted">
+                        Estoque final
+                        <div className="mt-0.5 font-normal normal-case text-text-muted">{formatarData(dataFim)}</div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linhasExibidas.length === 0 ? (
+                      <tr>
+                        <td colSpan={2 + COLUNAS_ENTRADA.length + COLUNAS_SAIDA.length + 2} className="p-6 text-center text-sm text-text-muted">
+                          Nenhuma categoria encontrada.
+                        </td>
+                      </tr>
+                    ) : (
+                      linhasExibidas.map((l) => {
+                        const aberta = categoriaAbertaId === l.categoria_id
+                        const variacaoLinha = l.estoque_final - l.estoque_inicial
+                        return (
+                          <Fragment key={l.categoria_id}>
+                            <tr
+                              onClick={() => setCategoriaAbertaId(aberta ? null : l.categoria_id)}
+                              className={`cursor-pointer border-b border-border transition-colors hover:bg-bg ${aberta ? 'bg-brand-100 hover:bg-brand-100' : ''}`}
+                            >
+                              <td className="p-2 text-left font-semibold text-text-primary">
+                                <span className="flex items-center gap-1.5">
+                                  <svg
+                                    width="13"
+                                    height="13"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2.4"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    className={`flex-none text-text-muted transition-transform ${aberta ? 'rotate-90 text-brand-500' : ''}`}
+                                  >
+                                    <path d="M9 6l6 6-6 6" />
+                                  </svg>
+                                  <span className="whitespace-nowrap">{l.categoria_nome}</span>
+                                </span>
+                              </td>
+                              <td className="p-2 text-center tabular-nums text-text-primary">{formatQuantidade(l.estoque_inicial)}</td>
+                              {COLUNAS_ENTRADA.map((c) => (
+                                <td key={c.key} className="p-2 text-center">
+                                  <CelulaValor valor={l[c.key] as number} categoriaId={l.categoria_id} coluna={c} direcao="entrada" />
+                                </td>
+                              ))}
+                              {COLUNAS_SAIDA.map((c) => (
+                                <td key={c.key} className="p-2 text-center">
+                                  <CelulaValor valor={l[c.key] as number} categoriaId={l.categoria_id} coluna={c} direcao="saida" />
+                                </td>
+                              ))}
+                              <td
+                                className={`p-2 text-center font-extrabold tabular-nums ${
+                                  variacaoLinha > 0 ? 'text-success' : variacaoLinha < 0 ? 'text-error' : 'text-text-muted'
+                                }`}
+                              >
+                                {variacaoLinha > 0 ? `+${formatQuantidade(variacaoLinha)}` : formatQuantidade(variacaoLinha)}
+                              </td>
+                              <td className="p-2 text-center font-extrabold tabular-nums text-text-primary">
+                                {formatQuantidade(l.estoque_final)}
+                              </td>
+                            </tr>
+                            {aberta && (
+                              <tr className="border-b border-border bg-bg">
+                                <td colSpan={2 + COLUNAS_ENTRADA.length + COLUNAS_SAIDA.length + 2} className="p-4">
+                                  <div className="grid gap-3 md:grid-cols-2">
+                                    <PainelDetalhe linha={l} colunas={COLUNAS_ENTRADA} direcao="entrada" titulo="Entradas" />
+                                    <PainelDetalhe linha={l} colunas={COLUNAS_SAIDA} direcao="saida" titulo="Saídas" />
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border bg-bg font-extrabold">
+                      <td className="p-3 text-left text-text-primary">Total</td>
+                      <td className="p-3 text-center tabular-nums text-text-primary">{formatQuantidade(totais.estoque_inicial)}</td>
+                      {COLUNAS_ENTRADA.map((c) => (
+                        <td key={c.key} className="p-3 text-center tabular-nums text-text-primary">
+                          {formatQuantidade(totais[c.key as keyof typeof totais])}
+                        </td>
+                      ))}
+                      {COLUNAS_SAIDA.map((c) => (
+                        <td key={c.key} className="p-3 text-center tabular-nums text-text-primary">
+                          {formatQuantidade(totais[c.key as keyof typeof totais])}
+                        </td>
+                      ))}
+                      <td
+                        className={`p-3 text-center tabular-nums ${
+                          variacaoPeriodo > 0 ? 'text-success' : variacaoPeriodo < 0 ? 'text-error' : 'text-text-muted'
+                        }`}
+                      >
+                        {variacaoPeriodo > 0 ? `+${formatQuantidade(variacaoPeriodo)}` : formatQuantidade(variacaoPeriodo)}
+                      </td>
+                      <td className="p-3 text-center tabular-nums text-text-primary">{formatQuantidade(totais.estoque_final)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            <h2 className="mt-8 mb-3 font-semibold text-text-primary">Distribuição do rebanho final</h2>
+            {distribuicao.length === 0 ? (
+              <p className="text-text-secondary">Sem estoque nas fazendas selecionadas ao final do período.</p>
+            ) : (
+              <ul className="max-w-2xl space-y-2">
+                {distribuicao.map((l) => {
+                  const pct = totalDistribuicao ? (l.estoque_final / totalDistribuicao) * 100 : 0
+                  return (
+                    <li key={l.categoria_id}>
+                      <div className="mb-1 flex justify-between text-sm text-text-primary">
+                        <span>{l.categoria_nome}</span>
+                        <span className="text-text-secondary">
+                          {formatQuantidade(l.estoque_final)} cab. ·{' '}
+                          {pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                        </span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-bg">
+                        <div className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </>
+        )}
       </div>
-
-      {fazendaIds.length === 0 ? (
-        <p className="text-gray-500">Selecione ao menos uma fazenda para ver o relatório.</p>
-      ) : periodoInvalido ? (
-        <p className="text-red-600">Corrija o período antes de continuar.</p>
-      ) : loading ? (
-        <p>Carregando...</p>
-      ) : erro ? (
-        <p className="text-red-600">Erro: {erro}</p>
-      ) : (
-        <>
-          <p className="text-sm text-gray-500 mb-4 capitalize">
-            {modoFiltro === 'mes'
-              ? nomeMes(mes)
-              : modoFiltro === 'safra'
-                ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1} (${formatarData(dataInicio)} até ${formatarData(dataFim)})`
-                : modoFiltro === 'ano'
-                  ? `Ano ${anoCalendarioSelecionado} (${formatarData(dataInicio)} até ${formatarData(dataFim)})`
-                  : `${formatarData(dataInicio)} até ${formatarData(dataFim)}`}
-            {' · '}
-            {fazendaIds.length} fazenda{fazendaIds.length > 1 ? 's' : ''} selecionada{fazendaIds.length > 1 ? 's' : ''}
-          </p>
-
-          <div className="mb-6 rounded-card border border-border bg-surface p-5">
-            <FluxoRebanho
-              {...somarFluxoRebanho(linhasVisiveis)}
-              labelInicial={`Estoque Inicial (${formatarData(dataInicio)})`}
-              labelFinal={`Estoque Final (${formatarData(dataFim)})`}
-            />
-          </div>
-
-          <div className="overflow-x-auto mb-8">
-            <table className="text-sm border-collapse w-full">
-              <thead>
-                <tr>
-                  <th rowSpan={2} className="border p-2 text-left align-bottom">
-                    Categoria
-                  </th>
-                  <th rowSpan={2} className="border p-2 text-right align-bottom">
-                    Estoque inicial
-                    <div className="font-normal text-gray-400">{formatarData(dataInicio)}</div>
-                  </th>
-                  <th colSpan={COLUNAS_ENTRADA.length} className="border p-2 text-center">
-                    Entrada
-                  </th>
-                  <th colSpan={COLUNAS_SAIDA.length} className="border p-2 text-center">
-                    Saída
-                  </th>
-                  <th rowSpan={2} className="border p-2 text-right align-bottom">
-                    Estoque final
-                    <div className="font-normal text-gray-400">{formatarData(dataFim)}</div>
-                  </th>
-                </tr>
-                <tr>
-                  {COLUNAS_ENTRADA.map((c) => (
-                    <th key={c.key} className="border p-2 text-right font-normal text-gray-600">
-                      {c.label}
-                    </th>
-                  ))}
-                  {COLUNAS_SAIDA.map((c) => (
-                    <th key={c.key} className="border p-2 text-right font-normal text-gray-600">
-                      {c.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {linhasVisiveis.map((l) => (
-                  <tr key={l.categoria_id}>
-                    <td className="border p-2">{l.categoria_nome}</td>
-                    <td className="border p-2 text-right">{formatQuantidade(l.estoque_inicial)}</td>
-                    {COLUNAS_ENTRADA.map((c) => (
-                      <td key={c.key} className="border p-2 text-right text-gray-600">
-                        {l[c.key] ? formatQuantidade(l[c.key]) : ''}
-                      </td>
-                    ))}
-                    {COLUNAS_SAIDA.map((c) => (
-                      <td key={c.key} className="border p-2 text-right text-gray-600">
-                        {l[c.key] ? formatQuantidade(l[c.key]) : ''}
-                      </td>
-                    ))}
-                    <td className="border p-2 text-right font-medium">{formatQuantidade(l.estoque_final)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="border p-2">Total</td>
-                  <td className="border p-2 text-right">{formatQuantidade(totais.estoque_inicial)}</td>
-                  {COLUNAS_ENTRADA.map((c) => (
-                    <td key={c.key} className="border p-2 text-right">
-                      {formatQuantidade(totais[c.key])}
-                    </td>
-                  ))}
-                  {COLUNAS_SAIDA.map((c) => (
-                    <td key={c.key} className="border p-2 text-right">
-                      {formatQuantidade(totais[c.key])}
-                    </td>
-                  ))}
-                  <td className="border p-2 text-right">{formatQuantidade(totais.estoque_final)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          <h2 className="font-semibold mb-3">Distribuição do rebanho final</h2>
-          {distribuicao.length === 0 ? (
-            <p className="text-gray-500">Sem estoque nas fazendas selecionadas ao final do período.</p>
-          ) : (
-            <ul className="space-y-2 max-w-2xl">
-              {distribuicao.map((l) => {
-                const pct = totalDistribuicao ? (l.estoque_final / totalDistribuicao) * 100 : 0
-                return (
-                  <li key={l.categoria_id}>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span>{l.categoria_nome}</span>
-                      <span className="text-gray-500">
-                        {formatQuantidade(l.estoque_final)} cab. ·{' '}
-                        {pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
-                      </span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded overflow-hidden">
-                      <div className="h-full bg-black" style={{ width: `${pct}%` }} />
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </>
-      )}
-    </div>
     </ModuloGate>
   )
 }

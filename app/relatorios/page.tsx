@@ -191,9 +191,21 @@ export default function RelatoriosPage() {
   const mesAtual = hoje.slice(0, 7)
 
   useEffect(() => {
+    // link direto vindo de Resumo de Movimentação de Rebanho (clicar num
+    // número/chip de uma categoria) — lido do próprio window (não
+    // useSearchParams) pra não exigir um Suspense boundary só por causa
+    // desse deep link pontual, mesmo padrão já usado em app/login/page.tsx
+    const params = new URLSearchParams(window.location.search)
+    const tipoParam = params.get('tipo')
+    if (tipoParam && TIPOS_RELATORIO.some((t) => t.tipo === tipoParam)) {
+      setTipoSelecionado(tipoParam as TipoRelatorio)
+    }
+    const categoriaParam = params.get('categoria')
+
     // categorias sem filtro de ativa — o relatório precisa continuar
     // achando histórico de categoria já inativada. Todas selecionadas por
-    // padrão ao carregar (mesmo princípio de fazendaIds/proprietarioIds).
+    // padrão ao carregar (mesmo princípio de fazendaIds/proprietarioIds) —
+    // exceto quando o deep link já pede uma categoria específica.
     supabase
       .from('categorias_animal')
       .select('id, nome')
@@ -201,7 +213,11 @@ export default function RelatoriosPage() {
       .then(({ data }) => {
         const lista = data || []
         setCategorias(lista)
-        setCategoriaIds(lista.map((c) => c.id))
+        setCategoriaIds(
+          categoriaParam && lista.some((c) => c.id === categoriaParam)
+            ? [categoriaParam]
+            : lista.map((c) => c.id)
+        )
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
