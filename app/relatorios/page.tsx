@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import Required from '@/components/Required'
 import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import { MovimentacaoRelatorio, formatarDataBr } from '@/components/relatorios/tipos'
+import FiltroMultiSelect from '@/components/relatorios/FiltroMultiSelect'
+import PainelFiltroColapsavel from '@/components/relatorios/PainelFiltroColapsavel'
 import RelatorioNascimento from '@/components/relatorios/RelatorioNascimento'
 import RelatorioDesmame from '@/components/relatorios/RelatorioDesmame'
 import RelatorioCompra from '@/components/relatorios/RelatorioCompra'
@@ -51,94 +52,6 @@ function nomeMesLongo(anoMes: string) {
   const [ano, mesNum] = anoMes.split('-').map(Number)
   const data = new Date(ano, mesNum - 1, 1)
   return data.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
-}
-
-// filtro de linha única (mesmo formato pros 3 filtros de cima — Fazendas,
-// Categoria, Proprietário) que abre um popover de checkboxes pra marcar/
-// desmarcar, em vez da lista sempre expandida que cada um tinha antes.
-function FiltroMultiSelect({
-  label,
-  required,
-  itens,
-  selecionados,
-  onToggleItem,
-  onToggleTodos,
-  todosSelecionados,
-  vazioLabel,
-}: {
-  label: string
-  required?: boolean
-  itens: { id: string; nome: string }[]
-  selecionados: string[]
-  onToggleItem: (id: string) => void
-  onToggleTodos: () => void
-  todosSelecionados: boolean
-  vazioLabel?: string
-}) {
-  const [aberto, setAberto] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!aberto) return
-    function onClickFora(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setAberto(false)
-    }
-    document.addEventListener('mousedown', onClickFora)
-    return () => document.removeEventListener('mousedown', onClickFora)
-  }, [aberto])
-
-  const resumo =
-    itens.length === 0
-      ? vazioLabel || 'Nenhuma opção'
-      : todosSelecionados
-        ? `Todas (${itens.length})`
-        : selecionados.length === 0
-          ? 'Nenhuma selecionada'
-          : `${selecionados.length} de ${itens.length} selecionada${selecionados.length > 1 ? 's' : ''}`
-
-  return (
-    <div ref={ref} className="relative">
-      <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-        {label}
-        {required && <Required />}
-      </label>
-      <button
-        type="button"
-        onClick={() => setAberto((v) => !v)}
-        className="flex w-56 items-center justify-between gap-2 rounded-control border border-border bg-surface px-3 py-2 text-left text-sm text-text-primary outline-none focus:border-brand-500"
-      >
-        <span className="truncate">{resumo}</span>
-        <span className="text-text-muted">{aberto ? '▲' : '▼'}</span>
-      </button>
-      {aberto && (
-        <div className="absolute z-30 mt-1 w-64 rounded-control border border-border bg-surface p-2 shadow-lg">
-          <div className="mb-1.5 flex items-center justify-between border-b border-border pb-1.5">
-            <span className="text-xs text-text-muted">
-              {selecionados.length} de {itens.length}
-            </span>
-            <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={onToggleTodos}>
-              {todosSelecionados ? 'Desmarcar todas' : 'Marcar todas'}
-            </button>
-          </div>
-          <div className="max-h-48 space-y-0.5 overflow-y-auto">
-            {itens.length === 0 ? (
-              <p className="px-1 py-1 text-xs text-text-muted">{vazioLabel || 'Nenhuma opção cadastrada.'}</p>
-            ) : (
-              itens.map((it) => (
-                <label
-                  key={it.id}
-                  className="flex items-center gap-2 rounded px-1 py-1 text-sm text-text-primary hover:bg-bg"
-                >
-                  <input type="checkbox" checked={selecionados.includes(it.id)} onChange={() => onToggleItem(it.id)} />
-                  {it.nome}
-                </label>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  )
 }
 
 export default function RelatoriosPage() {
@@ -294,41 +207,60 @@ export default function RelatoriosPage() {
           ? `Ano ${anoCalendarioSelecionado} (${formatarDataBr(dataInicio)} até ${formatarDataBr(dataFim)})`
           : `${formatarDataBr(dataInicio)} até ${formatarDataBr(dataFim)}`
 
+  // versão curta do período, só pro resumo do botão de filtro (o texto
+  // completo com datas continua em rotuloPeriodo, mostrado acima da tabela)
+  const rotuloPeriodoCurto =
+    modoFiltro === 'mes'
+      ? nomeMesLongo(mes)
+      : modoFiltro === 'safra'
+        ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1}`
+        : modoFiltro === 'ano'
+          ? `Ano ${anoCalendarioSelecionado}`
+          : `${formatarDataBr(dataInicio)} – ${formatarDataBr(dataFim)}`
+
+  const resumoFiltro = [
+    `${fazendaIds.length} fazenda${fazendaIds.length === 1 ? '' : 's'}`,
+    todasCategoriasSelecionadas ? 'todas as categorias' : `${categoriaIds.length} categoria${categoriaIds.length === 1 ? '' : 's'}`,
+    proprietarios.length > 1
+      ? todosProprietariosSelecionados
+        ? 'todos os proprietários'
+        : `${proprietarioIds.length} proprietário${proprietarioIds.length === 1 ? '' : 's'}`
+      : null,
+    rotuloPeriodoCurto,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <ModuloGate modulo="relatorios_movimentacoes">
-    <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Relatórios de Movimentações</h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        KPIs, gráficos e detalhamento por tipo de movimentação — use os filtros abaixo para restringir período,
-        fazenda e categoria.
-      </p>
-
-      {/* abas por tipo de movimentação — sticky ao rolar, mesmo padrão já
-          usado na barra de tipo colapsada de Lançamento de Movimentações
-          (top-14 no mobile pra não sobrepor a topbar fixa de 56px da
-          Sidebar, top-0 no desktop, que não tem topbar) */}
-      <div className="sticky top-14 z-20 -mx-6 flex flex-wrap gap-1.5 border-b border-border bg-bg px-6 pb-0 pt-2 md:top-0 md:mx-0 md:px-0 md:pt-0">
-        {TIPOS_RELATORIO.map((t) => {
-          const ativo = t.tipo === tipoSelecionado
-          return (
-            <button
-              key={t.tipo}
-              type="button"
-              onClick={() => setTipoSelecionado(t.tipo)}
-              className={`rounded-t-control border-b-2 px-3.5 py-2 text-sm font-medium transition-colors ${
-                ativo
-                  ? 'border-brand-500 text-brand-500 font-semibold'
-                  : 'border-transparent text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {t.label}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* filtros compartilhados */}
-      <div className="mt-5 flex flex-wrap gap-5 rounded-card border border-border bg-surface p-5">
+    <div className="px-6 py-8 md:px-10">
+      <PainelFiltroColapsavel
+        titulo="Relatórios de Movimentações"
+        resumoFiltro={resumoFiltro}
+        abaixoTitulo={
+          // abas por tipo de movimentação — sempre visíveis (não colapsam
+          // junto do painel de filtro), já eram sticky antes desta mudança
+          <div className="-mx-6 flex flex-wrap gap-1.5 px-6 pt-1 md:mx-0 md:px-0">
+            {TIPOS_RELATORIO.map((t) => {
+              const ativo = t.tipo === tipoSelecionado
+              return (
+                <button
+                  key={t.tipo}
+                  type="button"
+                  onClick={() => setTipoSelecionado(t.tipo)}
+                  className={`rounded-t-control border-b-2 px-3.5 py-2 text-sm font-medium transition-colors ${
+                    ativo
+                      ? 'border-brand-500 text-brand-500 font-semibold'
+                      : 'border-transparent text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
+        }
+      >
         <FiltroMultiSelect
           label="Fazendas"
           required
@@ -358,6 +290,7 @@ export default function RelatoriosPage() {
             onToggleItem={alternarProprietario}
             onToggleTodos={alternarTodosProprietarios}
             todosSelecionados={todosProprietariosSelecionados}
+            pluralMasculino
           />
         )}
 
@@ -446,7 +379,7 @@ export default function RelatoriosPage() {
           )}
           {periodoInvalido && <p className="mt-1 text-xs text-error">A data inicial não pode ser depois da final.</p>}
         </div>
-      </div>
+      </PainelFiltroColapsavel>
 
       <div className="mt-6">
         {fazendaIds.length === 0 ? (

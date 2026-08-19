@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import Required from '@/components/Required'
 import { formatArea, formatLotacao, formatPeso, formatQuantidade } from '@/lib/format'
 import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import KpiCard from '@/components/relatorios/KpiCard'
+import FiltroMultiSelect from '@/components/relatorios/FiltroMultiSelect'
+import PainelFiltroColapsavel from '@/components/relatorios/PainelFiltroColapsavel'
 import { corCategorica } from '@/lib/relatorio-cores'
 import {
   Bar,
@@ -114,6 +115,11 @@ function dominioLinha(valores: (number | null)[]) {
 function mesCurto(ano: number, mes: number) {
   const nome = new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')
   return `${nome}/${String(ano).slice(2)}`
+}
+
+function formatarData(iso: string) {
+  const [ano, mes, dia] = iso.split('-')
+  return `${dia}/${mes}/${ano}`
 }
 
 function formatarValor(valor: number | null, casas: number) {
@@ -302,38 +308,34 @@ export default function RelatorioLotacaoPage() {
 
   const maxLotacaoPasto = Math.max(...pastosLotacao.map((p) => p.lotacao ?? 0), 0.0001)
 
+  const rotuloPeriodoCurto =
+    modoFiltro === 'mes'
+      ? new Date(Number(mes.split('-')[0]), Number(mes.split('-')[1]) - 1, 1).toLocaleDateString('pt-BR', {
+          month: 'long',
+          year: 'numeric',
+        })
+      : modoFiltro === 'safra'
+        ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1}`
+        : modoFiltro === 'ano'
+          ? `Ano ${anoCalendarioSelecionado}`
+          : `${formatarData(dataInicio)} – ${formatarData(dataFim)}`
+
+  const resumoFiltro = `${fazendaIds.length} fazenda${fazendaIds.length === 1 ? '' : 's'} · ${rotuloPeriodoCurto}`
+
   return (
     <ModuloGate modulo="relatorio_lotacao">
-    <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
-      <h1 className="text-2xl font-extrabold text-text-primary">Relatório de Lotação</h1>
-      <p className="mt-1 text-sm text-text-secondary">
-        Evolução mensal do rebanho, peso, área e lotação — considerando a área em Pecuária.
-      </p>
-
-      <div className="mt-6 flex flex-wrap gap-5 rounded-card border border-border bg-surface p-5">
-        <div>
-          <div className="mb-1.5 flex items-center justify-between gap-4">
-            <label className="text-sm font-medium text-text-secondary">
-              Fazendas
-              <Required />
-            </label>
-            <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={alternarTodas}>
-              {todasSelecionadas ? 'Desmarcar todas' : 'Marcar todas'}
-            </button>
-          </div>
-          <div className="max-h-32 w-56 space-y-1 overflow-y-auto rounded-control border border-border p-2">
-            {fazendas.length === 0 ? (
-              <p className="text-xs text-text-muted">Nenhuma fazenda cadastrada.</p>
-            ) : (
-              fazendas.map((f) => (
-                <label key={f.id} className="flex items-center gap-2 text-sm text-text-primary">
-                  <input type="checkbox" checked={fazendaIds.includes(f.id)} onChange={() => alternarFazenda(f.id)} />
-                  {f.nome}
-                </label>
-              ))
-            )}
-          </div>
-        </div>
+    <div className="px-6 py-8 md:px-10">
+      <PainelFiltroColapsavel titulo="Relatório de Lotação" resumoFiltro={resumoFiltro}>
+        <FiltroMultiSelect
+          label="Fazendas"
+          required
+          itens={fazendas}
+          selecionados={fazendaIds}
+          onToggleItem={alternarFazenda}
+          onToggleTodos={alternarTodas}
+          todosSelecionados={todasSelecionadas}
+          vazioLabel="Nenhuma fazenda cadastrada."
+        />
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-text-secondary">Período</label>
@@ -420,7 +422,11 @@ export default function RelatorioLotacaoPage() {
           )}
           {periodoInvalido && <p className="mt-1 text-xs text-error">A data inicial não pode ser depois da final.</p>}
         </div>
-      </div>
+      </PainelFiltroColapsavel>
+
+      <p className="mt-4 text-sm text-text-secondary">
+        Evolução mensal do rebanho, peso, área e lotação — considerando a área em Pecuária.
+      </p>
 
       <div className="mt-6">
         {fazendaIds.length === 0 ? (

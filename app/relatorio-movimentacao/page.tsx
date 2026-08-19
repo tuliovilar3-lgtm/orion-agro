@@ -3,11 +3,12 @@
 import { Fragment, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import Required from '@/components/Required'
 import { formatQuantidade } from '@/lib/format'
 import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import ModuloGate from '@/components/ModuloGate'
+import FiltroMultiSelect from '@/components/relatorios/FiltroMultiSelect'
+import PainelFiltroColapsavel from '@/components/relatorios/PainelFiltroColapsavel'
 import { type TipoMovimentacao, IconeMovimentacao } from '@/lib/movimentacao-icones'
 
 type RelatorioLinha = {
@@ -98,6 +99,52 @@ function linhaEstaZerada(l: RelatorioLinha) {
   )
 }
 
+const TIPO_LABEL: Record<TipoMovimentacao, string> = {
+  NASCIMENTO: 'Nascimento',
+  COMPRA: 'Compra',
+  VENDA_PE: 'Venda em Pé',
+  VENDA_ABATE: 'Venda Abate',
+  MORTE: 'Morte',
+  CONSUMO_DOACAO: 'Consumo/Doação',
+  DESMAME: 'Desmame',
+  MUDANCA_CATEGORIA: 'Mudança de Categoria',
+  TRANSFERENCIA: 'Transferência',
+}
+
+// um lançamento individual dentro do detalhe de uma categoria — data +,
+// pras movimentações externas (compra/venda/transferência/causa da
+// morte/consumo-doação), quem/o quê do outro lado
+type ItemDetalheLancamento = {
+  id: string
+  data: string
+  tipo: TipoMovimentacao
+  quantidade: number
+  quem: string | null
+}
+type DetalheCategoria = { entradas: ItemDetalheLancamento[]; saidas: ItemDetalheLancamento[] }
+
+// linha crua de movimentacoes_rebanho usada só pra montar o detalhe
+// lançamento a lançamento — bem mais enxuta que o SELECT completo de
+// Relatórios de Movimentações (sem valores/pesos, que não aparecem aqui)
+type MovimentacaoDetalheRaw = {
+  id: string
+  data: string
+  tipo: TipoMovimentacao
+  quantidade: number
+  causa_morte: string | null
+  subtipo_consumo_doacao: 'CONSUMO_INTERNO' | 'DOACAO' | null
+  fazenda_id: string | null
+  fazenda_origem_id: string | null
+  fazenda_destino_id: string | null
+  categoria_id: string
+  categoria_destino_id: string | null
+  fazenda_origem: { nome: string } | null
+  fazenda_destino: { nome: string } | null
+  categoria_origem: { nome: string } | null
+  categoria_destino: { nome: string } | null
+  cliente: { nome: string } | null
+}
+
 function IconeCabecalho({ coluna, direcao }: { coluna: ColunaMovimentacao; direcao: 'entrada' | 'saida' }) {
   const cor = direcao === 'entrada' ? 'text-brand-500' : 'text-warning'
   return (
@@ -139,64 +186,87 @@ function CelulaValor({
   )
 }
 
-// painel de detalhe (accordion) — mesma informação já visível nas colunas
-// da linha, só reorganizada em chips maiores com ícone + rótulo, mais
-// legível que a tabela densa quando o usuário quer focar numa categoria
-// só. Cada chip clicável já é o mesmo link de CelulaValor.
-function PainelDetalhe({
-  linha,
-  colunas,
+function EsqueletoDetalhe() {
+  return (
+    <div className="rounded-control border border-border bg-surface p-3.5">
+      <div className="h-3 w-24 animate-pulse rounded bg-bg" />
+      <div className="mt-3 space-y-2">
+        <div className="h-3 w-full animate-pulse rounded bg-bg" />
+        <div className="h-3 w-4/5 animate-pulse rounded bg-bg" />
+      </div>
+    </div>
+  )
+}
+
+// painel de detalhe (accordion) — lançamento a lançamento (data + quem, do
+// tipo aplicável), buscado sob demanda em movimentacoes_rebanho na
+// primeira vez que a categoria é aberta (ver buscarDetalheCategoria) — não
+// só o total por tipo que a própria linha da tabela já mostra.
+function PainelDetalheLancamentos({
+  categoriaId,
+  itens,
   direcao,
   titulo,
+  carregando,
+  erro,
 }: {
-  linha: RelatorioLinha
-  colunas: ColunaMovimentacao[]
+  categoriaId: string
+  itens: ItemDetalheLancamento[]
   direcao: 'entrada' | 'saida'
   titulo: string
+  carregando: boolean
+  erro: boolean
 }) {
-  const itens = colunas.filter((c) => (linha[c.key] as number) > 0)
-  const total = itens.reduce((s, c) => s + (linha[c.key] as number), 0)
+  if (carregando) return <EsqueletoDetalhe />
+
+  const total = itens.reduce((s, it) => s + it.quantidade, 0)
   const corTitulo = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
-  const chipBg = direcao === 'entrada' ? 'bg-brand-100' : 'bg-warning-bg'
-  const chipFg = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
   const iconFg = direcao === 'entrada' ? 'text-brand-500' : 'text-warning'
+  const qtyFg = direcao === 'entrada' ? 'text-brand-700' : 'text-warning'
 
   return (
     <div className="rounded-control border border-border bg-surface p-3.5">
       <h4 className={`text-xs font-extrabold uppercase tracking-wide ${corTitulo}`}>
         {titulo} {itens.length > 0 && `(${direcao === 'entrada' ? '+' : '-'}${total})`}
       </h4>
-      {itens.length === 0 ? (
+      {erro ? (
+        <p className="mt-2 text-xs text-error">Não foi possível carregar o detalhe. Tente reabrir a categoria.</p>
+      ) : itens.length === 0 ? (
         <p className="mt-2 text-xs text-text-muted">
           Nenhuma movimentação de {direcao === 'entrada' ? 'entrada' : 'saída'} no período.
         </p>
       ) : (
-        <div className="mt-2.5 flex flex-wrap gap-2">
-          {itens.map((c) => {
-            const valor = linha[c.key] as number
-            const conteudo = (
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-xs font-bold ${chipBg} ${chipFg}`}
-              >
-                <span className={`h-3.5 w-3.5 ${iconFg}`}>
-                  <IconeMovimentacao tipo={c.icone} />
-                </span>
-                {c.label}: {direcao === 'entrada' ? '+' : '-'}
-                {formatQuantidade(valor)}
+        <div className="mt-2">
+          {itens.map((it) => (
+            <div
+              key={it.id}
+              className="flex items-center gap-2.5 border-b border-dashed border-border py-1.5 text-xs last:border-b-0"
+            >
+              <span className={`h-3.5 w-3.5 flex-none ${iconFg}`}>
+                <IconeMovimentacao tipo={it.tipo} />
               </span>
-            )
-            if (!c.linkavel) return <span key={c.key}>{conteudo}</span>
-            return (
-              <Link
-                key={c.key}
-                href={hrefRelatorio(linha.categoria_id, c.tipoRelatorio)}
-                className="transition-transform hover:-translate-y-0.5"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {conteudo}
-              </Link>
-            )
-          })}
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-text-primary">{TIPO_LABEL[it.tipo]}</div>
+                {it.quem && <div className="truncate text-[11px] text-text-secondary">{it.quem}</div>}
+              </div>
+              <div className="flex-none text-[11px] text-text-muted">{formatarData(it.data)}</div>
+              {it.tipo === 'MUDANCA_CATEGORIA' ? (
+                <span className={`flex-none font-extrabold ${qtyFg}`}>
+                  {direcao === 'entrada' ? '+' : '-'}
+                  {formatQuantidade(it.quantidade)}
+                </span>
+              ) : (
+                <Link
+                  href={hrefRelatorio(categoriaId, it.tipo)}
+                  className={`flex-none font-extrabold hover:underline ${qtyFg}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {direcao === 'entrada' ? '+' : '-'}
+                  {formatQuantidade(it.quantidade)}
+                </Link>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -213,6 +283,8 @@ export default function RelatorioMovimentacaoPage() {
     proprietarios,
     proprietarioIds,
     alternarProprietario,
+    alternarTodosProprietarios,
+    todosProprietariosSelecionados,
     modoFiltro,
     setModoFiltro,
     mes,
@@ -235,11 +307,197 @@ export default function RelatorioMovimentacaoPage() {
   const [erro, setErro] = useState<string | null>(null)
   const [busca, setBusca] = useState('')
   const [categoriaAbertaId, setCategoriaAbertaId] = useState<string | null>(null)
+  // detalhe lançamento a lançamento, buscado sob demanda ao abrir uma
+  // categoria — cacheado por categoria pra não refazer a busca reabrindo
+  // a mesma categoria de novo na mesma visita à página
+  const [detalhesPorCategoria, setDetalhesPorCategoria] = useState<Record<string, DetalheCategoria>>({})
+  const [carregandoDetalheId, setCarregandoDetalheId] = useState<string | null>(null)
+  const [erroDetalheId, setErroDetalheId] = useState<string | null>(null)
 
   const supabase = createClient()
 
   const hoje = new Date().toISOString().slice(0, 10)
   const mesAtual = hoje.slice(0, 7)
+
+  // busca as movimentações reais da categoria (mesma tabela que
+  // Relatórios de Movimentações já consulta) e reparte cada linha em
+  // entrada ou saída daquela categoria especificamente — espelhando a
+  // mesma regra que fn_relatorio_movimentacao_rebanho usa por coluna, já
+  // que a função só devolve totais, nunca o lançamento individual.
+  async function buscarDetalheCategoria(categoriaId: string): Promise<DetalheCategoria> {
+    let query = supabase
+      .from('movimentacoes_rebanho')
+      .select(
+        `id, data, tipo, quantidade, causa_morte, subtipo_consumo_doacao,
+         fazenda_id, fazenda_origem_id, fazenda_destino_id, categoria_id, categoria_destino_id,
+         fazenda_origem:fazendas!fazenda_origem_id(nome),
+         fazenda_destino:fazendas!fazenda_destino_id(nome),
+         categoria_origem:categorias_animal!categoria_id(nome),
+         categoria_destino:categorias_animal!categoria_destino_id(nome),
+         cliente:pessoas!cliente_fornecedor_id(nome)`
+      )
+      .neq('tipo', 'SALDO_INICIAL')
+      .or(`categoria_id.eq.${categoriaId},categoria_destino_id.eq.${categoriaId}`)
+      .or(`fazenda_id.in.(${fazendaIds.join(',')}),fazenda_origem_id.in.(${fazendaIds.join(',')}),fazenda_destino_id.in.(${fazendaIds.join(',')})`)
+      .gte('data', dataInicio)
+      .lte('data', dataFim)
+
+    // mesmo princípio já usado na busca agregada: vazio ou todos marcados
+    // = sem filtro, nunca esconder lançamento sem proprietário atribuído
+    if (proprietarioIds.length > 0 && proprietarioIds.length < proprietarios.length) {
+      query = query.or(`proprietario_id.in.(${proprietarioIds.join(',')}),proprietario_id.is.null`)
+    }
+
+    const { data, error } = await query.order('data', { ascending: true })
+    if (error || !data) throw error || new Error('sem dados')
+
+    const entradas: ItemDetalheLancamento[] = []
+    const saidas: ItemDetalheLancamento[] = []
+
+    for (const m of data as unknown as MovimentacaoDetalheRaw[]) {
+      switch (m.tipo) {
+        case 'NASCIMENTO':
+          if (m.categoria_id === categoriaId) {
+            entradas.push({ id: m.id, data: m.data, tipo: 'NASCIMENTO', quantidade: m.quantidade, quem: null })
+          }
+          break
+        case 'COMPRA':
+          if (m.categoria_id === categoriaId) {
+            entradas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'COMPRA',
+              quantidade: m.quantidade,
+              quem: m.cliente?.nome ? `Fornecedor: ${m.cliente.nome}` : null,
+            })
+          }
+          break
+        case 'MORTE':
+          if (m.categoria_id === categoriaId) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'MORTE',
+              quantidade: m.quantidade,
+              quem: m.causa_morte ? `Causa: ${m.causa_morte}` : null,
+            })
+          }
+          break
+        case 'VENDA_PE':
+        case 'VENDA_ABATE':
+          if (m.categoria_id === categoriaId) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: m.tipo,
+              quantidade: m.quantidade,
+              quem: m.cliente?.nome ? `Cliente: ${m.cliente.nome}` : null,
+            })
+          }
+          break
+        case 'CONSUMO_DOACAO':
+          if (m.categoria_id === categoriaId) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'CONSUMO_DOACAO',
+              quantidade: m.quantidade,
+              quem: m.subtipo_consumo_doacao === 'DOACAO' ? 'Doação' : 'Consumo interno',
+            })
+          }
+          break
+        case 'DESMAME':
+          if (m.categoria_destino_id === categoriaId) {
+            entradas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'DESMAME',
+              quantidade: m.quantidade,
+              quem: m.categoria_origem?.nome ? `De: ${m.categoria_origem.nome}` : null,
+            })
+          }
+          if (m.categoria_id === categoriaId) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'DESMAME',
+              quantidade: m.quantidade,
+              quem: m.categoria_destino?.nome ? `Para: ${m.categoria_destino.nome}` : null,
+            })
+          }
+          break
+        case 'MUDANCA_CATEGORIA':
+          if (m.categoria_destino_id === categoriaId) {
+            entradas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'MUDANCA_CATEGORIA',
+              quantidade: m.quantidade,
+              quem: m.categoria_origem?.nome ? `De: ${m.categoria_origem.nome}` : null,
+            })
+          }
+          if (m.categoria_id === categoriaId) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'MUDANCA_CATEGORIA',
+              quantidade: m.quantidade,
+              quem: m.categoria_destino?.nome ? `Para: ${m.categoria_destino.nome}` : null,
+            })
+          }
+          break
+        case 'TRANSFERENCIA': {
+          if (m.categoria_id !== categoriaId) break
+          // só conta como entrada/saída quando cruza a fronteira das
+          // fazendas selecionadas — mesma regra da RPC
+          const entrouNoGrupo =
+            !!m.fazenda_destino_id &&
+            fazendaIds.includes(m.fazenda_destino_id) &&
+            !(m.fazenda_origem_id && fazendaIds.includes(m.fazenda_origem_id))
+          const saiuDoGrupo =
+            !!m.fazenda_origem_id &&
+            fazendaIds.includes(m.fazenda_origem_id) &&
+            !(m.fazenda_destino_id && fazendaIds.includes(m.fazenda_destino_id))
+          if (entrouNoGrupo) {
+            entradas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'TRANSFERENCIA',
+              quantidade: m.quantidade,
+              quem: m.fazenda_origem?.nome ? `De: ${m.fazenda_origem.nome}` : null,
+            })
+          }
+          if (saiuDoGrupo) {
+            saidas.push({
+              id: m.id,
+              data: m.data,
+              tipo: 'TRANSFERENCIA',
+              quantidade: m.quantidade,
+              quem: m.fazenda_destino?.nome ? `Para: ${m.fazenda_destino.nome}` : null,
+            })
+          }
+          break
+        }
+        default:
+          break
+      }
+    }
+
+    return { entradas, saidas }
+  }
+
+  function alternarCategoriaAberta(categoriaId: string) {
+    const aberta = categoriaAbertaId === categoriaId
+    setCategoriaAbertaId(aberta ? null : categoriaId)
+    if (!aberta && !detalhesPorCategoria[categoriaId]) {
+      setCarregandoDetalheId(categoriaId)
+      setErroDetalheId(null)
+      buscarDetalheCategoria(categoriaId)
+        .then((detalhe) => setDetalhesPorCategoria((prev) => ({ ...prev, [categoriaId]: detalhe })))
+        .catch(() => setErroDetalheId(categoriaId))
+        .finally(() => setCarregandoDetalheId((atual) => (atual === categoriaId ? null : atual)))
+    }
+  }
 
   useEffect(() => {
     if (fazendaIds.length === 0 || periodoInvalido) {
@@ -326,60 +584,54 @@ export default function RelatorioMovimentacaoPage() {
     .sort((a, b) => b.estoque_final - a.estoque_final)
   const totalDistribuicao = distribuicao.reduce((s, l) => s + l.estoque_final, 0)
 
+  const rotuloPeriodoCurto =
+    modoFiltro === 'mes'
+      ? nomeMes(mes)
+      : modoFiltro === 'safra'
+        ? `Safra ${safraAnoInicio}/${safraAnoInicio + 1}`
+        : modoFiltro === 'ano'
+          ? `Ano ${anoCalendarioSelecionado}`
+          : `${formatarData(dataInicio)} – ${formatarData(dataFim)}`
+
+  const resumoFiltro = [
+    `${fazendaIds.length} fazenda${fazendaIds.length === 1 ? '' : 's'}`,
+    proprietarios.length > 1
+      ? todosProprietariosSelecionados
+        ? 'todos os proprietários'
+        : `${proprietarioIds.length} proprietário${proprietarioIds.length === 1 ? '' : 's'}`
+      : null,
+    rotuloPeriodoCurto,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <ModuloGate modulo="resumo_movimentacao">
-      <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
-        <h1 className="text-2xl font-extrabold text-text-primary">Resumo de Movimentação de Rebanho</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          Estoque, entradas e saídas do rebanho por categoria — clique numa categoria pra ver o detalhe, ou num
-          número pra abrir em Relatórios de Movimentações já filtrado.
-        </p>
+      <div className="px-6 py-8 md:px-10">
+        <PainelFiltroColapsavel titulo="Resumo de Movimentação de Rebanho" resumoFiltro={resumoFiltro}>
+          <FiltroMultiSelect
+            label="Fazendas"
+            required
+            itens={fazendas}
+            selecionados={fazendaIds}
+            onToggleItem={alternarFazenda}
+            onToggleTodos={alternarTodas}
+            todosSelecionados={todasSelecionadas}
+            vazioLabel="Nenhuma fazenda cadastrada."
+          />
 
-        <div className="mt-5 flex flex-wrap gap-5 rounded-card border border-border bg-surface p-5">
-          <div>
-            <div className="mb-1.5 flex items-center justify-between gap-4">
-              <label className="text-sm font-medium text-text-secondary">
-                Fazendas
-                <Required />
-              </label>
-              <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={alternarTodas}>
-                {todasSelecionadas ? 'Desmarcar todas' : 'Marcar todas'}
-              </button>
-            </div>
-            <div className="w-56 max-h-32 space-y-1 overflow-y-auto rounded-control border border-border p-2">
-              {fazendas.length === 0 ? (
-                <p className="text-xs text-text-muted">Nenhuma fazenda cadastrada.</p>
-              ) : (
-                fazendas.map((f) => (
-                  <label key={f.id} className="flex items-center gap-2 text-sm text-text-primary">
-                    <input
-                      type="checkbox"
-                      checked={fazendaIds.includes(f.id)}
-                      onChange={() => alternarFazenda(f.id)}
-                    />
-                    {f.nome}
-                  </label>
-                ))
-              )}
-            </div>
-          </div>
           {proprietarios.length > 1 && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietário</label>
-              <div className="w-56 max-h-32 space-y-1 overflow-y-auto rounded-control border border-border p-2">
-                {proprietarios.map((p) => (
-                  <label key={p.id} className="flex items-center gap-2 text-sm text-text-primary">
-                    <input
-                      type="checkbox"
-                      checked={proprietarioIds.includes(p.id)}
-                      onChange={() => alternarProprietario(p.id)}
-                    />
-                    {p.nome}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <FiltroMultiSelect
+              label="Proprietário"
+              itens={proprietarios}
+              selecionados={proprietarioIds}
+              onToggleItem={alternarProprietario}
+              onToggleTodos={alternarTodosProprietarios}
+              todosSelecionados={todosProprietariosSelecionados}
+              pluralMasculino
+            />
           )}
+
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">Período</label>
             <div className="mb-1.5 flex flex-wrap gap-3 text-sm text-text-primary">
@@ -470,7 +722,12 @@ export default function RelatorioMovimentacaoPage() {
             )}
             {periodoInvalido && <p className="mt-1 text-xs text-error">A data inicial não pode ser depois da data final.</p>}
           </div>
-        </div>
+        </PainelFiltroColapsavel>
+
+        <p className="mt-4 text-sm text-text-secondary">
+          Estoque, entradas e saídas do rebanho por categoria — clique numa categoria pra ver o detalhe, ou num
+          número pra abrir em Relatórios de Movimentações já filtrado.
+        </p>
 
         {fazendaIds.length === 0 ? (
           <p className="mt-6 text-text-secondary">Selecione ao menos uma fazenda para ver o relatório.</p>
@@ -671,7 +928,7 @@ export default function RelatorioMovimentacaoPage() {
                         return (
                           <Fragment key={l.categoria_id}>
                             <tr
-                              onClick={() => setCategoriaAbertaId(aberta ? null : l.categoria_id)}
+                              onClick={() => alternarCategoriaAberta(l.categoria_id)}
                               className={`cursor-pointer border-b border-border transition-colors hover:bg-bg ${aberta ? 'bg-brand-100 hover:bg-brand-100' : ''}`}
                             >
                               <td className="p-2 text-left font-semibold text-text-primary">
@@ -718,8 +975,22 @@ export default function RelatorioMovimentacaoPage() {
                               <tr className="border-b border-border bg-bg">
                                 <td colSpan={2 + COLUNAS_ENTRADA.length + COLUNAS_SAIDA.length + 2} className="p-4">
                                   <div className="grid gap-3 md:grid-cols-2">
-                                    <PainelDetalhe linha={l} colunas={COLUNAS_ENTRADA} direcao="entrada" titulo="Entradas" />
-                                    <PainelDetalhe linha={l} colunas={COLUNAS_SAIDA} direcao="saida" titulo="Saídas" />
+                                    <PainelDetalheLancamentos
+                                      categoriaId={l.categoria_id}
+                                      itens={detalhesPorCategoria[l.categoria_id]?.entradas || []}
+                                      direcao="entrada"
+                                      titulo="Entradas"
+                                      carregando={carregandoDetalheId === l.categoria_id}
+                                      erro={erroDetalheId === l.categoria_id}
+                                    />
+                                    <PainelDetalheLancamentos
+                                      categoriaId={l.categoria_id}
+                                      itens={detalhesPorCategoria[l.categoria_id]?.saidas || []}
+                                      direcao="saida"
+                                      titulo="Saídas"
+                                      carregando={carregandoDetalheId === l.categoria_id}
+                                      erro={erroDetalheId === l.categoria_id}
+                                    />
                                   </div>
                                 </td>
                               </tr>
