@@ -12,11 +12,12 @@ type Fazenda = { id: string; nome: string; saldo_inicial_confirmado: boolean }
 type Categoria = { id: string; nome: string }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
+type Proprietario = { id: string; nome: string }
 
-type LinhaPasto = { categoriaId: string; quantidade: string; pesoMedio: string }
+type LinhaPasto = { categoriaId: string; quantidade: string; pesoMedio: string; proprietarioId: string }
 
 function novaLinhaPasto(): LinhaPasto {
-  return { categoriaId: '', quantidade: '', pesoMedio: '' }
+  return { categoriaId: '', quantidade: '', pesoMedio: '', proprietarioId: '' }
 }
 
 type Movimentacao = {
@@ -32,6 +33,8 @@ type Movimentacao = {
   pasto_destino_id: string
   pasto_destino: { nome: string } | null
   peso_medio_kg: number | null
+  proprietario_id: string | null
+  proprietario: { nome: string } | null
   observacao: string | null
   grupo_lancamento_id: string | null
 }
@@ -59,6 +62,7 @@ export default function ControlePastoPage() {
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
   const [modulos, setModulos] = useState<Modulo[]>([])
+  const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
   const [controlaPasto, setControlaPasto] = useState(false)
   const [movimentacoes, setMovimentacoes] = useState<Movimentacao[]>([])
   const [loading, setLoading] = useState(true)
@@ -100,8 +104,24 @@ export default function ControlePastoPage() {
   const fazendaSelecionada = fazendas.find((f) => f.id === fazendaId)
   const bloqueadoPorSaldoInicial = !estaEditando && !!fazendaSelecionada && !fazendaSelecionada.saldo_inicial_confirmado
 
+  // proprietário do lote de gado: lista global (mesmo princípio já usado
+  // em Movimentações e Saldo Inicial) — com 0 cadastrado, bloqueia
+  // (bloqueadoPorSemProprietario abaixo); com 1, atribuído sozinho sem
+  // seletor; só com 2+ o seletor aparece por linha. Necessário mesmo
+  // pra Mudança de Pasto (que não muda o total da fazenda) porque, se um
+  // pasto tem cabeças de mais de um dono, o lançamento precisa dizer de
+  // qual dono são as cabeças que estão mudando de pasto — ver
+  // fn_saldo_categoria_pasto_proprietario (migração 051).
+  const mostrarSeletorProprietario = proprietarios.length > 1
+  const bloqueadoPorSemProprietario = !estaEditando && proprietarios.length === 0
+
+  function resolverProprietarioId(escolhidoId: string) {
+    if (proprietarios.length === 1) return proprietarios[0].id
+    return escolhidoId || null
+  }
+
   async function carregarAuxiliares() {
-    const [{ data: f }, { data: c }, { data: p }, { data: mods }, { data: cfg }] = await Promise.all([
+    const [{ data: f }, { data: c }, { data: p }, { data: mods }, { data: cfg }, { data: prop }] = await Promise.all([
       supabase.from('fazendas').select('id, nome, saldo_inicial_confirmado').eq('ativo', true).order('nome'),
       supabase.from('categorias_animal').select('id, nome').eq('ativa', true).order('nome'),
       supabase
@@ -111,12 +131,19 @@ export default function ControlePastoPage() {
         .order('nome'),
       supabase.from('modulos').select('id, fazenda_id, nome, ativo, ordem').eq('ativo', true).order('ordem'),
       supabase.from('configuracoes').select('controla_pasto').single(),
+      supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
     ])
     setFazendas(f || [])
     setCategorias(c || [])
     setPastos((p as unknown as Pasto[]) || [])
     setModulos(mods || [])
     setControlaPasto(cfg?.controla_pasto ?? false)
+    setProprietarios(
+      ((prop || []) as any[])
+        .map((r) => r.pessoa)
+        .filter(Boolean)
+        .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
+    )
   }
 
   async function carregarMovimentacoes() {
@@ -125,11 +152,12 @@ export default function ControlePastoPage() {
       .from('movimentacoes_rebanho')
       .select(
         `
-        id, data, quantidade, categoria_id, fazenda_id, pasto_id, pasto_destino_id, peso_medio_kg, observacao, grupo_lancamento_id,
+        id, data, quantidade, categoria_id, fazenda_id, pasto_id, pasto_destino_id, peso_medio_kg, proprietario_id, observacao, grupo_lancamento_id,
         categoria:categorias_animal!categoria_id(nome),
         fazenda:fazendas!fazenda_id(nome),
         pasto:pastos!pasto_id(nome),
-        pasto_destino:pastos!pasto_destino_id(nome)
+        pasto_destino:pastos!pasto_destino_id(nome),
+        proprietario:pessoas!proprietario_id(nome)
       `
       )
       .eq('tipo', 'MUDANCA_PASTO')
@@ -275,6 +303,7 @@ export default function ControlePastoPage() {
         categoriaId: r.categoria_id,
         quantidade: String(r.quantidade),
         pesoMedio: r.peso_medio_kg != null ? String(r.peso_medio_kg) : '',
+        proprietarioId: r.proprietario_id || '',
       }))
     )
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -318,6 +347,7 @@ export default function ControlePastoPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!data || !fazendaId) return
+    if (bloqueadoPorSemProprietario) return
 
     if (bloqueadoPorPastoInsuficiente) {
       alert('Essa fazenda só tem um pasto ativo — não há como mudar de pasto.')
@@ -339,6 +369,11 @@ export default function ControlePastoPage() {
     }
     const linhasValidas = linhas.filter((l) => l.categoriaId && l.quantidade)
     if (linhasValidas.length === 0) return
+
+    if (mostrarSeletorProprietario && linhasValidas.some((l) => !l.proprietarioId)) {
+      alert('Selecione o proprietário em todas as categorias.')
+      return
+    }
 
     for (let i = 0; i < linhas.length; i++) {
       const linha = linhas[i]
@@ -378,6 +413,7 @@ export default function ControlePastoPage() {
       subtipo_consumo_doacao: null,
       pasto_id: pastoId,
       pasto_destino_id: pastoDestinoId,
+      proprietario_id: resolverProprietarioId(linha.proprietarioId),
       observacao: observacao.trim() || null,
       grupo_lancamento_id: grupoId,
     }))
@@ -528,6 +564,16 @@ export default function ControlePastoPage() {
           <div className="rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
             Essa fazenda só tem um pasto ativo — não há como mudar de pasto. Ligue o controle de rebanho por pasto e/ou
             cadastre outro pasto em "Fazendas" primeiro.
+          </div>
+        )}
+
+        {bloqueadoPorSemProprietario && (
+          <div className="rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
+            Nenhum proprietário cadastrado ainda — todo animal precisa ter um dono atribuído. Cadastre pelo menos
+            um proprietário antes de lançar qualquer movimentação.{' '}
+            <a href="/pessoas" className="font-medium underline">
+              Ir para Pessoas e Empresas
+            </a>
           </div>
         )}
 
@@ -705,6 +751,26 @@ export default function ControlePastoPage() {
                         Se não informado, o lote continua com o último peso conhecido.
                       </p>
                     </div>
+                    {mostrarSeletorProprietario && (
+                      <div className="mt-2">
+                        <label className="mb-1 block text-xs text-text-secondary">
+                          Proprietário
+                          <Required />
+                        </label>
+                        <select
+                          className="w-full rounded-control border border-border bg-surface px-2 py-1 text-sm text-text-primary outline-none focus:border-brand-500"
+                          value={linha.proprietarioId}
+                          onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
+                        >
+                          <option value="">Selecione...</option>
+                          {proprietarios.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.nome}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -728,7 +794,7 @@ export default function ControlePastoPage() {
         <div className="flex gap-2">
           <button
             type="submit"
-            disabled={salvando || bloqueadoPorSaldoInicial || bloqueadoPorPastoInsuficiente}
+            disabled={salvando || bloqueadoPorSaldoInicial || bloqueadoPorPastoInsuficiente || bloqueadoPorSemProprietario}
             className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
           >
             {salvando ? 'Salvando...' : estaEditando ? 'Salvar edição' : 'Salvar mudança de pasto'}
@@ -789,6 +855,7 @@ export default function ControlePastoPage() {
                       <span className="font-medium text-text-primary">{m.categoria?.nome ?? '—'}</span> —{' '}
                       {formatQuantidade(m.quantidade)} cab.
                       {m.peso_medio_kg != null ? ` · ${formatPeso(m.peso_medio_kg)} kg/cab` : ''}
+                      {m.proprietario ? ` · propriet.: ${m.proprietario.nome}` : ''}
                     </li>
                   ))}
                 </ul>

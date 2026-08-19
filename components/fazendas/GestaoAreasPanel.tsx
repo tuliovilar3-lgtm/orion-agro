@@ -76,6 +76,15 @@ function IconEditarContorno() {
   )
 }
 
+function IconMoverModulo() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+      <path d="M9 13h6M12.5 10.5 15 13l-2.5 2.5" />
+    </svg>
+  )
+}
+
 export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [modulos, setModulos] = useState<Modulo[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
@@ -88,6 +97,11 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [criandoPastoModuloId, setCriandoPastoModuloId] = useState<string | null>(null)
   const [confirmandoExclusaoModuloId, setConfirmandoExclusaoModuloId] = useState<string | null>(null)
   const [confirmandoExclusaoPastoId, setConfirmandoExclusaoPastoId] = useState<string | null>(null)
+  // popover discreto pra mover pasto de módulo — substitui o <select>
+  // que antes ficava sempre visível na linha do nome, ocupando espaço à
+  // toa na maioria dos pastos (que nunca precisam mudar de módulo)
+  const [moduloPickerPastoId, setModuloPickerPastoId] = useState<string | null>(null)
+  const moduloPickerRef = useRef<HTMLDivElement>(null)
 
   const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
   const [importandoContornoFazenda, setImportandoContornoFazenda] = useState(false)
@@ -140,8 +154,21 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     setDesenhoPendente(null)
     setRevisaoImportacao(null)
     setPastoEmEdicaoId(null)
+    setModuloPickerPastoId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
+
+  // fecha o popover de mover módulo ao clicar fora dele
+  useEffect(() => {
+    if (!moduloPickerPastoId) return
+    function onClickFora(e: MouseEvent) {
+      if (moduloPickerRef.current && !moduloPickerRef.current.contains(e.target as Node)) {
+        setModuloPickerPastoId(null)
+      }
+    }
+    document.addEventListener('mousedown', onClickFora)
+    return () => document.removeEventListener('mousedown', onClickFora)
+  }, [moduloPickerPastoId])
 
   async function handleCriarModulo() {
     if (!novoModuloNome.trim()) return
@@ -240,6 +267,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   }
 
   async function handleMoverPastoModulo(p: Pasto, novoModuloId: string) {
+    setModuloPickerPastoId(null)
     if (!novoModuloId || novoModuloId === p.modulo_id) return
     const { error } = await supabase.from('pastos').update({ modulo_id: novoModuloId }).eq('id', p.id)
     if (error) {
@@ -252,6 +280,32 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   async function handleAlternarAtivoPasto(p: Pasto) {
     const ativosDoModulo = pastos.filter((x) => x.modulo_id === p.modulo_id && x.ativo)
     if (p.ativo && ativosDoModulo.length <= 1) return
+
+    // inativar só é permitido se o pasto não tiver gado nele agora —
+    // mesma fotografia de hoje já usada em fn_relatorio_rebanho_por_pasto
+    // (Rebanho por pasto), sem função SQL nova
+    if (p.ativo) {
+      setProcessandoPastoId(p.id)
+      const hoje = new Date().toISOString().slice(0, 10)
+      const { data: linhas, error: erroSaldo } = await supabase.rpc('fn_relatorio_rebanho_por_pasto', {
+        p_fazenda_id: fazendaId,
+        p_data: hoje,
+      })
+      if (erroSaldo) {
+        alert('Erro ao checar o rebanho do pasto: ' + erroSaldo.message)
+        setProcessandoPastoId(null)
+        return
+      }
+      const temGado = ((linhas || []) as { pasto_id: string; quantidade: number }[]).some(
+        (l) => l.pasto_id === p.id && l.quantidade > 0
+      )
+      if (temGado) {
+        alert('Esse pasto ainda tem cabeças de gado nele hoje — mova o rebanho pra outro pasto antes de inativar.')
+        setProcessandoPastoId(null)
+        return
+      }
+    }
+
     setProcessandoPastoId(p.id)
     const { error } = await supabase.from('pastos').update({ ativo: !p.ativo }).eq('id', p.id)
     if (error) {
@@ -814,20 +868,6 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                               defaultValue={p.nome}
                               onBlur={(e) => handleRenomearPasto(p, e.target.value)}
                             />
-                            {!p.sistema && modulos.length > 1 && (
-                              <select
-                                title="Mover pra outro módulo"
-                                className={`shrink-0 ${inputClass}`}
-                                value={p.modulo_id}
-                                onChange={(e) => handleMoverPastoModulo(p, e.target.value)}
-                              >
-                                {modulos.map((mod) => (
-                                  <option key={mod.id} value={mod.id}>
-                                    {mod.nome}
-                                  </option>
-                                ))}
-                              </select>
-                            )}
                           </div>
                         </td>
                         <td className="border-b border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
@@ -878,6 +918,41 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                                 >
                                   <IconEditarContorno />
                                 </button>
+                              )}
+                              {!p.sistema && modulos.length > 1 && (
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    title="Mover pra outro módulo"
+                                    className="hover:text-brand-500"
+                                    onClick={() =>
+                                      setModuloPickerPastoId(moduloPickerPastoId === p.id ? null : p.id)
+                                    }
+                                  >
+                                    <IconMoverModulo />
+                                  </button>
+                                  {moduloPickerPastoId === p.id && (
+                                    <div
+                                      ref={moduloPickerRef}
+                                      className="absolute right-0 z-30 mt-1 w-40 rounded-control border border-border bg-surface p-1 text-left shadow-lg"
+                                    >
+                                      {modulos.map((mod) => (
+                                        <button
+                                          key={mod.id}
+                                          type="button"
+                                          className={`block w-full rounded px-2 py-1 text-left text-xs ${
+                                            mod.id === p.modulo_id
+                                              ? 'bg-brand-100 font-semibold text-brand-700'
+                                              : 'text-text-primary hover:bg-bg'
+                                          }`}
+                                          onClick={() => handleMoverPastoModulo(p, mod.id)}
+                                        >
+                                          {mod.nome}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               )}
                               <button
                                 type="button"

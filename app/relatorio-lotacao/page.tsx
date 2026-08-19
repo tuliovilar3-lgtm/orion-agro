@@ -527,9 +527,15 @@ export default function RelatorioLotacaoPage() {
                         maxBarSize={40}
                         radius={[3, 3, 0, 0]}
                         isAnimationActive={false}
-                        activeBar={{ stroke: 'none' }}
-                        onMouseEnter={() => setDestaque('rebanho_medio')}
-                        onClick={() => setDestaque('rebanho_medio')}
+                        activeBar={{ stroke: 'none', fill: '#E4F3F0' }}
+                        // sem onMouseEnter/onClick de propósito: a barra não
+                        // reage ao cursor. Passar o mouse pelas barras é o
+                        // movimento mais comum ao explorar o gráfico, e
+                        // destacar "Rebanho Médio" a cada passada apagava
+                        // (strokeOpacity 0.15) todas as linhas bem no meio
+                        // da área da barra — lendo visualmente como se a
+                        // linha tivesse ido pra trás da barra. Destacar essa
+                        // série continua possível pela legenda (abaixo).
                       >
                         <LabelList
                           dataKey="rebanho_medio"

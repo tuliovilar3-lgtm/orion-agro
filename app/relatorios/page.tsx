@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { anoInicioSafraAtual, anoCalendarioAtual, opcoesSafra, opcoesAno } from '@/lib/periodo'
@@ -53,6 +53,94 @@ function nomeMesLongo(anoMes: string) {
   return data.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 }
 
+// filtro de linha única (mesmo formato pros 3 filtros de cima — Fazendas,
+// Categoria, Proprietário) que abre um popover de checkboxes pra marcar/
+// desmarcar, em vez da lista sempre expandida que cada um tinha antes.
+function FiltroMultiSelect({
+  label,
+  required,
+  itens,
+  selecionados,
+  onToggleItem,
+  onToggleTodos,
+  todosSelecionados,
+  vazioLabel,
+}: {
+  label: string
+  required?: boolean
+  itens: { id: string; nome: string }[]
+  selecionados: string[]
+  onToggleItem: (id: string) => void
+  onToggleTodos: () => void
+  todosSelecionados: boolean
+  vazioLabel?: string
+}) {
+  const [aberto, setAberto] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!aberto) return
+    function onClickFora(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setAberto(false)
+    }
+    document.addEventListener('mousedown', onClickFora)
+    return () => document.removeEventListener('mousedown', onClickFora)
+  }, [aberto])
+
+  const resumo =
+    itens.length === 0
+      ? vazioLabel || 'Nenhuma opção'
+      : todosSelecionados
+        ? `Todas (${itens.length})`
+        : selecionados.length === 0
+          ? 'Nenhuma selecionada'
+          : `${selecionados.length} de ${itens.length} selecionada${selecionados.length > 1 ? 's' : ''}`
+
+  return (
+    <div ref={ref} className="relative">
+      <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+        {label}
+        {required && <Required />}
+      </label>
+      <button
+        type="button"
+        onClick={() => setAberto((v) => !v)}
+        className="flex w-56 items-center justify-between gap-2 rounded-control border border-border bg-surface px-3 py-2 text-left text-sm text-text-primary outline-none focus:border-brand-500"
+      >
+        <span className="truncate">{resumo}</span>
+        <span className="text-text-muted">{aberto ? '▲' : '▼'}</span>
+      </button>
+      {aberto && (
+        <div className="absolute z-30 mt-1 w-64 rounded-control border border-border bg-surface p-2 shadow-lg">
+          <div className="mb-1.5 flex items-center justify-between border-b border-border pb-1.5">
+            <span className="text-xs text-text-muted">
+              {selecionados.length} de {itens.length}
+            </span>
+            <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={onToggleTodos}>
+              {todosSelecionados ? 'Desmarcar todas' : 'Marcar todas'}
+            </button>
+          </div>
+          <div className="max-h-48 space-y-0.5 overflow-y-auto">
+            {itens.length === 0 ? (
+              <p className="px-1 py-1 text-xs text-text-muted">{vazioLabel || 'Nenhuma opção cadastrada.'}</p>
+            ) : (
+              itens.map((it) => (
+                <label
+                  key={it.id}
+                  className="flex items-center gap-2 rounded px-1 py-1 text-sm text-text-primary hover:bg-bg"
+                >
+                  <input type="checkbox" checked={selecionados.includes(it.id)} onChange={() => onToggleItem(it.id)} />
+                  {it.nome}
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function RelatoriosPage() {
   const {
     fazendas,
@@ -63,6 +151,8 @@ export default function RelatoriosPage() {
     proprietarios,
     proprietarioIds,
     alternarProprietario,
+    alternarTodosProprietarios,
+    todosProprietariosSelecionados,
     modoFiltro,
     setModoFiltro,
     mes,
@@ -81,8 +171,16 @@ export default function RelatoriosPage() {
   } = useFiltroGlobal()
 
   const [categorias, setCategorias] = useState<Categoria[]>([])
-  const [categoriaId, setCategoriaId] = useState('')
+  const [categoriaIds, setCategoriaIds] = useState<string[]>([])
   const [tipoSelecionado, setTipoSelecionado] = useState<TipoRelatorio>('NASCIMENTO')
+
+  function alternarCategoria(id: string) {
+    setCategoriaIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]))
+  }
+  function alternarTodasCategorias() {
+    setCategoriaIds((prev) => (prev.length === categorias.length ? [] : categorias.map((c) => c.id)))
+  }
+  const todasCategoriasSelecionadas = categorias.length > 0 && categoriaIds.length === categorias.length
 
   const [linhas, setLinhas] = useState<MovimentacaoRelatorio[]>([])
   const [loading, setLoading] = useState(false)
@@ -94,17 +192,31 @@ export default function RelatoriosPage() {
 
   useEffect(() => {
     // categorias sem filtro de ativa — o relatório precisa continuar
-    // achando histórico de categoria já inativada
+    // achando histórico de categoria já inativada. Todas selecionadas por
+    // padrão ao carregar (mesmo princípio de fazendaIds/proprietarioIds).
     supabase
       .from('categorias_animal')
       .select('id, nome')
       .order('nome')
-      .then(({ data }) => setCategorias(data || []))
+      .then(({ data }) => {
+        const lista = data || []
+        setCategorias(lista)
+        setCategoriaIds(lista.map((c) => c.id))
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (fazendaIds.length === 0 || periodoInvalido) {
+      setLinhas([])
+      return
+    }
+    // categoria_id nunca é nulo numa movimentação — diferente de
+    // proprietário, "nenhuma categoria marcada" aqui só pode significar
+    // "não mostrar nada", nunca "sem filtro" (só chega nesse estado se o
+    // usuário desmarcar tudo de propósito, já que o padrão é todas
+    // marcadas assim que a lista carrega)
+    if (categorias.length > 0 && categoriaIds.length === 0) {
       setLinhas([])
       return
     }
@@ -124,14 +236,21 @@ export default function RelatoriosPage() {
         ? query.or(`fazenda_origem_id.in.(${fazendaIds.join(',')}),fazenda_destino_id.in.(${fazendaIds.join(',')})`)
         : query.in('fazenda_id', fazendaIds)
 
-    if (categoriaId) {
-      query = query.or(`categoria_id.eq.${categoriaId},categoria_destino_id.eq.${categoriaId}`)
+    // todas marcadas = sem filtro; só filtra de verdade numa seleção
+    // parcial deliberada
+    if (categorias.length > 0 && categoriaIds.length < categorias.length) {
+      query = query.or(`categoria_id.in.(${categoriaIds.join(',')}),categoria_destino_id.in.(${categoriaIds.join(',')})`)
     }
-    // vazio OU todos marcados = sem filtro (nunca esconder lançamentos sem
-    // proprietário atribuído, a maioria); só filtra de verdade quando é
-    // uma seleção parcial deliberada
-    if (proprietarioIds.length > 0 && proprietarioIds.length < proprietarios.length) {
-      query = query.in('proprietario_id', proprietarioIds)
+    // todas marcadas = sem filtro. Numa seleção parcial (inclusive
+    // "nenhuma marcada"), lançamentos sem proprietário atribuído nunca
+    // somem — eles não pertencem a nenhum dos proprietários
+    // desmarcados, então ficar de fora da lista de exclusão é o
+    // comportamento certo, não uma falha do filtro.
+    if (proprietarios.length > 0 && proprietarioIds.length < proprietarios.length) {
+      query =
+        proprietarioIds.length > 0
+          ? query.or(`proprietario_id.in.(${proprietarioIds.join(',')}),proprietario_id.is.null`)
+          : query.is('proprietario_id', null)
     }
 
     query.order('data', { ascending: true }).then(({ data, error }) => {
@@ -148,7 +267,7 @@ export default function RelatoriosPage() {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tipoSelecionado, fazendaIds, categoriaId, proprietarioIds, dataInicio, dataFim])
+  }, [tipoSelecionado, fazendaIds, categorias, categoriaIds, proprietarioIds, dataInicio, dataFim])
 
   const rotuloPeriodo =
     modoFiltro === 'mes'
@@ -168,8 +287,11 @@ export default function RelatoriosPage() {
         fazenda e categoria.
       </p>
 
-      {/* abas por tipo de movimentação */}
-      <div className="mt-6 flex flex-wrap gap-1.5 border-b border-border pb-0">
+      {/* abas por tipo de movimentação — sticky ao rolar, mesmo padrão já
+          usado na barra de tipo colapsada de Lançamento de Movimentações
+          (top-14 no mobile pra não sobrepor a topbar fixa de 56px da
+          Sidebar, top-0 no desktop, que não tem topbar) */}
+      <div className="sticky top-14 z-20 -mx-6 flex flex-wrap gap-1.5 border-b border-border bg-bg px-6 pb-0 pt-2 md:top-0 md:mx-0 md:px-0 md:pt-0">
         {TIPOS_RELATORIO.map((t) => {
           const ativo = t.tipo === tipoSelecionado
           return (
@@ -191,58 +313,36 @@ export default function RelatoriosPage() {
 
       {/* filtros compartilhados */}
       <div className="mt-5 flex flex-wrap gap-5 rounded-card border border-border bg-surface p-5">
-        <div>
-          <div className="mb-1.5 flex items-center justify-between gap-4">
-            <label className="text-sm font-medium text-text-secondary">
-              Fazendas
-              <Required />
-            </label>
-            <button type="button" className="text-xs font-medium text-brand-500 underline" onClick={alternarTodas}>
-              {todasSelecionadas ? 'Desmarcar todas' : 'Marcar todas'}
-            </button>
-          </div>
-          <div className="max-h-32 w-56 space-y-1 overflow-y-auto rounded-control border border-border p-2">
-            {fazendas.length === 0 ? (
-              <p className="text-xs text-text-muted">Nenhuma fazenda cadastrada.</p>
-            ) : (
-              fazendas.map((f) => (
-                <label key={f.id} className="flex items-center gap-2 text-sm text-text-primary">
-                  <input type="checkbox" checked={fazendaIds.includes(f.id)} onChange={() => alternarFazenda(f.id)} />
-                  {f.nome}
-                </label>
-              ))
-            )}
-          </div>
-        </div>
+        <FiltroMultiSelect
+          label="Fazendas"
+          required
+          itens={fazendas}
+          selecionados={fazendaIds}
+          onToggleItem={alternarFazenda}
+          onToggleTodos={alternarTodas}
+          todosSelecionados={todasSelecionadas}
+          vazioLabel="Nenhuma fazenda cadastrada."
+        />
 
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-text-secondary">Categoria</label>
-          <select
-            className="rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-            value={categoriaId}
-            onChange={(e) => setCategoriaId(e.target.value)}
-          >
-            <option value="">Todas</option>
-            {categorias.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.nome}
-              </option>
-            ))}
-          </select>
-        </div>
+        <FiltroMultiSelect
+          label="Categoria"
+          itens={categorias}
+          selecionados={categoriaIds}
+          onToggleItem={alternarCategoria}
+          onToggleTodos={alternarTodasCategorias}
+          todosSelecionados={todasCategoriasSelecionadas}
+          vazioLabel="Nenhuma categoria cadastrada."
+        />
 
         {proprietarios.length > 1 && (
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text-secondary">Proprietário</label>
-            <div className="max-h-32 w-48 space-y-1 overflow-y-auto rounded-control border border-border p-2">
-              {proprietarios.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 text-sm text-text-primary">
-                  <input type="checkbox" checked={proprietarioIds.includes(p.id)} onChange={() => alternarProprietario(p.id)} />
-                  {p.nome}
-                </label>
-              ))}
-            </div>
-          </div>
+          <FiltroMultiSelect
+            label="Proprietário"
+            itens={proprietarios}
+            selecionados={proprietarioIds}
+            onToggleItem={alternarProprietario}
+            onToggleTodos={alternarTodosProprietarios}
+            todosSelecionados={todosProprietariosSelecionados}
+          />
         )}
 
         <div>

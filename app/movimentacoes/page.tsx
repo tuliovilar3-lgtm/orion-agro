@@ -583,11 +583,19 @@ export default function MovimentacoesPage() {
   // proprietário do lote de gado: lista global (qualquer pessoa com
   // papel PROPRIETARIO, sem vínculo por fazenda — o gado pode ser
   // transferido entre fazendas, então amarrar por fazenda só criaria
-  // fricção). Seletor só aparece quando há 2+ proprietários cadastrados
-  // no sistema; quando escondido, o campo fica vazio (proprietário é
-  // sempre opcional).
+  // fricção). Com 0 cadastrado, nenhuma movimentação pode ser lançada
+  // (ver bloqueadoPorSemProprietario abaixo — todo animal precisa ter
+  // um dono). Com exatamente 1, nenhum seletor aparece e esse único
+  // proprietário é atribuído sozinho (ver resolverProprietarioId). Só
+  // com 2+ o seletor aparece, e nesse caso a escolha é obrigatória —
+  // sem isso o lote ficaria com dono ambíguo.
   const proprietariosDisponiveis = proprietarios
   const mostrarSeletorProprietario = proprietariosDisponiveis.length > 1
+
+  function resolverProprietarioId(escolhidoId: string) {
+    if (proprietariosDisponiveis.length === 1) return proprietariosDisponiveis[0].id
+    return escolhidoId || null
+  }
 
   // nenhuma movimentação pode ser lançada numa fazenda que ainda não
   // teve o saldo inicial preenchido e confirmado — evita erro de conta
@@ -600,6 +608,12 @@ export default function MovimentacoesPage() {
     .map((id) => fazendas.find((f) => f.id === id))
     .filter((f): f is Fazenda => !!f && !f.saldo_inicial_confirmado)
   const bloqueadoPorSaldoInicial = !editandoId && fazendasSemSaldoInicial.length > 0
+
+  // nenhuma movimentação pode ser lançada sem pelo menos 1 proprietário
+  // cadastrado no sistema — sem isso, todo animal entraria sem
+  // informação de dono. Mesmo princípio de bloqueadoPorSaldoInicial:
+  // só trava lançamentos novos, nunca a edição de um já existente.
+  const bloqueadoPorSemProprietario = !editandoId && proprietariosDisponiveis.length === 0
 
   // nascimento e desmame só partem de bezerro (macho ou fêmea) — as
   // demais categorias (jovens, adultos) não são opções válidas aqui.
@@ -1507,6 +1521,7 @@ export default function MovimentacoesPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (bloqueadoPorSemProprietario) return
     // Desmame tem estrutura e handler próprios (linhasDesmame) — checa
     // antes de isLoteCategoria porque editandoGrupoId (reaproveitado
     // pro Desmame) faria isLoteCategoria dar true mesmo com tipo DESMAME
@@ -1647,7 +1662,15 @@ export default function MovimentacoesPage() {
       payload.safra_nascimento_ano_inicio = null
     }
 
-    payload.proprietario_id = mostrarSeletorProprietario && proprietarioId ? proprietarioId : null
+    // proprietário: obrigatório assim que o seletor aparece (2+
+    // cadastrados) — sem isso o lote ficaria com dono ambíguo. Mudança
+    // de Categoria nunca usa esse campo (ver resolverProprietarioId),
+    // Desmame já retornou mais cedo com seu próprio handler.
+    if (mostrarSeletorProprietario && !isMudancaCategoria && !proprietarioId) {
+      alert('Selecione o proprietário do lote.')
+      return
+    }
+    payload.proprietario_id = isMudancaCategoria ? null : resolverProprietarioId(proprietarioId)
 
     if (editandoId) {
       setSalvando(true)
@@ -1822,6 +1845,12 @@ export default function MovimentacoesPage() {
       }
       if (linhasValidas.some((l) => !l.valorPreco)) return
     }
+    // proprietário obrigatório em toda linha assim que o seletor aparece
+    // (2+ cadastrados) — sem isso o lote ficaria com dono ambíguo
+    if (mostrarSeletorProprietario && linhasValidas.some((l) => !l.proprietarioId)) {
+      alert('Selecione o proprietário em todas as categorias do lote.')
+      return
+    }
 
     // checagem de saldo é best-effort aqui (preview) — quem garante mesmo
     // é a trigger fn_validar_saldo_categoria no banco
@@ -1865,7 +1894,7 @@ export default function MovimentacoesPage() {
         pasto_id: pastoId,
         pasto_destino_id: isTransferencia ? pastoDestinoId : null,
         safra_nascimento_ano_inicio: linhaEhBezerro ? safraNascLinha : null,
-        proprietario_id: mostrarSeletorProprietario && linha.proprietarioId ? linha.proprietarioId : null,
+        proprietario_id: resolverProprietarioId(linha.proprietarioId),
         grupo_lancamento_id: grupoId,
       }
       CAMPOS_PRECO.forEach((c) => {
@@ -2300,7 +2329,10 @@ export default function MovimentacoesPage() {
                               setTipoConfirmado(true)
                             }}
                             className={`flex items-center gap-2.5 rounded-control border p-2.5 text-left transition-colors ${
-                              tipo === t
+                              // só destaca depois de tipoConfirmado — antes
+                              // disso `tipo` é só o valor default do state,
+                              // nunca uma escolha real do usuário
+                              tipoConfirmado && tipo === t
                                 ? 'border-brand-500 bg-brand-100/40 ring-2 ring-brand-100'
                                 : 'border-border hover:border-text-muted'
                             }`}
@@ -2319,6 +2351,14 @@ export default function MovimentacoesPage() {
             </div>
           )}
 
+          {/* passos 2-4 só aparecem depois que um tipo é escolhido de
+              propósito (tipoConfirmado) — evita mostrar o formulário
+              inteiro em cima de um tipo "default" que o usuário nunca
+              escolheu conscientemente (mesmo motivo já documentado pra
+              não destacar visualmente nenhum botão do passo 1 até esse
+              ponto) */}
+          {tipoConfirmado && (
+            <>
           {/* PASSO 2 — QUANDO E ONDE */}
           <div className="mt-4 rounded-card border border-border bg-surface">
             <div className="flex items-start gap-3 border-b border-border p-5">
@@ -2438,9 +2478,12 @@ export default function MovimentacoesPage() {
                   pertencer a donos diferentes */}
               {mostrarSeletorProprietario && !isMudancaCategoria && !isDesmame && !isLoteCategoria && (
                 <div>
-                  <label className={labelClass}>Proprietário do lote</label>
+                  <label className={labelClass}>
+                    Proprietário do lote
+                    <Required />
+                  </label>
                   <select className={inputClass} value={proprietarioId} onChange={(e) => setProprietarioId(e.target.value)}>
-                    <option value="">Sem proprietário atribuído</option>
+                    <option value="">Selecione...</option>
                     {proprietariosDisponiveis.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.nome}
@@ -2537,6 +2580,16 @@ export default function MovimentacoesPage() {
                   Isso precisa ser feito antes de lançar qualquer outra movimentação.{' '}
                   <a href="/fazendas" className="font-medium underline">
                     Ir para Fazendas
+                  </a>
+                </div>
+              )}
+
+              {bloqueadoPorSemProprietario && (
+                <div className="rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
+                  Nenhum proprietário cadastrado ainda — todo animal precisa ter um dono atribuído.{' '}
+                  Cadastre pelo menos um proprietário antes de lançar qualquer movimentação.{' '}
+                  <a href="/pessoas" className="font-medium underline">
+                    Ir para Pessoas e Empresas
                   </a>
                 </div>
               )}
@@ -3059,13 +3112,16 @@ export default function MovimentacoesPage() {
                             )}
                             {mostrarSeletorProprietario && (
                               <div>
-                                <label className={labelCardClass}>Proprietário</label>
+                                <label className={labelCardClass}>
+                                  Proprietário
+                                  <Required />
+                                </label>
                                 <select
                                   className={inputSmClass}
                                   value={linha.proprietarioId}
                                   onChange={(e) => atualizarLinha(i, { proprietarioId: e.target.value })}
                                 >
-                                  <option value="">—</option>
+                                  <option value="">Selecione...</option>
                                   {proprietariosDisponiveis.map((p) => (
                                     <option key={p.id} value={p.id}>
                                       {p.nome}
@@ -3374,7 +3430,7 @@ export default function MovimentacoesPage() {
             <div className="flex justify-end gap-2 border-t border-border p-5">
               <button
                 type="submit"
-                disabled={salvando || bloqueadoPorSaldoInicial}
+                disabled={salvando || bloqueadoPorSaldoInicial || bloqueadoPorSemProprietario}
                 className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
               >
                 {salvando ? 'Salvando...' : editandoId ? 'Salvar edição' : 'Salvar movimentação'}
@@ -3386,6 +3442,8 @@ export default function MovimentacoesPage() {
               )}
             </div>
           </div>
+            </>
+          )}
         </form>
       </div>
       </>

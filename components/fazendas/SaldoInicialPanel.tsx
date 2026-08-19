@@ -29,6 +29,7 @@ type Sexo = 'MACHO' | 'FEMEA'
 type GrupoCategoriaPapel = { id: string; nome: string; sexo: Sexo | null }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
+type Proprietario = { id: string; nome: string }
 
 function round2(n: number) {
   return Math.round(n * 100) / 100
@@ -58,6 +59,9 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   const [moduloId, setModuloId] = useState('')
   const [pastoId, setPastoId] = useState('')
 
+  const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
+  const [proprietarioId, setProprietarioId] = useState('')
+
   const supabase = createClient()
 
   // módulo → pasto é uma cascata de dois níveis — mesmo princípio já
@@ -66,6 +70,19 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   const mostrarSeletorModulo = controlaPasto && modulosDisponiveis.length > 1
   const pastosDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
   const mostrarSeletorPasto = controlaPasto && pastosDoModulo.length > 1
+
+  // proprietário: lista global (lib de todo o sistema — ver movimentacoes/page.tsx),
+  // um único proprietário por lançamento de saldo inicial, aplicado a todas as
+  // categorias da fazenda (mesmo princípio já usado pro pasto acima). Com 0
+  // cadastrado, salvar fica bloqueado (bloqueadoPorSemProprietario); com 1, some
+  // sozinho e é atribuído automaticamente; só com 2+ o seletor aparece.
+  const mostrarSeletorProprietario = proprietarios.length > 1
+  const bloqueadoPorSemProprietario = proprietarios.length === 0
+
+  function resolverProprietarioId(escolhidoId: string) {
+    if (proprietarios.length === 1) return proprietarios[0].id
+    return escolhidoId || null
+  }
 
   const papelSelecionado = papeis.find((p) => p.id === novaCategoriaPapelId)
   const sexoEhLivre = !!papelSelecionado && papelSelecionado.sexo === null
@@ -95,6 +112,18 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       .select('controla_pasto')
       .single()
       .then(({ data }) => setControlaPasto(data?.controla_pasto ?? false))
+    supabase
+      .from('pessoa_papeis')
+      .select('pessoa:pessoas!pessoa_id(id, nome)')
+      .eq('papel', 'PROPRIETARIO')
+      .then(({ data }) =>
+        setProprietarios(
+          ((data || []) as any[])
+            .map((r) => r.pessoa)
+            .filter(Boolean)
+            .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
+        )
+      )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -127,6 +156,14 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mostrarSeletorPasto, pastos, moduloId])
+
+  // proprietário: some sozinho quando só há 1 cadastrado — mesmo princípio do pasto
+  useEffect(() => {
+    if (!mostrarSeletorProprietario && proprietarios.length === 1) {
+      setProprietarioId(proprietarios[0].id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mostrarSeletorProprietario, proprietarios])
 
   // deriva o módulo do pasto já salvo (carregarLinhas define pastoId a
   // partir da linha SALDO_INICIAL existente) sempre que pastos carrega —
@@ -180,7 +217,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         .order('nome'),
       supabase
         .from('movimentacoes_rebanho')
-        .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, data, safra_nascimento_ano_inicio')
+        .select('id, categoria_id, quantidade, peso_medio_kg, pasto_id, proprietario_id, data, safra_nascimento_ano_inicio')
         .eq('fazenda_id', fazendaId)
         .eq('tipo', 'SALDO_INICIAL'),
       supabase
@@ -212,6 +249,8 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     if (primeiraData) setData(primeiraData)
     const primeiroPastoId = (existentes || [])[0]?.pasto_id
     if (primeiroPastoId) setPastoId(primeiroPastoId)
+    const primeiroProprietarioId = (existentes || [])[0]?.proprietario_id
+    if (primeiroProprietarioId) setProprietarioId(primeiroProprietarioId)
 
     setLoading(false)
   }
@@ -241,6 +280,11 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       return
     }
 
+    if (mostrarSeletorProprietario && !proprietarioId) {
+      alert('Selecione o proprietário.')
+      return
+    }
+
     if (confirmado) {
       setMostrarAvisoEdicao(true)
     } else {
@@ -265,6 +309,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             ? parseInt(linha.safraNascimento, 10)
             : safraSugeridaParaData(data)
           : null
+        const proprietarioResolvido = resolverProprietarioId(proprietarioId)
         if (linha.existingId) {
           await supabase
             .from('movimentacoes_rebanho')
@@ -273,6 +318,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
               peso_medio_kg: pesoMedioNum,
               peso_total_kg: pesoTotal,
               pasto_id: pastoId,
+              proprietario_id: proprietarioResolvido,
               data,
               safra_nascimento_ano_inicio: safraNascimento,
             })
@@ -287,6 +333,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             peso_medio_kg: pesoMedioNum,
             peso_total_kg: pesoTotal,
             pasto_id: pastoId,
+            proprietario_id: proprietarioResolvido,
             safra_nascimento_ano_inicio: safraNascimento,
           })
         }
@@ -373,10 +420,34 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             </select>
           </div>
         )}
+        {mostrarSeletorProprietario && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+              Proprietário
+              <Required />
+            </label>
+            <select className={inputClass} value={proprietarioId} onChange={(e) => setProprietarioId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {proprietarios.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {loading ? (
         <p className="mt-4 text-sm text-text-secondary">Carregando...</p>
+      ) : bloqueadoPorSemProprietario ? (
+        <div className="mt-4 rounded-control border border-error bg-error-bg px-4 py-3 text-sm text-error">
+          Nenhum proprietário cadastrado ainda — todo animal precisa ter um dono atribuído. Cadastre pelo menos
+          um proprietário antes de declarar o saldo inicial.{' '}
+          <a href="/pessoas" className="font-medium underline">
+            Ir para Pessoas e Empresas
+          </a>
+        </div>
       ) : (
         <>
           {confirmado && (

@@ -2270,6 +2270,69 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
+-- fn_saldo_categoria_pasto_proprietario (migração 051): cruza pasto ×
+-- proprietário — mesma lista de tipos que fn_saldo_categoria_proprietario
+-- já usa (Mudança de Categoria/Desmame não entram como entrada; DESMAME
+-- conta só como saída), acrescida de MUDANCA_PASTO (que passa a exigir
+-- proprietario_id quando há 2+ proprietários, pra não perder a atribuição
+-- de dono ao mudar cabeças de pasto dentro da mesma fazenda). Necessária
+-- porque as checagens separadas por pasto e por proprietário não bastam
+-- sozinhas pra impedir que a combinação específica (pasto+dono) fique
+-- negativa — ver fn_validar_saldo_categoria.
+-- ---------------------------------------------------------------------
+
+create or replace function fn_saldo_categoria_pasto_proprietario(
+  p_fazenda_id uuid, p_categoria_id uuid, p_pasto_id uuid, p_proprietario_id uuid, p_data date
+)
+returns integer
+language plpgsql
+stable
+as $$
+declare
+  v_entradas int;
+  v_saidas   int;
+begin
+  select coalesce(sum(quantidade), 0) into v_entradas
+  from (
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_destino_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_destino_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo = 'TRANSFERENCIA' and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_destino_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo = 'MUDANCA_PASTO' and data <= p_data
+  ) e;
+
+  select coalesce(sum(quantidade), 0) into v_saidas
+  from (
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_origem_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo = 'TRANSFERENCIA' and data <= p_data
+    union all
+    select quantidade from movimentacoes_rebanho
+    where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id and pasto_id = p_pasto_id
+      and proprietario_id = p_proprietario_id
+      and tipo = 'MUDANCA_PASTO' and data <= p_data
+  ) s;
+
+  return v_entradas - v_saidas;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
 -- fn_lotes_nascimento_disponiveis (migração 030, simplificada na 031):
 -- lista os lotes (safra) com saldo > 0 numa fazenda+categoria numa
 -- data — alimenta o seletor de lote no frontend (Desmame e as demais
@@ -2322,6 +2385,7 @@ declare
   v_saldo_pasto        int;
   v_saldo_lote         int;
   v_saldo_proprietario int;
+  v_saldo_pasto_prop   int;
   v_nome_pasto         text;
   v_fazenda_lote       uuid;
 begin
@@ -2370,6 +2434,19 @@ begin
     if v_saldo_proprietario < new.quantidade then
       raise exception 'Saldo insuficiente para esse proprietário: % cabeça(s) disponível(is) dessa categoria na data %, mas % foi(ram) solicitada(s).',
         v_saldo_proprietario, new.data, new.quantidade;
+    end if;
+  end if;
+
+  -- checagem cruzada pasto × proprietário (migração 051) — cobre
+  -- MUDANCA_PASTO também (checagem de saldo simples acima não cobre
+  -- esse tipo pra fazenda/proprietário, só pra pasto puro)
+  if new.proprietario_id is not null
+     and new.tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME', 'TRANSFERENCIA', 'MUDANCA_PASTO') then
+    v_saldo_pasto_prop := fn_saldo_categoria_pasto_proprietario(new.fazenda_id, new.categoria_id, new.pasto_id, new.proprietario_id, new.data);
+    if v_saldo_pasto_prop < new.quantidade then
+      select nome into v_nome_pasto from pastos where id = new.pasto_id;
+      raise exception 'Saldo insuficiente para esse proprietário no pasto %: % cabeça(s) disponível(is) dessa categoria na data %, mas % foi(ram) solicitada(s).',
+        v_nome_pasto, v_saldo_pasto_prop, new.data, new.quantidade;
     end if;
   end if;
 
@@ -2888,6 +2965,128 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------
+-- fn_delta_para_par_pasto_proprietario / fn_checar_saldo_pasto_
+-- proprietario_futuro (migração 051): mesma receita de
+-- fn_delta_para_par_proprietario/fn_checar_saldo_proprietario_futuro,
+-- agora pra dimensão cruzada (fazenda, categoria, pasto, proprietario) —
+-- checagem adicional dentro das triggers de editar/apagar já existentes,
+-- mesmo padrão "defesa em profundidade silenciosa" (sem aviso amigável
+-- no frontend, só bloqueio direto do banco).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_delta_para_par_pasto_proprietario(
+  p_tipo tipo_movimentacao, p_fazenda_id uuid, p_fazenda_origem_id uuid, p_fazenda_destino_id uuid,
+  p_categoria_id uuid, p_pasto_id uuid, p_pasto_destino_id uuid, p_proprietario_id uuid, p_quantidade int,
+  p_par_fazenda_id uuid, p_par_categoria_id uuid, p_par_pasto_id uuid, p_par_proprietario_id uuid
+) returns int
+language plpgsql
+immutable
+as $$
+declare
+  v_total int := 0;
+begin
+  if p_proprietario_id is null or p_par_proprietario_id is null or p_proprietario_id <> p_par_proprietario_id then
+    return 0;
+  end if;
+
+  if p_tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') then
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_id = p_par_pasto_id then
+      v_total := v_total + p_quantidade;
+    end if;
+  elsif p_tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') then
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_id = p_par_pasto_id then
+      v_total := v_total - p_quantidade;
+    end if;
+  elsif p_tipo = 'TRANSFERENCIA' then
+    if p_fazenda_origem_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_id = p_par_pasto_id then
+      v_total := v_total - p_quantidade;
+    end if;
+    if p_fazenda_destino_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_destino_id = p_par_pasto_id then
+      v_total := v_total + p_quantidade;
+    end if;
+  elsif p_tipo = 'MUDANCA_PASTO' then
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_id = p_par_pasto_id then
+      v_total := v_total - p_quantidade;
+    end if;
+    if p_fazenda_id = p_par_fazenda_id and p_categoria_id = p_par_categoria_id and p_pasto_destino_id = p_par_pasto_id then
+      v_total := v_total + p_quantidade;
+    end if;
+  end if;
+  return v_total;
+end;
+$$;
+
+create or replace function fn_checar_saldo_pasto_proprietario_futuro(
+  p_id uuid, p_tipo tipo_movimentacao, p_fazenda_id uuid, p_fazenda_origem_id uuid, p_fazenda_destino_id uuid,
+  p_categoria_id uuid, p_pasto_id uuid, p_pasto_destino_id uuid, p_proprietario_id uuid, p_data date, p_quantidade int
+) returns table(saldo_ficaria_negativo boolean, data_saldo_negativo date, saldo_minimo int)
+language plpgsql
+as $$
+declare
+  v_old        movimentacoes_rebanho%rowtype;
+  v_par        record;
+  v_data       date;
+  v_saldo      int;
+  v_pior_saldo int;
+  v_pior_data  date;
+begin
+  select * into v_old from movimentacoes_rebanho where id = p_id;
+
+  for v_par in (
+    select distinct fazenda_id, categoria_id, pasto_id, proprietario_id from (
+      values
+        (v_old.fazenda_id, v_old.categoria_id, v_old.pasto_id, v_old.proprietario_id),
+        (v_old.fazenda_destino_id, v_old.categoria_id, v_old.pasto_destino_id, v_old.proprietario_id),
+        (v_old.fazenda_id, v_old.categoria_id, v_old.pasto_destino_id, v_old.proprietario_id),
+        (p_fazenda_id, p_categoria_id, p_pasto_id, p_proprietario_id),
+        (p_fazenda_destino_id, p_categoria_id, p_pasto_destino_id, p_proprietario_id),
+        (p_fazenda_id, p_categoria_id, p_pasto_destino_id, p_proprietario_id)
+    ) as t(fazenda_id, categoria_id, pasto_id, proprietario_id)
+    where fazenda_id is not null and categoria_id is not null and pasto_id is not null and proprietario_id is not null
+  )
+  loop
+    for v_data in (
+      select distinct m.data from movimentacoes_rebanho m
+      where m.id <> p_id
+        and m.data >= p_data
+        and m.proprietario_id = v_par.proprietario_id
+        and (
+          (m.fazenda_id = v_par.fazenda_id and m.categoria_id = v_par.categoria_id and m.pasto_id = v_par.pasto_id)
+          or (m.fazenda_destino_id = v_par.fazenda_id and m.categoria_id = v_par.categoria_id and m.pasto_destino_id = v_par.pasto_id)
+          or (m.fazenda_id = v_par.fazenda_id and m.categoria_id = v_par.categoria_id and m.pasto_destino_id = v_par.pasto_id)
+        )
+      union
+      select p_data
+      order by 1
+    )
+    loop
+      v_saldo := fn_saldo_categoria_pasto_proprietario(v_par.fazenda_id, v_par.categoria_id, v_par.pasto_id, v_par.proprietario_id, v_data)
+        - case when v_old.data <= v_data
+            then fn_delta_para_par_pasto_proprietario(v_old.tipo, v_old.fazenda_id, v_old.fazenda_origem_id, v_old.fazenda_destino_id,
+                                    v_old.categoria_id, v_old.pasto_id, v_old.pasto_destino_id, v_old.proprietario_id, v_old.quantidade,
+                                    v_par.fazenda_id, v_par.categoria_id, v_par.pasto_id, v_par.proprietario_id)
+            else 0 end
+        + case when p_data <= v_data
+            then fn_delta_para_par_pasto_proprietario(p_tipo, p_fazenda_id, p_fazenda_origem_id, p_fazenda_destino_id,
+                                    p_categoria_id, p_pasto_id, p_pasto_destino_id, p_proprietario_id, p_quantidade,
+                                    v_par.fazenda_id, v_par.categoria_id, v_par.pasto_id, v_par.proprietario_id)
+            else 0 end;
+
+      if v_saldo < 0 and (v_pior_data is null or v_data < v_pior_data) then
+        v_pior_saldo := v_saldo;
+        v_pior_data := v_data;
+      end if;
+    end loop;
+  end loop;
+
+  saldo_ficaria_negativo := v_pior_data is not null;
+  data_saldo_negativo := v_pior_data;
+  saldo_minimo := v_pior_saldo;
+  return next;
+end;
+$$;
+
 -- trigger de bloqueio (defesa em profundidade — a tela já deve chamar
 -- fn_checar_edicao_movimentacao antes de mandar o UPDATE, pra mostrar o
 -- aviso de confirmação; esta trigger garante que mesmo sem passar pela
@@ -2895,9 +3094,10 @@ $$;
 create or replace function fn_validar_edicao_movimentacao()
 returns trigger as $$
 declare
-  v_check      record;
-  v_check_lote record;
-  v_check_prop record;
+  v_check            record;
+  v_check_lote       record;
+  v_check_prop       record;
+  v_check_pasto_prop record;
 begin
   select * into v_check from fn_checar_edicao_movimentacao(
     old.id, new.tipo, new.fazenda_id, new.fazenda_origem_id, new.fazenda_destino_id,
@@ -2931,6 +3131,15 @@ begin
       raise exception 'Não é possível editar: o saldo desse proprietário ficaria negativo (%) em %.',
         v_check_prop.saldo_minimo, v_check_prop.data_saldo_negativo;
     end if;
+
+    select * into v_check_pasto_prop from fn_checar_saldo_pasto_proprietario_futuro(
+      old.id, new.tipo, new.fazenda_id, new.fazenda_origem_id, new.fazenda_destino_id,
+      new.categoria_id, new.pasto_id, new.pasto_destino_id, new.proprietario_id, new.data, new.quantidade
+    );
+    if v_check_pasto_prop.saldo_ficaria_negativo then
+      raise exception 'Não é possível editar: o saldo desse proprietário no pasto ficaria negativo (%) em %.',
+        v_check_pasto_prop.saldo_minimo, v_check_pasto_prop.data_saldo_negativo;
+    end if;
   end if;
 
   return new;
@@ -2952,6 +3161,7 @@ for each row execute function fn_validar_edicao_movimentacao();
 create or replace function fn_validar_delete_movimentacao()
 returns trigger as $$
 declare
+  v_check_pasto_prop record;
   v_check      record;
   v_check_lote record;
   v_check_prop record;
@@ -2987,6 +3197,15 @@ begin
     if v_check_prop.saldo_ficaria_negativo then
       raise exception 'Não é possível excluir: o saldo desse proprietário ficaria negativo (%) em %.',
         v_check_prop.saldo_minimo, v_check_prop.data_saldo_negativo;
+    end if;
+
+    select * into v_check_pasto_prop from fn_checar_saldo_pasto_proprietario_futuro(
+      old.id, old.tipo, old.fazenda_id, old.fazenda_origem_id, old.fazenda_destino_id,
+      old.categoria_id, old.pasto_id, old.pasto_destino_id, old.proprietario_id, old.data, 0
+    );
+    if v_check_pasto_prop.saldo_ficaria_negativo then
+      raise exception 'Não é possível excluir: o saldo desse proprietário no pasto ficaria negativo (%) em %.',
+        v_check_pasto_prop.saldo_minimo, v_check_pasto_prop.data_saldo_negativo;
     end if;
   end if;
 
@@ -3045,7 +3264,9 @@ create policy pesagens_por_conta on pesagens for all
 -- relatório de movimentação).
 -- ---------------------------------------------------------------------
 
-create or replace function fn_relatorio_rebanho_por_pasto(p_fazenda_id uuid, p_data date)
+create or replace function fn_relatorio_rebanho_por_pasto(
+  p_fazenda_id uuid, p_data date, p_proprietario_ids uuid[] default null
+)
 returns table(
   pasto_id uuid,
   pasto_nome text,
@@ -3062,6 +3283,7 @@ declare
   v_categoria  record;
   v_qtd        int;
   v_peso       numeric;
+  v_prop       uuid;
 begin
   for v_pasto in (
     select p.id, p.nome, p.ordem
@@ -3077,7 +3299,15 @@ begin
       order by c.ordem_ciclo, c.nome
     )
     loop
-      v_qtd := fn_saldo_categoria_pasto(p_fazenda_id, v_categoria.id, v_pasto.id, p_data);
+      if p_proprietario_ids is null then
+        v_qtd := fn_saldo_categoria_pasto(p_fazenda_id, v_categoria.id, v_pasto.id, p_data);
+      else
+        v_qtd := 0;
+        foreach v_prop in array p_proprietario_ids
+        loop
+          v_qtd := v_qtd + fn_saldo_categoria_pasto_proprietario(p_fazenda_id, v_categoria.id, v_pasto.id, v_prop, p_data);
+        end loop;
+      end if;
 
       if v_qtd > 0 then
         select pz.peso_medio_kg into v_peso

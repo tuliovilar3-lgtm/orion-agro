@@ -2982,6 +2982,98 @@ temporariamente os gatilhos de `categorias_animal`/`subtipos_uso_area` (que bloq
 `sistema = true`, exatamente o que o seed automático cria) e limpar `suporte_conta_ativa`/
 `suporte_auditoria` (referenciam `contas`) antes do delete final.
 
+## Proprietário do lote de gado vira obrigatório (revisão pós-uso)
+
+Depois de usar o proprietário do lote na prática, o usuário observou que o campo continuava
+totalmente opcional mesmo com 2+ proprietários já cadastrados — deixando margem pra lançar
+movimentação com dono ambíguo, o que compromete justamente a separação financeira que era o motivo
+de o campo existir. Três decisões confirmadas com o usuário:
+
+- **Nenhuma movimentação pode ser lançada com 0 proprietários cadastrados na conta** — `app/
+  movimentacoes/page.tsx` ganha `bloqueadoPorSemProprietario` (`!editandoId && proprietariosDisponiveis
+  .length === 0`), mesmo princípio de `bloqueadoPorSaldoInicial` já existente (banner de erro +
+  `disabled` no botão de salvar + guarda no topo de `handleSubmit`, só trava lançamentos **novos**,
+  nunca a edição de um já existente). Banner aponta pra "Pessoas e Empresas" pra cadastrar o
+  primeiro proprietário.
+- **Obrigatório assim que o seletor aparece** (2+ proprietários cadastrados) — ganha `<Required />`
+  tanto no formulário avulso ("Proprietário do lote") quanto na tabela de lote (coluna
+  "Proprietário"), e é validado com `alert()` antes de salvar (mesmo padrão já usado pra peso morto/
+  rendimento em Venda Abate) — tanto em `handleSubmit` (avulso) quanto em `handleSubmitLote`.
+- **Com exatamente 1 proprietário cadastrado, nenhum seletor aparece e esse único proprietário é
+  atribuído automaticamente** (sem pedir nada ao usuário) — novo helper `resolverProprietarioId(
+  escolhidoId)` centraliza essa lógica (usado nos dois formulários), substituindo o antigo
+  `mostrarSeletorProprietario && proprietarioId ? proprietarioId : null` que deixava a movimentação
+  sem dono mesmo quando só havia um proprietário óbvio no sistema — o que ia contra o objetivo de
+  "nenhum animal sem informação de proprietário". Mudança de Categoria continua de fora (nunca usa
+  esse campo, por design já documentado acima), Desmame nunca chega a essa checagem (handler
+  próprio, retorna mais cedo).
+
+Verificado: type-check limpo; visualmente confirmado no navegador que "Proprietário \*" aparece com
+o indicador de obrigatório na tabela de lote (conta atual tem 2 proprietários cadastrados). O
+caminho do `alert()` de bloqueio não foi exercitado ponta a ponta via automação nesta rodada — o
+formulário de lançamento tem uma cascata de campos dependentes (fazenda → módulo → pasto →
+categoria) que se mostrou frágil de simular via eventos sintéticos; a lógica em si segue exatamente
+o mesmo padrão já usado (e já testado) pras outras validações condicionais do mesmo formulário
+(peso morto/rendimento, saldo insuficiente), então o risco residual é baixo.
+
+## Gráfico de Lotação: barra "Rebanho Médio" sem interação de mouse
+
+Bug relatado pelo usuário: passar o cursor sobre as barras de "Rebanho Médio" no gráfico combinado
+(`app/relatorio-lotacao/page.tsx`) apagava todas as linhas (`strokeOpacity` cai pra 0.15 quando
+outra série está em destaque) bem na área coberta pela barra — como a barra ficava com
+`fillOpacity = 1` (opaca) exatamente nesse estado, uma linha quase invisível por baixo dela
+(tecnicamente ainda desenhada por cima, DOM/ordem de pintura nunca mudou) ficava visualmente
+indistinguível, lendo como "a linha foi pra trás da barra".
+
+Causa raiz: o `<Bar>` tinha `onMouseEnter`/`onClick` próprios chamando `setDestaque('rebanho_medio')`
+— como passar o mouse pelas barras é o movimento mais natural ao explorar esse gráfico, isso disparava
+o estado de destaque constantemente, apagando as 3 linhas a cada passada. Corrigido removendo esses
+dois handlers do `<Bar>` — a barra deixa de reagir ao cursor (mouse sobre ela não faz mais nada),
+mas continua destacável clicando/passando o mouse no item "Rebanho Médio" da legenda (que já tinha
+seu próprio `onMouseEnter`/`onMouseLeave` independente, inalterado). `activeBar` ganhou `fill` e
+`stroke` explícitos (iguais ao estado normal) pra neutralizar o "active shape" interno do Recharts,
+que continua disparando internamente mesmo sem handler nosso.
+
+Verificado via inspeção direta do DOM (não por screenshot): disparei um evento sintético de
+`mouseover` numa célula da barra e confirmei que `stroke-opacity` das 3 linhas permaneceu `1`
+(antes da correção, isso teria caído pra `0.15`) — a barra deixou de conseguir acionar o estado de
+destaque.
+
+## Painel: lista "Distribuição do rebanho atual" perde a porcentagem
+
+Pedido do usuário: a porcentagem de participação já aparece no gráfico de rosca "Distribuição sexo ×
+categoria" ao lado — repetir o número na lista de barras horizontais era redundante. Removido só o
+texto "· 31,4%" de cada linha em `app/page.tsx`; a barra de proporção horizontal (`width: ${pct}%`)
+continua, já que ela é visual, não numérica, e não foi o que o usuário pediu pra tirar.
+
+## Lançamento de Movimentações: nenhum tipo pré-selecionado, passos 2-4 só depois de escolher
+
+Dois problemas relatados pelo usuário ao abrir "Novo lançamento": (1) um dos 9 botões do passo 1
+("Compra", no caso) aparecia com a borda de destaque mesmo sem nenhuma escolha ter sido feita — o
+`tipo` (state) sempre tem um valor default (`'NASCIMENTO'`, nunca `null`, pra evitar tornar o tipo
+opcional em todo o resto do arquivo, que assume um `TipoMovimentacao` real em dezenas de lugares) e
+o botão correspondente comparava `tipo === t` sem checar se o usuário já tinha de fato confirmado
+uma escolha; (2) os passos 2-4 (Quando e onde, Categorias, Detalhes) sempre apareciam abaixo do
+passo 1, mesmo antes de qualquer tipo ser escolhido, competindo visualmente com a decisão que
+precisa vir primeiro.
+
+Dois ajustes em `app/movimentacoes/page.tsx`, ambos aproveitando o `tipoConfirmado` que já existia
+(controla o colapso do passo 1, ver "Terceira rodada" acima) em vez de mexer no tipo de `tipo`:
+- O destaque visual do botão de tipo passa a exigir `tipoConfirmado && tipo === t` (era só
+  `tipo === t`) — como a grade só aparece enquanto `!tipoConfirmado`, nenhum botão nunca fica
+  destacado enquanto ela está visível, sem precisar tornar `tipo` opcional em lugar nenhum.
+- Os passos 2-4 (mais os banners de bloqueio e o botão de salvar) foram envolvidos num
+  `{tipoConfirmado && (<>...</>)}` — só renderizam depois que o usuário clica num tipo de verdade.
+  Reabrir uma edição já existente (`iniciarEdicao`/`iniciarEdicaoGrupo`/`iniciarEdicaoDesmame`) já
+  força `tipoConfirmado = true` desde a rodada anterior, então esse fluxo continua abrindo com tudo
+  visível, sem regressão.
+
+Verificado no navegador: abrir "Novo lançamento" agora mostra só o passo 1, sem nenhum botão com
+borda de destaque (confirmado via `getBoundingClientRect`/classList, nenhum botão com
+`border-brand-500`+`ring-2`) e nenhum conteúdo abaixo dele; clicar em "Compra" colapsa o passo 1 na
+barra compacta de sempre e revela os passos 2-4 imediatamente. Formulário fechado sem salvar ao
+final.
+
 ## Módulos de domínio + recursos (migração 050)
 
 Reestruturação do catálogo de módulos vendidos por conta, discutida e planejada com o usuário logo
@@ -3051,3 +3143,166 @@ mostrou a Sidebar completa de Pecuária (confirma `dominiosDaConta`/`podeAcessar
 `/fazendas` já mostrou "Controle por pasto: Ativo" sem nenhum toque manual (confirma que o recurso
 alimentou `configuracoes.controla_pasto` direto no onboarding). Dados de teste removidos ao final via
 SQL direto (mesmo processo já usado na rodada anterior, adaptado pra `conta_recursos`/`dominio`).
+
+## Proprietário em todos os lançamentos e relatórios do rebanho (migração 051)
+
+Pedido do usuário depois de usar a feature de proprietário do lote (já existente desde a migração
+044/045): o campo só cobria Movimentações e 3 dos 4 relatórios/telas que envolvem rebanho — faltava
+Saldo Inicial, Mudança de Pasto e "Rebanho por pasto". Extensão completa, seguindo a mesma lógica já
+definida (seletor só aparece com 2+ proprietários cadastrados; com exatamente 1, atribuído sozinho;
+com 0, bloqueia o lançamento).
+
+**Duas decisões de arquitetura fechadas com o usuário via pergunta direta antes de implementar**
+(`AskUserQuestion`, ambas seguindo a opção recomendada):
+- **"Rebanho por pasto" ganha o cruzamento pasto × proprietário** — reverte, só pra essa combinação
+  específica, o princípio "proprietário não cruza com pasto" que valia desde a migração 044 (mesmo
+  motivo que evita cruzar pasto × safra: complexidade desproporcional sem necessidade real). Aqui a
+  necessidade é real: sem cruzar, não dava pra filtrar esse relatório por dono.
+- **Relatório de Lotação NÃO ganha o filtro** — mantém a exclusão já documentada (lotação cruza
+  rebanho com área, e área não tem dimensão de proprietário; filtrar só o rebanho produziria um
+  número matematicamente enganoso). Mesmo raciocínio já aplicado aos KPIs "hoje" do Painel.
+
+**Por que cruzar pasto × proprietário é uma questão de integridade, não só de relatório**: as
+checagens de saldo já existentes (por pasto, por proprietário, cada uma somando sobre a outra
+dimensão) não bastam sozinhas pra impedir que a combinação específica fique negativa. Exemplo: um
+pasto com 10 cabeças de uma categoria, sendo 5 do proprietário X e 5 do Y — vender 8 cabeças de X
+desse pasto passaria pelas duas checagens antigas (saldo do pasto = 10 ≥ 8; saldo de X somado em
+todos os pastos pode ser bem maior que 8), mas deixaria a combinação (pasto, X) negativa (-3) sem
+nenhuma das duas perceber. Por isso a migração adiciona uma terceira camada de defesa em
+profundidade, no mesmo espírito de pasto/lote/proprietário já existentes.
+
+**Migração 051**:
+- `fn_saldo_categoria_pasto_proprietario(fazenda, categoria, pasto, proprietario, data)` — mesma
+  receita de `fn_saldo_categoria_pasto`, cruzando com `proprietario_id`. Mesma lista de tipos que
+  `fn_saldo_categoria_proprietario` já usa (Mudança de Categoria/Desmame não entram como entrada;
+  DESMAME conta só como saída), acrescida de `MUDANCA_PASTO` — que `fn_saldo_categoria_proprietario`
+  nunca teve, porque antes proprietário não cruzava com pasto; agora precisa, senão mover só parte
+  de um pasto com cabeças de mais de um dono quebraria o saldo cruzado.
+- `fn_delta_para_par_pasto_proprietario`/`fn_checar_saldo_pasto_proprietario_futuro` — trajetória de
+  edição/exclusão na dimensão cruzada, mesmo padrão "defesa em profundidade silenciosa" já usado pra
+  lote/proprietário (sem aviso de confirmação amigável no frontend, só bloqueio direto do banco).
+  Wireadas em `fn_validar_saldo_categoria` (insert), `fn_validar_edicao_movimentacao` e
+  `fn_validar_delete_movimentacao`.
+- `fn_relatorio_rebanho_por_pasto` ganha `p_proprietario_ids uuid[] default null` — quando
+  informado, soma `fn_saldo_categoria_pasto_proprietario` por proprietário selecionado em vez de
+  `fn_saldo_categoria_pasto` sem filtro. Precisou de `drop function` antes (muda assinatura, mesmo
+  princípio já usado em migrações anteriores que trocaram assinatura de função).
+
+**`components/fazendas/SaldoInicialPanel.tsx`**: ganha o mesmo seletor de proprietário já usado em
+Movimentações (`mostrarSeletorProprietario`/`resolverProprietarioId`, um único proprietário por
+lançamento de saldo inicial, aplicado a todas as categorias — mesmo princípio já usado pro pasto
+nessa tela) e o mesmo banner de bloqueio (`bloqueadoPorSemProprietario`) quando 0 proprietários estão
+cadastrados.
+
+**`app/controle-pasto/page.tsx`** (Mudança de Pasto): ganha proprietário **por linha** (não um campo
+único do lançamento, diferente de Saldo Inicial) — necessário porque um mesmo lote de Mudança de
+Pasto pode mover cabeças de donos diferentes do mesmo pasto em linhas separadas, e porque o saldo
+cruzado precisa saber de qual dono são as cabeças que estão mudando de pasto quando o pasto de
+origem tem mais de um proprietário. Mesmo padrão de bloqueio/auto-preenchimento das outras telas.
+Listagem de "Últimas mudanças de pasto" ganha `propriet.: Nome` no detalhe de cada linha, mesmo
+formato já usado em Movimentações.
+
+**`app/relatorio-rebanho-por-pasto/page.tsx`**: reaproveita `proprietarios`/`proprietarioIds`/
+`alternarProprietario`/`alternarTodosProprietarios`/`todosProprietariosSelecionados` do
+`FiltroGlobalContext` (mesmo padrão de checkbox list + "Marcar/Desmarcar todas" que os outros 3
+relatórios já tinham antes da revisão de multi-select — ver seção abaixo) — só aparece com 2+
+proprietários cadastrados. `todosProprietariosSelecionados` vira `null` no parâmetro da RPC (sem
+filtro); uma seleção parcial vira o array de ids.
+
+Verificado no navegador: `fn_relatorio_rebanho_por_pasto` com a assinatura nova funcionando sem
+filtro (327 cabeças, idêntico ao valor de antes da migração) e com filtro parcial (desmarcar um
+proprietário zerou o resultado pra "Sem rebanho registrado nessa data" — sem erro de SQL, confirma
+que a função cruzada executa corretamente; o resultado bater com zero é esperado porque o rebanho de
+teste é todo legado, sem `proprietario_id` atribuído em nenhuma linha, então nenhum proprietário
+específico "possui" nada ainda). Saldo Inicial e Mudança de Pasto mostrando o campo "Proprietário *"
+corretamente com os 2 proprietários cadastrados na conta de teste. O caminho de bloqueio por saldo
+cruzado negativo (pasto com 2 donos, tentar mover mais cabeças de um dono específico do que ele tem
+ali) não foi exercitado ponta a ponta nesta rodada — o rebanho de teste não tem nenhuma cabeça com
+proprietário atribuído em nenhum pasto ainda (tudo é histórico anterior à migração 051), então não
+havia um cenário real pra forçar esse bloqueio; a lógica em si segue exatamente o mesmo padrão já
+testado (pasto, lote, proprietário) e é coberta pelo type-check.
+
+## Filtros de Relatórios de Movimentações viram multi-select em popover + "Marcar/Desmarcar todas"
+
+Pedido do usuário depois de ver a tela: Fazendas e Proprietário eram listas de checkbox sempre
+expandidas (ocupando várias linhas), enquanto Categoria era um `<select>` de escolha única — os 3
+ficaram inconsistentes entre si, e nenhum tinha "Marcar/Desmarcar todas" fora de Fazendas.
+
+`app/relatorios/page.tsx` ganha um componente novo, `FiltroMultiSelect` — botão de linha única
+mostrando um resumo ("Todas (N)", "N de M selecionadas", "Nenhuma selecionada") que abre um popover
+com checkboxes + "Marcar todas"/"Desmarcar todas" ao clicar, fecha ao clicar fora (`mousedown` no
+document, comparado contra um `ref` no popover). Os 3 filtros (Fazendas, Categoria, Proprietário)
+agora usam o mesmo componente — Categoria vira multi-select pela primeira vez (`categoriaIds: string[]`,
+local a essa página, com `alternarCategoria`/`alternarTodasCategorias`, todas selecionadas por padrão
+ao carregar a lista).
+
+**Semântica de "todas selecionadas por padrão" exigiu mudar `FiltroGlobalContext.tsx`**: antes,
+`proprietarioIds` começava vazio e a query tratava vazio como "sem filtro" (comentário explícito:
+"nunca esconder lançamentos sem proprietário por padrão"). Isso funcionava pra lógica de query, mas
+fazia os checkboxes renderizarem todos **desmarcados** por padrão — o oposto do que "todas
+selecionadas" pede visualmente. Corrigido tornando `proprietarioIds` sempre explícito desde o
+início, mesmo princípio já usado em `fazendaIds`: no primeiro carregamento (sem nada salvo no
+`localStorage`), popula com todos os ids em vez de ficar vazio. `alternarTodosProprietarios`/
+`todosProprietariosSelecionados` novos no contexto espelham `alternarTodas`/`todasSelecionadas` de
+fazenda. A lógica de filtro (`length > 0 && length < total` → filtra) não mudou — com o array sempre
+explícito agora, "todos marcados" e "vazio" convergem pro mesmo resultado de query de qualquer forma,
+então **Painel** e **Resumo de Movimentação** (que reaproveitam esse mesmo estado global sem
+mudança nenhuma no próprio código deles) ganharam de graça a correção visual (checkboxes mostrando
+todos marcados por padrão), só por causa da mudança no valor inicial do contexto.
+
+**Filtro de proprietário em `app/relatorios/page.tsx` ganha uma regra própria pra seleção parcial**:
+diferente de Fazenda (sempre um filtro literal) e Categoria (toda movimentação tem categoria, então
+"0 marcadas" só pode significar "mostrar nada"), Proprietário é opcional numa movimentação — a
+maioria das linhas nunca teve dono atribuído. Por isso, numa seleção parcial (inclusive "nenhum
+marcado"), o filtro sempre inclui `proprietario_id.is.null` além dos ids marcados — lançamentos sem
+proprietário nunca desaparecem por causa desse filtro, porque eles não pertencem a nenhum dos
+proprietários **desmarcados**, então ficar de fora da lista de exclusão é o comportamento correto,
+não uma falha do filtro. Com 0 marcados, a query vira só `proprietario_id.is.null` (mostra só os sem
+dono) — comportamento previsível em vez de "ignorar o filtro e mostrar tudo" (que seria surpreendente
+já que os checkboxes mostrariam tudo desmarcado). Essa regra fica só nesta página — Painel e Resumo
+de Movimentação continuam usando a RPC (`fn_relatorio_movimentacao_rebanho`) com sua lógica mais
+simples de sempre (`length > 0 && length < total` → filtra pelos ids, sem o `is.null` explícito),
+fora do escopo desta rodada.
+
+Verificado no navegador: os 3 filtros renderizando em linha única com "Todas (N)" por padrão;
+popover de Categoria abrindo com os 13 checkboxes, desmarcar uma categoria atualizando o resumo pra
+"12 de 13 selecionadas" e filtrando a tabela corretamente (13→5 nascidos ao desmarcar Bezerra);
+"Desmarcar todas" em Proprietário mostrando "Nenhuma selecionada" e "Marcar todas" restaurando;
+type-check limpo.
+
+## Gestão de Áreas: mover pasto de módulo vira ícone + popover discreto
+
+Pedido do usuário depois de ver a tela: o `<select>` de "Mover pra outro módulo" (migração 041)
+ficava sempre visível ao lado do nome de cada pasto, ocupando espaço horizontal à toa na grande
+maioria dos casos (pasto já está no módulo certo). Antes de implementar, avaliei opções junto com o
+usuário (ícone discreto na coluna Ações vs. arrastar entre módulos) — confirmado o ícone.
+
+`components/fazendas/GestaoAreasPanel.tsx`: o `<select>` sai da linha do nome e vira um ícone novo
+(`IconMoverModulo`, mesmo estilo de traço dos outros ícones da coluna Ações) que abre um popover
+pequeno (`moduloPickerPastoId`, estado de qual pasto tem o popover aberto — só um por vez) com a
+lista de módulos como botões clicáveis (módulo atual destacado em `bg-brand-100`). Fecha ao clicar
+fora (mesmo padrão de `mousedown` + `ref` já usado no `FiltroMultiSelect` de Relatórios) ou ao
+escolher um módulo. `handleMoverPastoModulo` não mudou de lógica, só passou a ser chamado pelo
+clique no botão do popover em vez do `onChange` do select.
+
+Verificado no navegador: ícone aparece na coluna Ações só quando há 2+ módulos (mesma condição de
+antes); clicar abre o popover com os 2 módulos da fazenda de teste ("Vilar", "Sítio Túlio"); clicar
+fora fecha sem mudar nada; type-check limpo.
+
+## Inativar pasto exige que ele não tenha gado no momento
+
+Pedido do usuário: o toggle Ativar/Inativar de pasto em Gestão de Áreas só bloqueava se fosse o
+único pasto ativo do módulo — não checava se o pasto ainda tinha cabeças de gado. Inativar um pasto
+ocupado tiraria ele dos seletores de lançamento (Movimentações, Mudança de Pasto, Pesagens) sem
+nenhum aviso, dificultando mover esse rebanho depois.
+
+`handleAlternarAtivoPasto` em `GestaoAreasPanel.tsx` ganha uma checagem só no caminho de inativar
+(nunca ao ativar): busca `fn_relatorio_rebanho_por_pasto(fazenda, hoje)` (mesma RPC já usada no
+relatório "Rebanho por pasto" — fotografia de hoje, sem função SQL nova) e bloqueia com `alert()` se
+alguma linha do pasto em questão tiver `quantidade > 0`. Puramente client-side (sem trigger no
+banco) — mesmo raciocínio já usado pra outros guards informativos desta tela (`bloqueadoPorPastoInsuficiente`
+em Mudança de Pasto, por exemplo): inativar não é uma operação destrutiva de dado, só tira o pasto
+dos seletores de lançamento, então uma checagem de UI é suficiente.
+
+Verificado no navegador: tentar inativar "Piquete 1" (33 cabeças) bloqueou com o alerta correto e o
+pasto continuou ativo; inativar "Pasto 2" (sem gado) funcionou normalmente; revertido ao final.

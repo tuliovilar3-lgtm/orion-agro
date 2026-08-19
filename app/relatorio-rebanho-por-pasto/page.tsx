@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
+import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
 import { formatQuantidade, formatPeso as formatPesoValor, formatArea, formatLotacao } from '@/lib/format'
 import ModuloGate from '@/components/ModuloGate'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
@@ -62,6 +63,8 @@ function TableSkeleton() {
 }
 
 export default function RelatorioRebanhoPorPastoPage() {
+  const { proprietarios, proprietarioIds, alternarProprietario, alternarTodosProprietarios, todosProprietariosSelecionados } =
+    useFiltroGlobal()
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [fazendaId, setFazendaId] = useState('')
   const [data, setData] = useState(() => new Date().toISOString().slice(0, 10))
@@ -152,8 +155,15 @@ export default function RelatorioRebanhoPorPastoPage() {
     }
     setLoading(true)
     setErro(null)
+    // todos marcados = sem filtro (mesmo princípio já usado nos outros
+    // relatórios) — só manda a lista quando é uma seleção parcial
+    const proprietarioIdsFiltro = todosProprietariosSelecionados ? null : proprietarioIds
     supabase
-      .rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fazendaId, p_data: data })
+      .rpc('fn_relatorio_rebanho_por_pasto', {
+        p_fazenda_id: fazendaId,
+        p_data: data,
+        p_proprietario_ids: proprietarioIdsFiltro,
+      })
       .then(({ data: rows, error }) => {
         if (error) {
           setErro(error.message)
@@ -163,7 +173,7 @@ export default function RelatorioRebanhoPorPastoPage() {
         setLoading(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaId, data])
+  }, [fazendaId, data, proprietarioIds, todosProprietariosSelecionados])
 
   const pastos: PastoAgrupado[] = []
   linhas.forEach((l) => {
@@ -245,6 +255,32 @@ export default function RelatorioRebanhoPorPastoPage() {
             onChange={(e) => setData(e.target.value)}
           />
         </div>
+        {proprietarios.length > 1 && (
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-4">
+              <label className="text-sm font-medium text-text-secondary">Proprietário</label>
+              <button
+                type="button"
+                className="text-xs font-medium text-brand-500 underline"
+                onClick={alternarTodosProprietarios}
+              >
+                {todosProprietariosSelecionados ? 'Desmarcar todas' : 'Marcar todas'}
+              </button>
+            </div>
+            <div className="max-h-32 w-48 space-y-1 overflow-y-auto rounded-control border border-border p-2">
+              {proprietarios.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 text-sm text-text-primary">
+                  <input
+                    type="checkbox"
+                    checked={proprietarioIds.includes(p.id)}
+                    onChange={() => alternarProprietario(p.id)}
+                  />
+                  {p.nome}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-6">

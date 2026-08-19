@@ -401,8 +401,7 @@ function PainelDashboard() {
                           <span className="text-text-primary">{c.nome}</span>
                           <span className="tabular-nums text-text-secondary">
                             {formatQuantidade(c.quantidade)} cab. ·{' '}
-                            {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'} ·{' '}
-                            {pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                            {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}
                           </span>
                         </div>
                         <div className="h-1.5 overflow-hidden rounded-full bg-brand-100">

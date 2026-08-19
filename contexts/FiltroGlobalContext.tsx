@@ -17,15 +17,17 @@ type FiltroGlobalValue = {
   todasSelecionadas: boolean
   // lista global de proprietários (qualquer pessoa com papel
   // PROPRIETARIO, sem vínculo por fazenda — o gado pode ser transferido
-  // entre fazendas). proprietarioIds vazio = "todos" (sem filtro) —
-  // diferente de fazendaIds, onde vazio filtraria tudo fora, já que
-  // proprietário é sempre opcional numa movimentação (a maioria não tem
-  // nenhum atribuído) e não faria sentido esconder esses lançamentos
-  // por padrão.
+  // entre fazendas). Mesmo princípio de fazendaIds: começa com todos
+  // marcados (explícito, não um "vazio implícito") — o filtro de query
+  // (abaixo) já trata "todos marcados" como "sem filtro", então
+  // lançamentos sem proprietário atribuído continuam aparecendo por
+  // padrão sem precisar de nenhuma lógica de vazio-significa-tudo.
   proprietarios: Proprietario[]
   proprietarioIds: string[]
   setProprietarioIds: (ids: string[]) => void
   alternarProprietario: (id: string) => void
+  alternarTodosProprietarios: () => void
+  todosProprietariosSelecionados: boolean
   modoFiltro: ModoFiltro
   setModoFiltro: (m: ModoFiltro) => void
   mes: string
@@ -94,7 +96,10 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
         const idsValidos = idsSalvos.filter((id) => lista.some((f) => f.id === id))
         setFazendaIdsState(idsValidos.length > 0 ? idsValidos : lista.map((f) => f.id))
 
-        if (Array.isArray(salvo?.proprietarioIds)) setProprietarioIdsState(salvo!.proprietarioIds as string[])
+        const listaProp = ((prop || []) as any[]).map((r) => r.pessoa).filter(Boolean) as Proprietario[]
+        const propIdsSalvos = Array.isArray(salvo?.proprietarioIds) ? (salvo!.proprietarioIds as string[]) : []
+        const propIdsValidos = propIdsSalvos.filter((id) => listaProp.some((p) => p.id === id))
+        setProprietarioIdsState(propIdsValidos.length > 0 ? propIdsValidos : listaProp.map((p) => p.id))
         if (typeof salvo?.modoFiltro === 'string') setModoFiltroState(salvo.modoFiltro as ModoFiltro)
         if (typeof salvo?.mes === 'string') setMesState(salvo.mes)
         if (typeof salvo?.safraAnoInicio === 'number') setSafraAnoInicioState(salvo.safraAnoInicio)
@@ -158,6 +163,17 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
   function alternarProprietario(id: string) {
     setProprietarioIdsState((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]))
   }
+
+  // espelha alternarTodas — alterna entre todos marcados e nenhum
+  // marcado. "Nenhum marcado" não esconde lançamentos sem proprietário
+  // atribuído (quem consome isso decide como tratar esse caso — ver
+  // app/relatorios/page.tsx, que mostra só os sem proprietário nesse
+  // estado, em vez de escondê-los).
+  function alternarTodosProprietarios() {
+    setProprietarioIdsState((prev) => (prev.length === proprietarios.length ? [] : proprietarios.map((p) => p.id)))
+  }
+
+  const todosProprietariosSelecionados = proprietarios.length > 0 && proprietarioIds.length === proprietarios.length
   const hoje = new Date().toISOString().slice(0, 10)
   const safra = periodoSafra(safraAnoInicio)
   const anoCalendario = periodoAno(anoCalendarioSelecionado)
@@ -191,6 +207,8 @@ export function FiltroGlobalProvider({ children }: { children: React.ReactNode }
     proprietarioIds,
     setProprietarioIds: setProprietarioIdsState,
     alternarProprietario,
+    alternarTodosProprietarios,
+    todosProprietariosSelecionados,
     modoFiltro,
     setModoFiltro: setModoFiltroState,
     mes,
