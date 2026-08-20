@@ -5,7 +5,6 @@ import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { corTipoUsoArea } from '@/lib/area-cores'
-import AreaInicialForm from '@/components/fazendas/AreaInicialForm'
 import { formatArea, formatQuantidade } from '@/lib/format'
 import {
   ultimoDiaDoMes,
@@ -22,13 +21,16 @@ type TipoUsoArea = { id: string; nome: string }
 type SubtipoUsoArea = { id: string; tipo_uso_id: string; nome: string; ativo: boolean }
 type PastoResumo = { id: string; nome: string; area_ha: number | null; ativo: boolean }
 
+type TipoMovimentacaoArea = 'MUDANCA_USO' | 'INCORPORACAO_AREA' | 'DESINCORPORACAO_AREA'
+
 type MovimentacaoArea = {
   id: string
+  tipo: TipoMovimentacaoArea
   data: string
   tipo_uso_origem_id: string | null
-  tipo_uso_destino_id: string
+  tipo_uso_destino_id: string | null
   subtipo_uso_origem_id: string | null
-  subtipo_uso_destino_id: string
+  subtipo_uso_destino_id: string | null
   area_ha: number
   observacao: string | null
   tipo_uso_origem: { nome: string } | null
@@ -44,6 +46,16 @@ function labelTipoUso(tipoNome: string | undefined, subtipoNome: string | undefi
   if (!tipoNome) return '—'
   if (!subtipoNome || subtipoNome === 'Geral') return tipoNome
   return `${tipoNome} (${subtipoNome})`
+}
+
+function labelMovimentacao(m: MovimentacaoArea) {
+  if (m.tipo === 'INCORPORACAO_AREA') {
+    return `+ ${labelTipoUso(m.tipo_uso_destino?.nome, m.subtipo_uso_destino?.nome)}`
+  }
+  if (m.tipo === 'DESINCORPORACAO_AREA') {
+    return `− ${labelTipoUso(m.tipo_uso_origem?.nome, m.subtipo_uso_origem?.nome)}`
+  }
+  return `${labelTipoUso(m.tipo_uso_origem?.nome, m.subtipo_uso_origem?.nome)} → ${labelTipoUso(m.tipo_uso_destino?.nome, m.subtipo_uso_destino?.nome)}`
 }
 
 type ChecagemEdicaoArea = {
@@ -87,7 +99,17 @@ function formatarData(iso: string) {
 
 const NOMES_MES_ABREV = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
-export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string }) {
+export default function DistribuicaoAreaPanel({
+  fazendaId,
+  onAreaChanged,
+}: {
+  fazendaId: string
+  // avisa quem chamou (a barra de estatísticas fixa em app/fazendas/page.tsx)
+  // que Área total/Pecuária/Agricultura podem ter mudado — essa barra vive
+  // fora deste componente, sem remount ao editar aqui dentro, então
+  // precisa desse aviso explícito pra não ficar mostrando número antigo
+  onAreaChanged?: () => void
+}) {
   const [fazendaSelecionada, setFazendaSelecionada] = useState<FazendaResumo | null>(null)
   const [tiposUso, setTiposUso] = useState<TipoUsoArea[]>([])
   const [subtiposUso, setSubtiposUso] = useState<SubtipoUsoArea[]>([])
@@ -106,6 +128,12 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   const [loadingDistribuicao, setLoadingDistribuicao] = useState(false)
   const [erroDistribuicao, setErroDistribuicao] = useState<string | null>(null)
   const [areasFinais, setAreasFinais] = useState<Record<string, number>>({})
+  // incrementado depois de qualquer lançamento novo/editado na aba —
+  // as 3 buscas abaixo (gráfico/tabela de distribuição, áreas finais,
+  // conferência com pastos) não têm nenhuma dependência que mude
+  // sozinha quando só a lista de movimentações muda, então precisam
+  // desse empurrão explícito pra refletir o lançamento sem reload
+  const [refreshKey, setRefreshKey] = useState(0)
 
   // conferência com pastos (só quando controla_pasto está ligado) — soma
   // da área dos pastos ativos vs. área alocada em Pecuária hoje. Vínculo
@@ -113,9 +141,6 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   // livre (sem subtipo/tipo de uso próprio).
   const [pastosAtivos, setPastosAtivos] = useState<PastoResumo[]>([])
   const [areaPecuariaHoje, setAreaPecuariaHoje] = useState<number | null>(null)
-
-  const [mostrarCorrecaoInicial, setMostrarCorrecaoInicial] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
 
   // lançamento de mudança de uso
   const [data, setData] = useState('')
@@ -128,6 +153,9 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   const [novoSubtipoDestinoNome, setNovoSubtipoDestinoNome] = useState('')
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
+  // "+ Novo Lançamento" — mesmo padrão recolhido/expansível já usado em
+  // Lançamento de Movimentações (app/movimentacoes/page.tsx)
+  const [formularioAberto, setFormularioAberto] = useState(false)
 
   const [areaDisponivelOrigem, setAreaDisponivelOrigem] = useState<number | null>(null)
   const [carregandoAreaDisponivel, setCarregandoAreaDisponivel] = useState(false)
@@ -138,6 +166,22 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
     payload: Record<string, unknown>
     mensagem: string
   } | null>(null)
+
+  // incorporar/desincorporar área — compra/venda de terra, muda o
+  // total da fazenda (diferente de "Lançar mudança de uso", que só
+  // realoca área que já existe). Formulário próprio, separado do de
+  // mudança de uso, mesmo padrão "+ Novo Lançamento" recolhido.
+  const [formAjusteAberto, setFormAjusteAberto] = useState(false)
+  const [tipoAjuste, setTipoAjuste] = useState<'INCORPORACAO_AREA' | 'DESINCORPORACAO_AREA'>('INCORPORACAO_AREA')
+  const [dataAjuste, setDataAjuste] = useState('')
+  const [tipoUsoAjusteId, setTipoUsoAjusteId] = useState('')
+  const [subtipoUsoAjusteId, setSubtipoUsoAjusteId] = useState('')
+  const [novoSubtipoAjusteNome, setNovoSubtipoAjusteNome] = useState('')
+  const [areaAjusteHa, setAreaAjusteHa] = useState('')
+  const [observacaoAjuste, setObservacaoAjuste] = useState('')
+  const [salvandoAjuste, setSalvandoAjuste] = useState(false)
+  const [areaDisponivelAjuste, setAreaDisponivelAjuste] = useState<number | null>(null)
+  const [carregandoAreaDisponivelAjuste, setCarregandoAreaDisponivelAjuste] = useState(false)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -160,6 +204,13 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
     !!tipoDestinoSelecionado &&
     TIPOS_COM_SUBTIPO.includes(tipoDestinoSelecionado.nome) &&
     subtiposDoTipo(tipoUsoDestinoId).length > 1
+
+  const tipoAjusteSelecionado = tiposUso.find((t) => t.id === tipoUsoAjusteId)
+  const mostrarSubtipoAjuste =
+    controlaSubtipoArea &&
+    !!tipoAjusteSelecionado &&
+    TIPOS_COM_SUBTIPO.includes(tipoAjusteSelecionado.nome) &&
+    subtiposDoTipo(tipoUsoAjusteId).length > 1
 
   const safra = periodoSafra(safraAnoInicio)
   const anoCalendario = periodoAno(anoCalendarioSelecionado)
@@ -210,10 +261,10 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       supabase
         .from('movimentacoes_area')
         .select(
-          'id, data, tipo_uso_origem_id, tipo_uso_destino_id, subtipo_uso_origem_id, subtipo_uso_destino_id, area_ha, observacao, tipo_uso_origem:tipos_uso_area!tipo_uso_origem_id(nome), tipo_uso_destino:tipos_uso_area!tipo_uso_destino_id(nome), subtipo_uso_origem:subtipos_uso_area!subtipo_uso_origem_id(nome), subtipo_uso_destino:subtipos_uso_area!subtipo_uso_destino_id(nome)'
+          'id, tipo, data, tipo_uso_origem_id, tipo_uso_destino_id, subtipo_uso_origem_id, subtipo_uso_destino_id, area_ha, observacao, tipo_uso_origem:tipos_uso_area!tipo_uso_origem_id(nome), tipo_uso_destino:tipos_uso_area!tipo_uso_destino_id(nome), subtipo_uso_origem:subtipos_uso_area!subtipo_uso_origem_id(nome), subtipo_uso_destino:subtipos_uso_area!subtipo_uso_destino_id(nome)'
         )
         .eq('fazenda_id', fId)
-        .eq('tipo', 'MUDANCA_USO')
+        .in('tipo', ['MUDANCA_USO', 'INCORPORACAO_AREA', 'DESINCORPORACAO_AREA'])
         .order('data', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(20),
@@ -287,6 +338,11 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       .from('modulos')
       .select('id, pastos(id, nome, area_ha, ativo)')
       .eq('fazenda_id', fazendaId)
+      // só módulos de Pecuária — desde que Agricultura existe (migração
+      // 052, conversão pasto↔talhão), somar talhões aqui junto misturaria
+      // a soma com a área de um tipo de uso diferente do denominador
+      // (área em Pecuária) logo abaixo
+      .eq('tipo_utilizacao', 'PECUARIA')
       .then(({ data }) => {
         if (cancelado) return
         const todos = ((data || []) as any[]).flatMap((m) => m.pastos || [])
@@ -361,6 +417,41 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tipoUsoDestinoId, mostrarSubtipoDestino, subtiposUso])
 
+  useEffect(() => {
+    if (!tipoUsoAjusteId) {
+      setSubtipoUsoAjusteId('')
+      return
+    }
+    if (!mostrarSubtipoAjuste) {
+      const geral = subtiposDoTipo(tipoUsoAjusteId).find((s) => s.nome === 'Geral') || subtiposDoTipo(tipoUsoAjusteId)[0]
+      setSubtipoUsoAjusteId(geral ? geral.id : '')
+    } else if (!subtiposDoTipo(tipoUsoAjusteId).some((s) => s.id === subtipoUsoAjusteId)) {
+      setSubtipoUsoAjusteId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipoUsoAjusteId, mostrarSubtipoAjuste, subtiposUso])
+
+  // área disponível só faz sentido pra desincorporar (precisa ter de
+  // onde tirar) — incorporar nunca tem limite, área nova é o novo total
+  useEffect(() => {
+    if (tipoAjuste !== 'DESINCORPORACAO_AREA' || !tipoUsoAjusteId || !dataAjuste) {
+      setAreaDisponivelAjuste(null)
+      return
+    }
+    let cancelado = false
+    setCarregandoAreaDisponivelAjuste(true)
+    supabase
+      .rpc('fn_area_por_uso', { p_fazenda_id: fazendaId, p_tipo_uso_id: tipoUsoAjusteId, p_data: dataAjuste })
+      .then(({ data: saldo, error }) => {
+        if (cancelado) return
+        setAreaDisponivelAjuste(error ? null : saldo)
+        setCarregandoAreaDisponivelAjuste(false)
+      })
+    return () => {
+      cancelado = true
+    }
+  }, [fazendaId, tipoAjuste, tipoUsoAjusteId, dataAjuste])
+
   async function resolverSubtipoId(
     tipoUsoId: string,
     subtipoId: string,
@@ -398,13 +489,14 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   }
 
   function iniciarEdicao(m: MovimentacaoArea) {
+    setFormularioAberto(true)
     setEditandoId(m.id)
     setData(m.data)
     setTipoUsoOrigemId(m.tipo_uso_origem_id || '')
-    setTipoUsoDestinoId(m.tipo_uso_destino_id)
+    setTipoUsoDestinoId(m.tipo_uso_destino_id || '')
     setAreaHa(String(m.area_ha))
     setSubtipoUsoOrigemId(m.subtipo_uso_origem_id || '')
-    setSubtipoUsoDestinoId(m.subtipo_uso_destino_id)
+    setSubtipoUsoDestinoId(m.subtipo_uso_destino_id || '')
     setObservacao(m.observacao || '')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -412,6 +504,71 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
   function cancelarEdicao() {
     setEditandoId(null)
     limparFormulario()
+  }
+
+  function handleFecharFormulario() {
+    if (editandoId) {
+      cancelarEdicao()
+    } else {
+      limparFormulario()
+    }
+    setFormularioAberto(false)
+  }
+
+  function limparFormularioAjuste() {
+    setDataAjuste('')
+    setTipoUsoAjusteId('')
+    setSubtipoUsoAjusteId('')
+    setNovoSubtipoAjusteNome('')
+    setAreaAjusteHa('')
+    setObservacaoAjuste('')
+  }
+
+  function handleFecharFormAjuste() {
+    limparFormularioAjuste()
+    setFormAjusteAberto(false)
+  }
+
+  async function handleSubmitAjuste(e: React.FormEvent) {
+    e.preventDefault()
+    if (!dataAjuste || !tipoUsoAjusteId || !areaAjusteHa) return
+    if (mostrarSubtipoAjuste && subtipoUsoAjusteId === NOVO_SUBTIPO && !novoSubtipoAjusteNome.trim()) {
+      alert('Informe o nome do novo subtipo.')
+      return
+    }
+
+    const areaNum = parseFloat(areaAjusteHa)
+    if (tipoAjuste === 'DESINCORPORACAO_AREA' && areaDisponivelAjuste !== null && areaNum > areaDisponivelAjuste) {
+      alert('Área indisponível nesse tipo de uso para a data desejada.')
+      return
+    }
+
+    const subtipoFinal = await resolverSubtipoId(tipoUsoAjusteId, subtipoUsoAjusteId, novoSubtipoAjusteNome, mostrarSubtipoAjuste)
+    if (mostrarSubtipoAjuste && !subtipoFinal) return
+
+    const payload: Record<string, unknown> = {
+      fazenda_id: fazendaId,
+      tipo: tipoAjuste,
+      data: dataAjuste,
+      area_ha: areaNum,
+      observacao: observacaoAjuste.trim() || null,
+      tipo_uso_origem_id: tipoAjuste === 'DESINCORPORACAO_AREA' ? tipoUsoAjusteId : null,
+      tipo_uso_destino_id: tipoAjuste === 'INCORPORACAO_AREA' ? tipoUsoAjusteId : null,
+      subtipo_uso_origem_id: tipoAjuste === 'DESINCORPORACAO_AREA' ? subtipoFinal : null,
+      subtipo_uso_destino_id: tipoAjuste === 'INCORPORACAO_AREA' ? subtipoFinal : null,
+    }
+
+    setSalvandoAjuste(true)
+    const { error } = await supabase.from('movimentacoes_area').insert(payload)
+    if (error) {
+      alert('Erro ao salvar: ' + error.message)
+    } else {
+      handleFecharFormAjuste()
+      await carregarDados(fazendaId)
+      setRefreshKey((k) => k + 1)
+      onAreaChanged?.()
+    }
+    setSalvandoAjuste(false)
   }
 
   async function salvarEdicao(payloadFinal: Record<string, unknown>) {
@@ -424,7 +581,10 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
     } else {
       setEditandoId(null)
       limparFormulario()
+      setFormularioAberto(false)
       await carregarDados(fazendaId)
+      setRefreshKey((k) => k + 1)
+      onAreaChanged?.()
     }
     setAvisoEdicaoFutura(null)
     setSalvando(false)
@@ -515,7 +675,10 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       alert('Erro ao salvar: ' + error.message)
     } else {
       limparFormulario()
+      setFormularioAberto(false)
       await carregarDados(fazendaId)
+      setRefreshKey((k) => k + 1)
+      onAreaChanged?.()
     }
     setSalvando(false)
   }
@@ -839,27 +1002,6 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
       )}
 
       <div className="rounded-card border border-border bg-bg p-5">
-        <button
-          type="button"
-          onClick={() => setMostrarCorrecaoInicial((v) => !v)}
-          className="flex w-full items-center justify-between text-left"
-        >
-          <div>
-            <h3 className="text-sm font-semibold text-text-primary">Corrigir declaração inicial</h3>
-            <p className="mt-1 text-xs text-text-secondary">
-              Ajuste a área por tipo de uso declarada quando a fazenda foi cadastrada.
-            </p>
-          </div>
-          <span className="text-lg text-text-secondary">{mostrarCorrecaoInicial ? '−' : '+'}</span>
-        </button>
-        {mostrarCorrecaoInicial && (
-          <div className="mt-4">
-            <AreaInicialForm fazendaId={fazendaId} onSalvo={() => setRefreshKey((k) => k + 1)} />
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-card border border-border bg-bg p-5">
         <div className="mb-4 text-sm text-text-secondary">
           Área total da fazenda:{' '}
           {areaTotalFazenda != null ? (
@@ -869,8 +1011,25 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
           )}
         </div>
 
+        {!formularioAberto ? (
+          <button
+            type="button"
+            onClick={() => setFormularioAberto(true)}
+            className="flex w-full items-center justify-center gap-2 rounded-control border-[1.5px] border-dashed border-brand-500 bg-brand-100/40 py-3.5 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Nova mudança de uso
+          </button>
+        ) : (
         <form onSubmit={handleSubmit} onKeyDown={bloquearEnvioPorEnter} className="space-y-4">
-          <h3 className="text-sm font-semibold text-text-primary">{editandoId ? 'Editar mudança de uso' : 'Lançar mudança de uso'}</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-text-primary">{editandoId ? 'Editar mudança de uso' : 'Nova mudança de uso'}</h3>
+            <button type="button" onClick={handleFecharFormulario} className="text-xs text-text-secondary underline">
+              Fechar
+            </button>
+          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -1041,25 +1200,198 @@ export default function DistribuicaoAreaPanel({ fazendaId }: { fazendaId: string
             )}
           </div>
         </form>
+        )}
 
-        <h3 className="mt-8 mb-3 text-sm font-semibold text-text-primary">Últimas mudanças de uso</h3>
+        <div className="mt-6 border-t border-border pt-6">
+          <h3 className="mb-1 text-sm font-semibold text-text-primary">Incorporar ou desincorporar área</h3>
+          <p className="mb-3 text-xs text-text-secondary">
+            Pra quando a fazenda compra uma área nova (incorpora ao total) ou vende um pedaço (desincorpora) — diferente
+            de "Lançar mudança de uso", que só realoca área que já existe entre tipos de uso.
+          </p>
+
+          {!formAjusteAberto ? (
+            <button
+              type="button"
+              onClick={() => setFormAjusteAberto(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-control border-[1.5px] border-dashed border-brand-500 bg-brand-100/40 py-3.5 text-sm font-bold text-brand-700 transition-colors hover:bg-brand-100"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Incorporar/desincorporar área
+            </button>
+          ) : (
+            <form onSubmit={handleSubmitAjuste} onKeyDown={bloquearEnvioPorEnter} className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-text-primary">Nova incorporação/desincorporação</h4>
+                <button type="button" onClick={handleFecharFormAjuste} className="text-xs text-text-secondary underline">
+                  Fechar
+                </button>
+              </div>
+
+              <div className="flex gap-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setTipoAjuste('INCORPORACAO_AREA')}
+                  className={`rounded-control border px-3 py-1.5 ${
+                    tipoAjuste === 'INCORPORACAO_AREA'
+                      ? 'border-brand-500 bg-brand-100 text-brand-700'
+                      : 'border-border text-text-secondary'
+                  }`}
+                >
+                  Incorporar (comprei uma área)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTipoAjuste('DESINCORPORACAO_AREA')}
+                  className={`rounded-control border px-3 py-1.5 ${
+                    tipoAjuste === 'DESINCORPORACAO_AREA'
+                      ? 'border-brand-500 bg-brand-100 text-brand-700'
+                      : 'border-border text-text-secondary'
+                  }`}
+                >
+                  Desincorporar (vendi uma área)
+                </button>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                    Data
+                    <Required />
+                  </label>
+                  <input
+                    type="date"
+                    max={hoje}
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={dataAjuste}
+                    onChange={(e) => setDataAjuste(e.target.value)}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                    {tipoAjuste === 'INCORPORACAO_AREA' ? 'Tipo de uso de destino' : 'Tipo de uso de origem'}
+                    <Required />
+                  </label>
+                  <select
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={tipoUsoAjusteId}
+                    onChange={(e) => setTipoUsoAjusteId(e.target.value)}
+                    required
+                  >
+                    <option value="">Selecione...</option>
+                    {tiposUso.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {mostrarSubtipoAjuste && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                      Subtipo
+                      <Required />
+                    </label>
+                    <select
+                      className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                      value={subtipoUsoAjusteId}
+                      onChange={(e) => setSubtipoUsoAjusteId(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione...</option>
+                      {subtiposDoTipo(tipoUsoAjusteId).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.nome}
+                        </option>
+                      ))}
+                      <option value={NOVO_SUBTIPO}>+ Novo subtipo...</option>
+                    </select>
+                    {subtipoUsoAjusteId === NOVO_SUBTIPO && (
+                      <input
+                        className="mt-1.5 w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                        value={novoSubtipoAjusteNome}
+                        onChange={(e) => setNovoSubtipoAjusteNome(e.target.value)}
+                        placeholder="Nome do novo subtipo"
+                      />
+                    )}
+                  </div>
+                )}
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                    Área (ha)
+                    <Required />
+                  </label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={areaAjusteHa}
+                    onChange={(e) => setAreaAjusteHa(e.target.value)}
+                    required
+                  />
+                  {tipoAjuste === 'DESINCORPORACAO_AREA' && tipoUsoAjusteId && dataAjuste && (
+                    <p
+                      className={`mt-1 text-xs ${
+                        areaDisponivelAjuste !== null && areaAjusteHa && parseFloat(areaAjusteHa) > areaDisponivelAjuste
+                          ? 'text-error'
+                          : 'text-text-secondary'
+                      }`}
+                    >
+                      {carregandoAreaDisponivelAjuste
+                        ? 'Consultando área disponível...'
+                        : areaDisponivelAjuste !== null
+                          ? `Área disponível: ${formatArea(areaDisponivelAjuste)} ha${
+                              areaAjusteHa && parseFloat(areaAjusteHa) > areaDisponivelAjuste
+                                ? ' — área indisponível nesse tipo de uso para a data desejada'
+                                : ''
+                            }`
+                          : ''}
+                    </p>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">Observação</label>
+                  <textarea
+                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
+                    value={observacaoAjuste}
+                    onChange={(e) => setObservacaoAjuste(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={salvandoAjuste}
+                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
+              >
+                {salvandoAjuste ? 'Salvando...' : tipoAjuste === 'INCORPORACAO_AREA' ? 'Incorporar área' : 'Desincorporar área'}
+              </button>
+            </form>
+          )}
+        </div>
+
+        <h3 className="mt-8 mb-3 text-sm font-semibold text-text-primary">Últimas movimentações de área</h3>
         {loading ? (
           <div className="h-16 animate-pulse rounded-control bg-border" />
         ) : movimentacoes.length === 0 ? (
-          <p className="text-sm text-text-secondary">Nenhuma mudança de uso lançada ainda.</p>
+          <p className="text-sm text-text-secondary">Nenhuma movimentação de área lançada ainda.</p>
         ) : (
           <div className="space-y-3">
             {movimentacoes.map((m) => (
               <div key={m.id} className="rounded-card border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <strong className="text-sm text-text-primary">
-                    {labelTipoUso(m.tipo_uso_origem?.nome, m.subtipo_uso_origem?.nome)} → {labelTipoUso(m.tipo_uso_destino?.nome, m.subtipo_uso_destino?.nome)}
-                  </strong>
+                  <strong className="text-sm text-text-primary">{labelMovimentacao(m)}</strong>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-text-secondary">{m.data}</span>
-                    <button type="button" className="text-xs text-brand-500 underline" onClick={() => iniciarEdicao(m)}>
-                      Editar
-                    </button>
+                    {m.tipo === 'MUDANCA_USO' && (
+                      <button type="button" className="text-xs text-brand-500 underline" onClick={() => iniciarEdicao(m)}>
+                        Editar
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="text-sm text-text-secondary">{formatArea(m.area_ha)} ha</div>

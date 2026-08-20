@@ -13,10 +13,13 @@ import type { PastoMapa, MapaPastosHandle } from '@/components/fazendas/MapaPast
 // leaflet acessa `window` na importação — precisa ficar fora do SSR
 const MapaPastos = dynamic(() => import('@/components/fazendas/MapaPastos'), { ssr: false })
 
+type TipoUtilizacaoModulo = 'PECUARIA' | 'AGRICULTURA'
+
 type Modulo = {
   id: string
   fazenda_id: string
   nome: string
+  tipo_utilizacao: TipoUtilizacaoModulo
   ativo: boolean
   ordem: number
   sistema: boolean
@@ -85,13 +88,27 @@ function IconMoverModulo() {
   )
 }
 
+function IconConverter() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 7h11l-3-3M17 17H6l3 3" />
+    </svg>
+  )
+}
+
 export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [modulos, setModulos] = useState<Modulo[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
   const [loadingPastos, setLoadingPastos] = useState(false)
   const [processandoPastoId, setProcessandoPastoId] = useState<string | null>(null)
   const [novoModuloNome, setNovoModuloNome] = useState('')
+  const [novoModuloTipo, setNovoModuloTipo] = useState<TipoUtilizacaoModulo>('PECUARIA')
   const [criandoModulo, setCriandoModulo] = useState(false)
+  // popover discreto pra "Converter em Talhão/Pasto" — mesmo padrão do
+  // popover de mover módulo, listando só módulos do tipo oposto
+  const [conversaoPickerPastoId, setConversaoPickerPastoId] = useState<string | null>(null)
+  const [convertendoPastoId, setConvertendoPastoId] = useState<string | null>(null)
+  const conversaoPickerRef = useRef<HTMLDivElement>(null)
   const [novoPastoNomePorModulo, setNovoPastoNomePorModulo] = useState<Record<string, string>>({})
   const [novoPastoAreaPorModulo, setNovoPastoAreaPorModulo] = useState<Record<string, string>>({})
   const [criandoPastoModuloId, setCriandoPastoModuloId] = useState<string | null>(null)
@@ -102,6 +119,11 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   // toa na maioria dos pastos (que nunca precisam mudar de módulo)
   const [moduloPickerPastoId, setModuloPickerPastoId] = useState<string | null>(null)
   const moduloPickerRef = useRef<HTMLDivElement>(null)
+
+  // "Área alocada em pastos" — mesma primitiva (fn_area_por_uso) já usada
+  // em DistribuicaoAreaPanel pra "Conferência com pastos", aqui como card
+  // visual com cor por proximidade do limite
+  const [areaPecuariaHoje, setAreaPecuariaHoje] = useState<number | null>(null)
 
   const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
   const [importandoContornoFazenda, setImportandoContornoFazenda] = useState(false)
@@ -126,7 +148,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     setLoadingPastos(true)
     const { data: mods } = await supabase
       .from('modulos')
-      .select('id, fazenda_id, nome, ativo, ordem, sistema')
+      .select('id, fazenda_id, nome, tipo_utilizacao, ativo, ordem, sistema')
       .eq('fazenda_id', fazendaId)
       .order('ordem')
     const modIds = (mods || []).map((m) => m.id)
@@ -158,6 +180,27 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 
+  useEffect(() => {
+    let cancelado = false
+    const hoje = new Date().toISOString().slice(0, 10)
+    supabase
+      .from('tipos_uso_area')
+      .select('id')
+      .eq('nome', 'Pecuária')
+      .single()
+      .then(({ data: tipoPecuaria }) => {
+        if (!tipoPecuaria) return
+        return supabase.rpc('fn_area_por_uso', { p_fazenda_id: fazendaId, p_tipo_uso_id: tipoPecuaria.id, p_data: hoje })
+      })
+      .then((res) => {
+        if (!cancelado) setAreaPecuariaHoje(res?.data ?? null)
+      })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId])
+
   // fecha o popover de mover módulo ao clicar fora dele
   useEffect(() => {
     if (!moduloPickerPastoId) return
@@ -170,6 +213,18 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     return () => document.removeEventListener('mousedown', onClickFora)
   }, [moduloPickerPastoId])
 
+  // mesmo princípio pro popover de "Converter em Talhão/Pasto"
+  useEffect(() => {
+    if (!conversaoPickerPastoId) return
+    function onClickFora(e: MouseEvent) {
+      if (conversaoPickerRef.current && !conversaoPickerRef.current.contains(e.target as Node)) {
+        setConversaoPickerPastoId(null)
+      }
+    }
+    document.addEventListener('mousedown', onClickFora)
+    return () => document.removeEventListener('mousedown', onClickFora)
+  }, [conversaoPickerPastoId])
+
   async function handleCriarModulo() {
     if (!novoModuloNome.trim()) return
     setCriandoModulo(true)
@@ -177,13 +232,14 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     const { error } = await supabase.from('modulos').insert({
       fazenda_id: fazendaId,
       nome: novoModuloNome.trim(),
-      tipo_utilizacao: 'PECUARIA',
+      tipo_utilizacao: novoModuloTipo,
       ordem: proximaOrdem,
     })
     if (error) {
       alert('Erro ao criar módulo: ' + error.message)
     } else {
       setNovoModuloNome('')
+      setNovoModuloTipo('PECUARIA')
       await carregarModulosPastos()
     }
     setCriandoModulo(false)
@@ -275,6 +331,24 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
     } else {
       await carregarModulosPastos()
     }
+  }
+
+  // converte pasto↔talhão: insere a MUDANCA_USO (Pecuária↔Agricultura)
+  // e move o pasto pro módulo de destino, tudo atomicamente dentro de
+  // fn_converter_pasto_talhao (migração 052)
+  async function handleConverterPasto(p: Pasto, moduloDestinoId: string) {
+    setConversaoPickerPastoId(null)
+    setConvertendoPastoId(p.id)
+    const { error } = await supabase.rpc('fn_converter_pasto_talhao', {
+      p_pasto_id: p.id,
+      p_modulo_destino_id: moduloDestinoId,
+    })
+    if (error) {
+      alert('Erro ao converter: ' + error.message)
+    } else {
+      await carregarModulosPastos()
+    }
+    setConvertendoPastoId(null)
   }
 
   async function handleAlternarAtivoPasto(p: Pasto) {
@@ -549,12 +623,46 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const pastoSelecionadoMapa = pastos.find((p) => p.id === pastoSelecionadoMapaId) || null
   const pastosSemContorno = pastos.filter((p) => p.ativo && !p.geometria)
 
+  const modulosPecuariaIds = new Set(modulos.filter((m) => m.tipo_utilizacao === 'PECUARIA').map((m) => m.id))
+  const somaPastosAtivos = pastos
+    .filter((p) => p.ativo && modulosPecuariaIds.has(p.modulo_id))
+    .reduce((s, p) => s + (p.area_ha || 0), 0)
+  const pctPastos = areaPecuariaHoje ? Math.min(999, (somaPastosAtivos / areaPecuariaHoje) * 100) : 0
+  const corPct = pctPastos >= 100 ? 'error' : pctPastos >= 80 ? 'warning' : 'success'
+
   return (
     <div className="mt-4">
       <p className="text-sm text-text-secondary">
         Cada módulo roda o pastejo rotacionado entre seus pastos/talhões. A soma das áreas dos pastos não pode
         ultrapassar a área alocada em "Pecuária" na fazenda.
       </p>
+
+      {areaPecuariaHoje != null && (
+        <div className="mt-4 flex items-center gap-4 rounded-control border border-border bg-surface p-3.5">
+          <div className="shrink-0">
+            <div className="text-[10.5px] font-bold uppercase tracking-wide text-text-muted">Área alocada em pastos</div>
+            <div className="text-[15px] font-bold text-text-primary">
+              {formatArea(somaPastosAtivos)}{' '}
+              <span className="text-xs font-normal text-text-muted">de {formatArea(areaPecuariaHoje)} ha (Pecuária)</span>
+            </div>
+          </div>
+          <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-bg">
+            <div
+              className={`h-full rounded-full transition-all ${
+                corPct === 'error' ? 'bg-error' : corPct === 'warning' ? 'bg-warning' : 'bg-success'
+              }`}
+              style={{ width: `${Math.min(100, pctPastos)}%` }}
+            />
+          </div>
+          <div
+            className={`shrink-0 text-sm font-bold ${
+              corPct === 'error' ? 'text-error' : corPct === 'warning' ? 'text-warning' : 'text-text-secondary'
+            }`}
+          >
+            {formatArea(pctPastos)}%
+          </div>
+        </div>
+      )}
 
       {pastosSemContorno.length > 0 && (
         <div className="mt-4 rounded-control border border-dashed border-border bg-surface p-4">
@@ -787,11 +895,20 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                   <Fragment key={m.id}>
                     <tr className={`bg-bg ${!m.ativo ? 'opacity-60' : ''}`}>
                       <td className="border-b border-border p-2">
-                        <input
-                          className={`w-full font-semibold ${inputClass}`}
-                          defaultValue={m.nome}
-                          onBlur={(e) => handleRenomearModulo(m, e.target.value)}
-                        />
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`shrink-0 rounded-control px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              m.tipo_utilizacao === 'AGRICULTURA' ? 'bg-warning-bg text-warning' : 'bg-brand-100 text-brand-700'
+                            }`}
+                          >
+                            {m.tipo_utilizacao === 'AGRICULTURA' ? 'Agricultura' : 'Pecuária'}
+                          </span>
+                          <input
+                            className={`w-full font-semibold ${inputClass}`}
+                            defaultValue={m.nome}
+                            onBlur={(e) => handleRenomearModulo(m, e.target.value)}
+                          />
+                        </div>
                       </td>
                       <td className="border-b border-border p-2" />
                       <td className="border-b border-border p-2 text-right">
@@ -954,6 +1071,43 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                                   )}
                                 </div>
                               )}
+                              {!p.sistema && modulos.some((mod) => mod.tipo_utilizacao !== m.tipo_utilizacao) && (
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    disabled={convertendoPastoId === p.id}
+                                    title={m.tipo_utilizacao === 'AGRICULTURA' ? 'Converter em Pasto' : 'Converter em Talhão'}
+                                    className="hover:text-warning disabled:cursor-not-allowed disabled:opacity-40"
+                                    onClick={() =>
+                                      setConversaoPickerPastoId(conversaoPickerPastoId === p.id ? null : p.id)
+                                    }
+                                  >
+                                    <IconConverter />
+                                  </button>
+                                  {conversaoPickerPastoId === p.id && (
+                                    <div
+                                      ref={conversaoPickerRef}
+                                      className="absolute right-0 z-30 mt-1 w-52 rounded-control border border-border bg-surface p-1 text-left shadow-lg"
+                                    >
+                                      <p className="px-2 py-1 text-[11px] text-text-muted">
+                                        Converter em {m.tipo_utilizacao === 'AGRICULTURA' ? 'pasto de' : 'talhão de'}...
+                                      </p>
+                                      {modulos
+                                        .filter((mod) => mod.tipo_utilizacao !== m.tipo_utilizacao)
+                                        .map((mod) => (
+                                          <button
+                                            key={mod.id}
+                                            type="button"
+                                            className="block w-full rounded px-2 py-1 text-left text-xs text-text-primary hover:bg-bg"
+                                            onClick={() => handleConverterPasto(p, mod.id)}
+                                          >
+                                            {mod.nome}
+                                          </button>
+                                        ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                               <button
                                 type="button"
                                 disabled={processandoPastoId === p.id || (p.ativo && ativosDoModulo.length <= 1)}
@@ -1021,12 +1175,22 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
 
               <tr className="border-t border-border">
                 <td className="p-2">
-                  <input
-                    className={`w-full ${inputClass}`}
-                    placeholder="Novo módulo"
-                    value={novoModuloNome}
-                    onChange={(e) => setNovoModuloNome(e.target.value)}
-                  />
+                  <div className="flex items-center gap-2">
+                    <select
+                      className={inputClass}
+                      value={novoModuloTipo}
+                      onChange={(e) => setNovoModuloTipo(e.target.value as TipoUtilizacaoModulo)}
+                    >
+                      <option value="PECUARIA">Pecuária</option>
+                      <option value="AGRICULTURA">Agricultura</option>
+                    </select>
+                    <input
+                      className={`w-full ${inputClass}`}
+                      placeholder="Novo módulo"
+                      value={novoModuloNome}
+                      onChange={(e) => setNovoModuloNome(e.target.value)}
+                    />
+                  </div>
                 </td>
                 <td className="p-2" />
                 <td className="p-2 text-right">
