@@ -3457,3 +3457,69 @@ falso-positivo numa aba nova, zero erros. Dados de teste (incorporação/desinco
 testes, removíveis via `delete from movimentacoes_area where observacao like 'Teste de%' or
 observacao like 'Gerado automaticamente pela conversão de "Pasto 2"%'` se algum dia incomodar (a
 trigger da Fase 6 desfaz o efeito em `fazendas.area_ha` sozinha ao excluir).
+
+## Tela "Módulos e Recursos" — domínios contratados/disponíveis fora de Fazendas
+
+O card "Controle de rebanho por pasto" (badge Ativo/Não contratado, recurso pago liberado só pelo
+Suporte — ver "Módulos de domínio + recursos") e o checkbox "Controle de subtipo de uso de área"
+(grátis, self-service) viviam dentro da aba Fazendas, um lugar sem relação temática com "o que minha
+conta contratou" — era só onde esse card tinha pousado quando o recurso pago foi criado na migração
+050. Pedido do usuário: extrair isso pra um campo próprio, fora da aba de Fazendas, mostrando tanto
+os módulos já contratados (ativos) quanto os disponíveis pra contratar — discutido e desenhado antes
+de implementar (`AskUserQuestion`, quatro decisões, todas a opção recomendada): rota própria
+`/modulos` em vez de aba dentro de `/usuarios`; mostrar também os Limites de uso (Multifazendas/
+Multiproprietário) com uso atual vs. limite, não só Domínios/Recursos; mover o checkbox grátis de
+subtipo de área pra essa tela também (Fazendas vira só cadastro de fazenda/pasto); e domínio/recurso
+não contratado aparece como card apagado com "Fale com o Suporte pra contratar", funcionando como
+vitrine do catálogo inteiro, não só um status do que já existe.
+
+**Sem migração de banco** — só leitura de tabelas já existentes, todas sob a mesma policy de RLS
+conta-scoped da Fase 1 multi-tenant (sem filtro `conta_id` manual, mesmo princípio "o banco resolve
+sozinho" de sempre): `conta_recursos` (dominio/recurso/ativo), `conta_limites` (tipo_limite/valor),
+contagem de `fazendas` e de `pessoa_papeis` filtrado por papel PROPRIETARIO (via `count: 'exact',
+head: true`), e `configuracoes` (pro toggle grátis).
+
+**`app/modulos/page.tsx`** (novo) — mesmo molde de gate de `app/usuarios/page.tsx`: `podeGerenciar =
+isDono && !(usuarioApp?.suporte && !emModoSuporte)`, skeleton de carregamento, card "Acesso
+restrito" com a mesma mensagem condicional já usada lá. Três seções:
+- **Domínios**: grid de cards, um por `DOMINIOS` (`lib/modulos.ts`, 5 domínios — só Pecuária tem
+  telas reais hoje). Contratado (`dominiosDaConta.has(d.id)`, já vem de `useAuth()` sem query
+  duplicada pra `conta_modulos`): badge verde "Contratado"; se o domínio tiver recursos no catálogo
+  (`RECURSOS.filter(r => r.dominio === d.id)`, `lib/conta-recursos.ts`), lista cada um logo abaixo
+  com seu próprio badge Ativo/Não contratado (resolvido contra `conta_recursos` carregado — hoje só
+  "Controle por pasto" dentro de Pecuária, mesma informação que já aparecia no card antigo). Não
+  contratado: card `opacity-60 border-dashed`, badge cinza, "Fale com o Suporte pra contratar esse
+  módulo."
+- **Limites de uso**: 2 cards fixos (Multifazendas, Multiproprietário) — com linha em
+  `conta_limites`: "N de M [fazendas/proprietários] cadastrados" + barra fina de progresso, mesmo
+  princípio de cor por faixa já usado no card "Área alocada em pastos" de `GestaoAreasPanel.tsx`
+  (`success` < 80%, `warning` 80-100%, `error` ≥ 100%); sem linha: "sem limite" (mesmo dado que
+  `excedeuLimiteConta`/`lib/conta-limites.ts` já usa pra bloquear, aqui só exibido).
+- **Configurações adicionais**: o checkbox "Controle de subtipo de uso de área", mesmo texto/handler
+  de sempre (`handleToggleControlaSubtipoArea`, update direto em
+  `configuracoes.controla_subtipo_area`), só que vivendo nesta página agora.
+
+**`lib/nav-icons.tsx`** ganha `ICONS.modulos` (uma caixa/pacote em 3 traços — topo hexagonal +
+linha do meio + haste vertical), deliberadamente diferente de `ICONS.configuracoes` (3 sliders, usado
+só no placeholder "Configurações" do rodapé) e de `ICONS.rebanhoPorPasto` (grade 2×2, já usado pro
+link "Rebanho por pasto" — uma primeira versão do ícone novo reaproveitou essa mesma grade por
+engano, corrigida antes de qualquer teste pra não duplicar o glifo entre dois links reais da
+Sidebar). `components/Sidebar.tsx` ganha o link "Módulos" no mesmo bloco `{isDono && (...)}` já usado
+pro link "Usuários" (grupo "Administração") — mesmo gate, mesmo estilo de link ativo/hover.
+
+**`app/fazendas/page.tsx`**: removido o card inteiro, junto do estado `controlaSubtipoArea`, da
+coluna `controla_subtipo_area` no `select` de `configuracoes` (mantém só `controla_pasto`), do estado
+`configuracaoId` (só existia pra esse toggle) e da função `handleToggleControlaSubtipoArea` —
+confirmado que `controlaSubtipoArea`/`configuracaoId` não eram usados em mais nenhum lugar do
+arquivo. **`controlaPasto` continua exatamente como estava** (estado, query, e as duas leituras que
+decidem se a aba "Gestão de Áreas" aparece) — só a exibição em badge é que saiu daqui, a variável em
+si segue necessária pra essa tela.
+
+Verificado no navegador de ponta a ponta (Suporte navegando a Conta Principal): `/modulos` mostrando
+Pecuária "Contratado" com "Controle por pasto: Contratado" aninhado (mesmo dado que já aparecia no
+card antigo), os outros 4 domínios "Não contratado" com o texto de contato; seção Limites mostrando
+"2 fazendas cadastradas · sem limite" e "2 proprietários cadastrados · sem limite" (Conta Principal
+não tem linha em `conta_limites` hoje); link "Módulos" presente e funcional na Sidebar, ao lado de
+"Usuários"; `app/fazendas/page.tsx` sem o card antigo, e a aba "Gestão de Áreas" continuando a
+aparecer normalmente pra "FAZENDA TESTE" (confirma que `controlaPasto` não quebrou com a remoção do
+resto). `npx tsc --noEmit` limpo antes e depois do ajuste do ícone.
