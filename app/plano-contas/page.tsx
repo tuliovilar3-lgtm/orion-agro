@@ -3,8 +3,6 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import ModuloGate from '@/components/ModuloGate'
-import { bloquearEnvioPorEnter } from '@/lib/form-utils'
-import Required from '@/components/Required'
 
 type Classe = {
   id: string
@@ -32,16 +30,6 @@ type Subcentro = {
   ativo: boolean
 }
 
-type Produto = {
-  id: string
-  nome: string
-  subcentro_custo_id: string | null
-  sistema: boolean
-  ativo: boolean
-}
-
-type Aba = 'plano' | 'produtos'
-
 function IconToggle() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
@@ -52,12 +40,9 @@ function IconToggle() {
 }
 
 export default function PlanoContasPage() {
-  const [abaSelecionada, setAbaSelecionada] = useState<Aba>('plano')
-
   const [classes, setClasses] = useState<Classe[]>([])
   const [centros, setCentros] = useState<Centro[]>([])
   const [subcentros, setSubcentros] = useState<Subcentro[]>([])
-  const [produtos, setProdutos] = useState<Produto[]>([])
   const [loading, setLoading] = useState(true)
 
   const [classesAbertas, setClassesAbertas] = useState<Set<string>>(new Set())
@@ -65,26 +50,18 @@ export default function PlanoContasPage() {
   const [novoSubcentroNome, setNovoSubcentroNome] = useState<Record<string, string>>({})
   const [salvando, setSalvando] = useState(false)
 
-  const [modalProdutoAberto, setModalProdutoAberto] = useState(false)
-  const [produtoNome, setProdutoNome] = useState('')
-  const [produtoClasseId, setProdutoClasseId] = useState('')
-  const [produtoCentroId, setProdutoCentroId] = useState('')
-  const [produtoSubcentroId, setProdutoSubcentroId] = useState('')
-
   const supabase = createClient()
 
   async function carregarTudo() {
     setLoading(true)
-    const [{ data: c1 }, { data: c2 }, { data: c3 }, { data: p }] = await Promise.all([
+    const [{ data: c1 }, { data: c2 }, { data: c3 }] = await Promise.all([
       supabase.from('classes_financeiras').select('id, numero, nome, tipo, ativo').order('numero'),
       supabase.from('centros_custo').select('id, classe_financeira_id, numero, nome, sistema, ativo').order('numero'),
       supabase.from('subcentros_custo').select('id, centro_custo_id, numero, nome, sistema, ativo').order('numero'),
-      supabase.from('produtos_financeiros').select('id, nome, subcentro_custo_id, sistema, ativo').order('nome'),
     ])
     setClasses((c1 || []) as Classe[])
     setCentros((c2 || []) as Centro[])
     setSubcentros((c3 || []) as Subcentro[])
-    setProdutos((p || []) as Produto[])
     setLoading(false)
   }
 
@@ -150,86 +127,18 @@ export default function PlanoContasPage() {
     else setSubcentros((prev) => prev.map((x) => (x.id === s.id ? { ...x, ativo: !x.ativo } : x)))
   }
 
-  async function handleAlternarAtivoProduto(p: Produto) {
-    const { error } = await supabase.from('produtos_financeiros').update({ ativo: !p.ativo }).eq('id', p.id)
-    if (error) alert('Erro: ' + error.message)
-    else setProdutos((prev) => prev.map((x) => (x.id === p.id ? { ...x, ativo: !x.ativo } : x)))
-  }
-
-  function abrirNovoProduto() {
-    setProdutoNome('')
-    setProdutoClasseId('')
-    setProdutoCentroId('')
-    setProdutoSubcentroId('')
-    setModalProdutoAberto(true)
-  }
-
-  async function handleSalvarProduto(e: React.FormEvent) {
-    e.preventDefault()
-    if (!produtoNome.trim()) return
-    setSalvando(true)
-    const { error } = await supabase.from('produtos_financeiros').insert({
-      nome: produtoNome.trim(),
-      subcentro_custo_id: produtoSubcentroId || null,
-    })
-    setSalvando(false)
-    if (error) {
-      alert('Erro ao salvar produto: ' + error.message)
-    } else {
-      setModalProdutoAberto(false)
-      await carregarTudo()
-    }
-  }
-
-  function labelClassificacao(p: Produto): string {
-    if (!p.subcentro_custo_id) return '—'
-    const sc = subcentros.find((s) => s.id === p.subcentro_custo_id)
-    if (!sc) return '—'
-    const c = centros.find((c) => c.id === sc.centro_custo_id)
-    const cl = c ? classes.find((cl) => cl.id === c.classe_financeira_id) : null
-    return [cl?.nome, c?.nome, sc.nome].filter(Boolean).join(' › ')
-  }
-
-  const centrosDaClasseProduto = centros.filter((c) => c.classe_financeira_id === produtoClasseId)
-  const subcentrosDoCentroProduto = subcentros.filter((s) => s.centro_custo_id === produtoCentroId)
-
   return (
     <ModuloGate modulo="plano_contas_financeiro">
       <div className="mx-auto max-w-4xl px-6 py-8 md:px-10">
         <h1 className="text-2xl font-extrabold text-text-primary">Plano de Contas</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          Classe → Centro de Custo → Subcentro de Custo (catálogo do módulo Financeiro) e os
-          Produtos/Serviços usados nos lançamentos.
-        </p>
-
-        <div className="mt-6 flex gap-1 border-b border-border">
-          {(
-            [
-              { id: 'plano', label: 'Plano de Contas' },
-              { id: 'produtos', label: 'Produtos e Serviços' },
-            ] as { id: Aba; label: string }[]
-          ).map((aba) => (
-            <button
-              key={aba.id}
-              type="button"
-              onClick={() => setAbaSelecionada(aba.id)}
-              className={`border-b-2 px-4 py-2.5 text-sm ${
-                abaSelecionada === aba.id
-                  ? 'border-brand-500 font-semibold text-brand-700'
-                  : 'border-transparent text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {aba.label}
-            </button>
-          ))}
-        </div>
+        <p className="mt-1 text-sm text-text-secondary">Classe → Centro de Custo → Subcentro de Custo, o catálogo do módulo Financeiro.</p>
 
         {loading ? (
           <div className="mt-6 space-y-3">
             <div className="h-16 animate-pulse rounded-card bg-border" />
             <div className="h-16 animate-pulse rounded-card bg-border" />
           </div>
-        ) : abaSelecionada === 'plano' ? (
+        ) : (
           <div className="mt-6 space-y-3">
             {classes.map((cl) => {
               const centrosDaClasse = centros.filter((c) => c.classe_financeira_id === cl.id)
@@ -338,156 +247,6 @@ export default function PlanoContasPage() {
                 </div>
               )
             })}
-          </div>
-        ) : (
-          <div className="mt-6">
-            <div className="mb-3 flex justify-end">
-              <button
-                type="button"
-                onClick={abrirNovoProduto}
-                className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover"
-              >
-                + Novo Produto/Serviço
-              </button>
-            </div>
-
-            {produtos.length === 0 ? (
-              <div className="rounded-card border border-dashed border-border bg-surface px-6 py-12 text-center">
-                <p className="text-sm font-semibold text-text-primary">Nenhum produto ou serviço cadastrado</p>
-                <p className="mt-1 text-sm text-text-secondary">
-                  Cadastre o primeiro pra poder lançar movimentações financeiras.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-card border border-border bg-surface">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs font-semibold uppercase text-text-muted">
-                      <th className="px-4 py-2.5">Nome</th>
-                      <th className="px-4 py-2.5">Classificação padrão</th>
-                      <th className="w-10 px-4 py-2.5" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {produtos.map((p) => (
-                      <tr key={p.id} className="border-b border-border last:border-0">
-                        <td className={`px-4 py-2.5 ${!p.ativo ? 'text-text-muted line-through' : 'text-text-primary'}`}>
-                          {p.nome}
-                        </td>
-                        <td className="px-4 py-2.5 text-text-secondary">{labelClassificacao(p)}</td>
-                        <td className="px-4 py-2.5 text-right">
-                          <button
-                            type="button"
-                            title={p.ativo ? 'Inativar' : 'Ativar'}
-                            onClick={() => handleAlternarAtivoProduto(p)}
-                            className={p.ativo ? 'text-success' : 'text-text-muted'}
-                          >
-                            <IconToggle />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {modalProdutoAberto && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-card border border-border bg-surface p-6">
-              <h2 className="text-lg font-bold text-text-primary">Novo Produto/Serviço</h2>
-              <form onSubmit={handleSalvarProduto} onKeyDown={bloquearEnvioPorEnter} className="mt-4 space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                    Nome<Required />
-                  </label>
-                  <input
-                    required
-                    autoFocus
-                    value={produtoNome}
-                    onChange={(e) => setProdutoNome(e.target.value)}
-                    className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                    Classificação padrão (opcional)
-                  </label>
-                  <div className="space-y-2">
-                    <select
-                      value={produtoClasseId}
-                      onChange={(e) => {
-                        setProdutoClasseId(e.target.value)
-                        setProdutoCentroId('')
-                        setProdutoSubcentroId('')
-                      }}
-                      className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                    >
-                      <option value="">Classe...</option>
-                      {classes.map((cl) => (
-                        <option key={cl.id} value={cl.id}>
-                          {cl.numero} — {cl.nome}
-                        </option>
-                      ))}
-                    </select>
-                    {produtoClasseId && (
-                      <select
-                        value={produtoCentroId}
-                        onChange={(e) => {
-                          setProdutoCentroId(e.target.value)
-                          setProdutoSubcentroId('')
-                        }}
-                        className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                      >
-                        <option value="">Centro de custo...</option>
-                        {centrosDaClasseProduto.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.nome}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    {produtoCentroId && (
-                      <select
-                        value={produtoSubcentroId}
-                        onChange={(e) => setProdutoSubcentroId(e.target.value)}
-                        className="w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-brand-500"
-                      >
-                        <option value="">Subcentro...</option>
-                        {subcentrosDoCentroProduto.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.nome}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                  <p className="mt-1.5 text-xs text-text-muted">
-                    Escolher esse produto num lançamento novo preenche essa classificação sozinho.
-                  </p>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setModalProdutoAberto(false)}
-                    className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={salvando}
-                    className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500-hover disabled:opacity-60"
-                  >
-                    {salvando ? 'Salvando...' : 'Salvar'}
-                  </button>
-                </div>
-              </form>
-            </div>
           </div>
         )}
       </div>

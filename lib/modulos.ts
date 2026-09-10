@@ -35,6 +35,8 @@ export type ModuloId =
   | 'rebanho_por_pasto'
   | 'lancamentos_financeiros'
   | 'plano_contas_financeiro'
+  | 'produtos_servicos'
+  | 'contas_bancarias'
   | 'contas_pagar_receber'
 
 type Modulo = {
@@ -110,6 +112,20 @@ export const MODULOS: Modulo[] = [
     label: 'Plano de Contas',
     href: '/plano-contas',
     icon: ICONS.planoContas,
+  },
+  {
+    id: 'produtos_servicos',
+    dominio: 'financeiro',
+    label: 'Produtos e Serviços',
+    href: '/produtos-servicos',
+    icon: ICONS.produtosServicos,
+  },
+  {
+    id: 'contas_bancarias',
+    dominio: 'financeiro',
+    label: 'Contas Bancárias',
+    href: '/contas-bancarias',
+    icon: ICONS.contasBancarias,
   },
   {
     id: 'contas_pagar_receber',

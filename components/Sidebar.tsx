@@ -18,6 +18,18 @@ const GROUPS: NavGroup[] = [
       { label: 'Fazendas', href: '/fazendas', icon: ICONS.fazendas, modulo: 'fazendas' },
       { label: 'Categorias', href: '/categorias', icon: ICONS.categorias, modulo: 'categorias' },
       { label: 'Pessoas e Empresas', href: '/pessoas', icon: ICONS.pessoas, modulo: 'pessoas' },
+      {
+        label: 'Produtos e Serviços',
+        href: '/produtos-servicos',
+        icon: ICONS.produtosServicos,
+        modulo: 'produtos_servicos',
+      },
+      {
+        label: 'Contas Bancárias',
+        href: '/contas-bancarias',
+        icon: ICONS.contasBancarias,
+        modulo: 'contas_bancarias',
+      },
     ],
   },
   {

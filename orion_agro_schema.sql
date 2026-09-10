@@ -3845,27 +3845,58 @@ $$;
 create or replace function fn_compilar_lancamento_financeiro_movimentacao()
 returns trigger as $$
 declare
-  v_produto_nome text;
-  v_produto_id   uuid;
+  v_produto_sistema_nome text;
+  v_descricao    text;
   v_subcentro_id uuid;
+  v_categoria_nome text;
+  v_produto_id   uuid;
   v_valor        numeric;
 begin
   if new.tipo not in ('COMPRA', 'VENDA_PE', 'VENDA_ABATE') then
     return new;
   end if;
 
-  v_produto_nome := case new.tipo
+  v_produto_sistema_nome := case new.tipo
     when 'COMPRA' then 'Gado — Compra'
     when 'VENDA_PE' then 'Gado — Venda em Pé'
     when 'VENDA_ABATE' then 'Gado — Venda Abate'
   end;
 
-  select id, subcentro_custo_id into v_produto_id, v_subcentro_id
+  v_descricao := case new.tipo
+    when 'COMPRA' then 'Compra de gado'
+    when 'VENDA_PE' then 'Venda em pé'
+    when 'VENDA_ABATE' then 'Venda abate'
+  end;
+
+  -- subcentro de destino continua resolvido pelo tipo da movimentação,
+  -- via o subcentro já guardado no produto-sistema histórico (nunca
+  -- mais usado como produto_id, só como referência interna aqui) — é
+  -- esse subcentro (Abate/Em pé/Rebanho), não o produto, quem carrega
+  -- a distinção entre os 3 tipos de operação
+  select subcentro_custo_id into v_subcentro_id
   from produtos_financeiros
-  where conta_id = new.conta_id and nome = v_produto_nome and sistema = true;
+  where conta_id = new.conta_id and nome = v_produto_sistema_nome and sistema = true;
+
+  if v_subcentro_id is null then
+    return new;
+  end if;
+
+  select nome into v_categoria_nome from categorias_animal where id = new.categoria_id;
+  if v_categoria_nome is null then
+    return new;
+  end if;
+
+  -- produto = a própria categoria do animal, sem sufixo de tipo —
+  -- compartilhado entre Compra/Venda em Pé/Venda Abate da mesma
+  -- categoria (a distinção entre os 3 já está no subcentro acima)
+  select id into v_produto_id
+  from produtos_financeiros
+  where conta_id = new.conta_id and nome = v_categoria_nome;
 
   if v_produto_id is null then
-    return new;
+    insert into produtos_financeiros (conta_id, nome, subcentro_custo_id, sistema)
+    values (new.conta_id, v_categoria_nome, v_subcentro_id, true)
+    returning id into v_produto_id;
   end if;
 
   v_valor := fn_valor_liquido_movimentacao(new.id);
@@ -3873,7 +3904,7 @@ begin
   insert into lancamentos_financeiros
     (conta_id, fazenda_id, descricao, data, valor, subcentro_id, produto_id, movimentacao_id, status, pessoa_id, proprietario_id)
   values
-    (new.conta_id, new.fazenda_id, v_produto_nome, new.data, v_valor, v_subcentro_id, v_produto_id, new.id, 'PENDENTE', new.cliente_fornecedor_id, new.proprietario_id)
+    (new.conta_id, new.fazenda_id, v_descricao, new.data, v_valor, v_subcentro_id, v_produto_id, new.id, 'PENDENTE', new.cliente_fornecedor_id, new.proprietario_id)
   on conflict (movimentacao_id) do update set
     fazenda_id      = excluded.fazenda_id,
     data            = excluded.data,
@@ -4100,8 +4131,13 @@ begin
   join classes_financeiras cf on cf.conta_id = p_conta_id and cf.numero = v.classe_numero
   join centros_custo cc on cc.classe_financeira_id = cf.id and cc.numero = v.centro_numero;
 
-  insert into produtos_financeiros (conta_id, nome, subcentro_custo_id, sistema)
-  select p_conta_id, v.nome, sc.id, true
+  -- inativos de propósito (migração 057): esses 3 produtos-sistema não
+  -- são mais atribuídos a lançamento nenhum — servem só de referência
+  -- interna pra fn_compilar_lancamento_financeiro_movimentacao resolver
+  -- o subcentro de destino por tipo; o produto de verdade de uma
+  -- Compra/Venda passa a ser a categoria do animal (criada sob demanda)
+  insert into produtos_financeiros (conta_id, nome, subcentro_custo_id, sistema, ativo)
+  select p_conta_id, v.nome, sc.id, true, false
   from (values
     ('Gado — Compra', 3, 3, 1),
     ('Gado — Venda em Pé', 1, 2, 2),

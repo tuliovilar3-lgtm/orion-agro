@@ -3726,3 +3726,64 @@ Carlos Cesar Pereira - Tinho, nenhum dos dois digitado à mão); card resultante
 continua intacta, sem nenhuma mudança). Dados de teste revertidos: lançamento manual excluído,
 lançamento automático estornado e a movimentação de origem excluída (cascade removeu o lançamento e a
 baixa junto), conta bancária de teste inativada. `npx tsc --noEmit` limpo.
+
+## Produtos e Serviços / Contas Bancárias saem de dentro das telas financeiras, viram Gerenciamento
+
+Pedido do usuário depois de ver as duas telas: "Produtos e Serviços" (aba dentro de Plano de Contas)
+e "Contas Bancárias" (aba dentro de Contas a Pagar/Receber) são catálogos/cadastros, não conteúdo
+transacional — deveriam morar junto de Fazendas/Categorias/Pessoas e Empresas no grupo
+"Gerenciamento" da Sidebar, não escondidos como aba secundária de uma tela de lançamento.
+
+**Duas telas novas**: `app/produtos-servicos/page.tsx` (extraído de `/plano-contas`, ModuloId
+`produtos_servicos`) e `app/contas-bancarias/page.tsx` (extraído de `/contas-a-pagar-receber`,
+ModuloId `contas_bancarias`) — ambas com `dominio: 'financeiro'`, linkadas no grupo "Gerenciamento".
+`/plano-contas` volta a ser só a árvore Classe→Centro→Subcentro (sem abas, já que só sobrou um
+conteúdo); `/contas-a-pagar-receber` volta a ser só a tabela "Em aberto" (idem).
+
+**Gate diferente pras duas, por pedido explícito do usuário**: "Produtos e Serviços" seria irrelevante
+sem contratar Financeiro, mas não depende do recurso pago — segue o `ModuloGate` padrão (só
+`usuario_modulos`/domínio, igual Plano de Contas). **"Contas Bancárias" também NÃO é gated pelo
+recurso `contas_a_pagar_receber`** — mesmo raciocínio: "existe por conta do módulo financeiro, tanto
+pra contas pagas quanto pro recurso pago" — uma conta bancária pode ser útil pra qualquer lançamento
+confirmado, não só pra quem contratou o rastreamento de vencimento/parcela. Só o link some quando
+"Financeiro" (o domínio) não está contratado — igual qualquer outro módulo.
+
+Verificado no navegador: os 2 links aparecem em Gerenciamento; `/produtos-servicos` mantém o CRUD de
+produto (com "+ Novo" e a cascata de classificação padrão) funcionando igual a antes;
+`/contas-bancarias` acessível sem checar `controla_contas_pagar_receber`; `/plano-contas` e
+`/contas-a-pagar-receber` sem a aba removida, comportamento do que restou inalterado. `npx tsc
+--noEmit` limpo.
+
+## Produto de um lançamento automático vira a categoria do animal (migração 057)
+
+Revisão pós-uso: o usuário observou que o Produto/Serviço de uma Compra/Venda automática mostrava só
+um rótulo genérico ("Gado — Compra"/"Gado — Venda em Pé"/"Gado — Venda Abate") — sem dizer qual
+categoria de animal foi negociada. Pediu que o produto fosse a própria categoria (ex.: "Touro",
+"Novilha 08 a 12 Meses"). Segunda observação, olhando um relatório de referência (árvore Classe →
+Centro → Subcentro → categoria, com "Abate" e "Em pé" já aparecendo como nós separados): a distinção
+entre Compra/Venda em Pé/Venda Abate não precisa estar no nome do produto — **já existe no
+subcentro** (`3.3.1 Rebanho` / `1.2.2 Em pé` / `1.2.1 Abate`), que a trigger já resolvia por tipo desde
+a Fase 1. Por isso o produto final é só a categoria, sem sufixo — um relatório que agrupe por
+Subcentro → Produto já separa Abate de Em pé sozinho, sem precisar de nada a mais no nome.
+
+`fn_compilar_lancamento_financeiro_movimentacao` passa a: (1) resolver o subcentro de destino
+exatamente como antes, só que lendo o `subcentro_custo_id` do produto-sistema histórico
+("Gado — Compra" etc.) como uma referência **interna** — esses 3 produtos nunca mais são atribuídos
+como `produto_id` de lançamento nenhum, só servem pra essa consulta; (2) buscar (ou criar, se for a
+primeira vez que essa categoria aparece nessa conta) um `produtos_financeiros` com o mesmo nome da
+`categorias_animal` envolvida, `sistema = true`; (3) usar esse produto por categoria como `produto_id`
+do lançamento. Os 3 produtos-sistema antigos ficam `ativo = false` (migração 057) — inativos, não
+excluídos, pra não quebrar nenhum lançamento histórico que ainda referencie eles.
+
+**Nota aceita conscientemente**: como a mesma categoria pode ser comprada e depois vendida, o produto
+(agora só a categoria) fica compartilhado entre Compra/Venda em Pé/Venda Abate — o "subcentro padrão"
+desse produto (usado só como pré-preenchimento de conveniência num lançamento **manual**) reflete
+qual tipo criou o produto primeiro, não os três. Não afeta nenhum lançamento automático (o subcentro
+desses sempre é resolvido pelo tipo da movimentação, nunca lido do produto).
+
+Verificado no navegador: os 3 produtos-sistema aparecem tachados (inativos) em
+`/produtos-servicos`; uma Compra de "Touro" gerou um lançamento Pendente mostrando "FAZENDA SÃO
+JOSÉ · Touro" (era "Gado — Compra" antes da migração) com a classificação `Investimentos ›
+Rebanho Investimento › Rebanho` correta; o produto "Touro" foi criado automaticamente
+(`sistema = true`) com esse subcentro como padrão. Dados de teste revertidos (movimentação excluída,
+produto "Touro" inativado).

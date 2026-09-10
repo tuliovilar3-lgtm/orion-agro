@@ -126,6 +126,19 @@ export const ICONS = {
       <path d="M8 15h.01M12 15h.01M16 15h.01" />
     </Icon>
   ),
+  produtosServicos: (
+    <Icon>
+      <path d="M20.5 12.5 12.5 20.5a2 2 0 0 1-2.83 0l-6.17-6.17a2 2 0 0 1 0-2.83L11.5 3.5H19a1.5 1.5 0 0 1 1.5 1.5Z" />
+      <circle cx="15" cy="8" r="1.3" />
+    </Icon>
+  ),
+  contasBancarias: (
+    <Icon>
+      <path d="M3 10 12 4l9 6" />
+      <path d="M5 10v9M9 10v9M15 10v9M19 10v9" />
+      <path d="M3 19h18" />
+    </Icon>
+  ),
   configuracoes: (
     <Icon>
       <path d="M4 6h16" />
