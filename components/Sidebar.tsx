@@ -62,16 +62,36 @@ const GROUPS: NavGroup[] = [
       },
     ],
   },
+  {
+    label: 'Financeiro',
+    items: [
+      {
+        label: 'Lançamentos Financeiros',
+        href: '/financeiro',
+        icon: ICONS.financeiro,
+        modulo: 'lancamentos_financeiros',
+      },
+      {
+        label: 'Plano de Contas',
+        href: '/plano-contas',
+        icon: ICONS.planoContas,
+        modulo: 'plano_contas_financeiro',
+      },
+      {
+        label: 'Contas a Pagar/Receber',
+        href: '/contas-a-pagar-receber',
+        icon: ICONS.contasPagarReceber,
+        modulo: 'contas_pagar_receber',
+      },
+    ],
+  },
 ]
 
 const PAINEL: NavItem = { label: 'Painel', href: '/', icon: ICONS.painel }
 const USUARIOS: NavItem = { label: 'Usuários', href: '/usuarios', icon: ICONS.acesso }
 const MODULOS_LINK: NavItem = { label: 'Módulos', href: '/modulos', icon: ICONS.modulos }
 
-const PLACEHOLDERS: NavItem[] = [
-  { label: 'Financeiro', href: '#', icon: ICONS.financeiro },
-  { label: 'Configurações', href: '#', icon: ICONS.configuracoes },
-]
+const PLACEHOLDERS: NavItem[] = [{ label: 'Configurações', href: '#', icon: ICONS.configuracoes }]
 
 function NavLinks({
   pathname,

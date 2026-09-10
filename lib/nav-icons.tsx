@@ -111,6 +111,21 @@ export const ICONS = {
       <path d="M12 11v10" />
     </Icon>
   ),
+  planoContas: (
+    <Icon>
+      <path d="M6 3h9l4 4v14H6Z" />
+      <path d="M15 3v4h4" />
+      <path d="M9 12h7M9 15h7M9 18h4" />
+    </Icon>
+  ),
+  contasPagarReceber: (
+    <Icon>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M8 3v4M16 3v4" />
+      <path d="M8 15h.01M12 15h.01M16 15h.01" />
+    </Icon>
+  ),
   configuracoes: (
     <Icon>
       <path d="M4 6h16" />

@@ -106,6 +106,17 @@ export async function POST(request: Request) {
         .eq('conta_id', contaId)
       if (erroConfig) return NextResponse.json({ error: erroConfig.message }, { status: 500 })
     }
+
+    // mesmo princípio pra 'contas_a_pagar_receber' — alimenta
+    // configuracoes.controla_contas_pagar_receber, que /financeiro e
+    // /contas-a-pagar-receber leem direto
+    if (recursos.includes('contas_a_pagar_receber')) {
+      const { error: erroConfig } = await admin
+        .from('configuracoes')
+        .update({ controla_contas_pagar_receber: true })
+        .eq('conta_id', contaId)
+      if (erroConfig) return NextResponse.json({ error: erroConfig.message }, { status: 500 })
+    }
   }
 
   const limites: { conta_id: string; tipo_limite: TipoLimiteConta; valor: number }[] = []

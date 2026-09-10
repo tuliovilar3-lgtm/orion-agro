@@ -48,7 +48,9 @@ create type tipo_natureza_pessoa as enum ('FISICA', 'JURIDICA');
 create type sistema_produtivo_fazenda as enum
   ('CRIA', 'RECRIA', 'RECRIA_ENGORDA', 'CICLO_COMPLETO', 'AGRICULTURA');
 
-create type tipo_lancamento_financeiro as enum ('RECEITA', 'DESPESA');
+create type tipo_lancamento_financeiro as enum ('CREDITO', 'DEBITO');
+
+create type status_lancamento_financeiro as enum ('PENDENTE', 'CONFIRMADO');
 
 create type criterio_rateio as enum ('POR_CABECA', 'POR_AREA', 'PERCENTUAL_FIXO');
 
@@ -150,6 +152,10 @@ create table configuracoes (
   -- lançamento de área usa o subtipo "Geral" do tipo de uso, sem tela
   -- de seleção nenhuma.
   controla_subtipo_area boolean not null default false,
+  -- recurso pago (Fase 2 do Financeiro, migração 056): liga quando o
+  -- Suporte concede conta_recursos 'contas_a_pagar_receber' — mesmo
+  -- padrão de "coluna de efeito" que controla_pasto já usa
+  controla_contas_pagar_receber boolean not null default false,
   updated_at      timestamptz not null default now()
 );
 create unique index uq_configuracoes_conta on configuracoes (conta_id);
@@ -854,11 +860,38 @@ for each row execute function fn_validar_delete_pessoa();
 -- fazendas, definida mais acima no arquivo
 alter table fazendas add column proprietario_id uuid references pessoas(id);
 
+-- Plano de contas financeiro (módulo Financeiro): transcrição literal
+-- do plano de referência do usuário (Metryx) em 3 níveis numerados —
+-- Classe (1 dígito) → Centro de Custo (2 dígitos, aninhado numa
+-- Classe) → Subcentro de Custo (3 dígitos, aninhado num Centro). Um
+-- 4º campo, Produto/Serviço, fica fora da numeração — ver
+-- produtos_financeiros mais abaixo, seção FINANCEIRO.
+create table classes_financeiras (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  numero     int not null,
+  nome       text not null,
+  tipo       tipo_lancamento_financeiro not null,
+  sistema    boolean not null default false,
+  ativo      boolean not null default true,
+  ordem      int not null default 0,
+  constraint uq_classe_financeira_numero unique (conta_id, numero)
+);
+alter table classes_financeiras enable row level security;
+create policy classes_financeiras_por_conta on classes_financeiras for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
 create table centros_custo (
-  id              uuid primary key default gen_random_uuid(),
-  conta_id        uuid not null references contas(id) default fn_conta_atual(),
-  nome            text not null unique,
-  created_at      timestamptz not null default now()
+  id                   uuid primary key default gen_random_uuid(),
+  conta_id             uuid not null references contas(id) default fn_conta_atual(),
+  classe_financeira_id uuid not null references classes_financeiras(id),
+  numero               int,
+  nome                 text not null,
+  sistema              boolean not null default false,
+  ativo                boolean not null default true,
+  ordem                int not null default 0,
+  created_at           timestamptz not null default now(),
+  constraint uq_centro_custo_nome unique (conta_id, classe_financeira_id, nome)
 );
 alter table centros_custo enable row level security;
 create policy centros_custo_por_conta on centros_custo for all
@@ -868,7 +901,10 @@ create table subcentros_custo (
   id              uuid primary key default gen_random_uuid(),
   conta_id        uuid not null references contas(id) default fn_conta_atual(),
   centro_custo_id uuid not null references centros_custo(id) on delete cascade,
+  numero          int,
   nome            text not null,
+  sistema         boolean not null default false,
+  ativo           boolean not null default true,
   constraint uq_subcentro_por_centro unique (centro_custo_id, nome)
 );
 alter table subcentros_custo enable row level security;
@@ -3638,28 +3674,293 @@ for each row execute function fn_validar_ajuste_movimentacao_comercial();
 -- 3. FINANCEIRO
 -- =====================================================================
 
+-- Contas bancárias (Fase 2, migração 056) — catálogo pequeno e
+-- extensível, mesmo princípio de itens_ajuste_financeiro/
+-- subtipos_uso_area. Toda conta ganha automaticamente uma linha
+-- "Dinheiro (em espécie)" (sistema=true, protegida contra exclusão)
+-- via trigger abaixo.
+create table contas_bancarias (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  nome       text not null,
+  especie    boolean not null default false,
+  sistema    boolean not null default false,
+  ativo      boolean not null default true,
+  ordem      int not null default 0,
+  created_at timestamptz not null default now(),
+  constraint uq_conta_bancaria_nome unique (conta_id, nome)
+);
+alter table contas_bancarias enable row level security;
+create policy contas_bancarias_por_conta on contas_bancarias for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+create or replace function fn_criar_conta_bancaria_especie()
+returns trigger as $$
+begin
+  insert into contas_bancarias (conta_id, nome, especie, sistema, ordem)
+  values (new.id, 'Dinheiro (em espécie)', true, true, 0);
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_criar_conta_bancaria_especie
+after insert on contas
+for each row execute function fn_criar_conta_bancaria_especie();
+
+-- Produto/Serviço: 4º campo do plano de contas, fora da numeração
+-- Classe/Centro/Subcentro — catálogo próprio, sem seed nenhum (exceto
+-- os 3 produtos-sistema pra integração com Movimentações, seedados
+-- junto do plano de contas mais abaixo) — 100% cadastrado pelo
+-- usuário, obrigatório em todo lançamento. subcentro_custo_id opcional
+-- é a "pré-classificação padrão": escolher esse produto num lançamento
+-- novo pré-preenche Tipo/Classe/Centro/Subcentro sozinho.
+create table produtos_financeiros (
+  id                 uuid primary key default gen_random_uuid(),
+  conta_id           uuid not null references contas(id) default fn_conta_atual(),
+  nome               text not null,
+  subcentro_custo_id uuid references subcentros_custo(id),
+  sistema            boolean not null default false,
+  ativo              boolean not null default true,
+  created_at         timestamptz not null default now(),
+  constraint uq_produto_financeiro_nome unique (conta_id, nome)
+);
+alter table produtos_financeiros enable row level security;
+create policy produtos_financeiros_por_conta on produtos_financeiros for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
 create table lancamentos_financeiros (
   id                uuid primary key default gen_random_uuid(),
   conta_id          uuid not null references contas(id) default fn_conta_atual(),
   fazenda_id        uuid not null references fazendas(id),
-  conta             text,
-  setor             text,
   descricao         text not null,
   data              date not null,
   valor             numeric(14,2) not null,
   tipo              tipo_lancamento_financeiro not null,
-  classe            text,
-  centro_custo_id   uuid references centros_custo(id),
-  subcentro_id      uuid references subcentros_custo(id),
-  usuario_id        uuid references usuarios(id),
+  subcentro_id      uuid not null references subcentros_custo(id),
+  produto_id        uuid not null references produtos_financeiros(id),
+  status            status_lancamento_financeiro not null default 'CONFIRMADO',
+  -- lançamento nascido de uma Compra/Venda em Movimentações (ver
+  -- fn_compilar_lancamento_financeiro_movimentacao) — só editável
+  -- reabrindo a movimentação de origem; on delete cascade cuida da
+  -- limpeza quando a movimentação é apagada
+  movimentacao_id   uuid unique references movimentacoes_rebanho(id) on delete cascade,
+  -- correlação client-side entre as N linhas de um lançamento rateado
+  -- entre fazendas (mesmo princípio de grupo_lancamento_id em
+  -- movimentacoes_rebanho) — null pra lançamento avulso
+  rateio_grupo_id   uuid,
+  confirmado_por    uuid references usuarios_app(id),
+  confirmado_em     timestamptz,
+  -- Fase 2 (migração 056): fornecedor/cliente e proprietário do lote
+  -- (mesmo cadastro unificado de pessoas já usado em Movimentações) —
+  -- herdados automaticamente pra título vindo de movimentação (ver
+  -- fn_compilar_lancamento_financeiro_movimentacao), opcionais/
+  -- escolhidos manualmente pra lançamento manual
+  pessoa_id         uuid references pessoas(id),
+  proprietario_id   uuid references pessoas(id),
+  numero_documento  text,
   created_at        timestamptz not null default now()
 );
 
 create index idx_fin_fazenda_data on lancamentos_financeiros(fazenda_id, data);
-create index idx_fin_centro_custo on lancamentos_financeiros(centro_custo_id);
+create index idx_fin_subcentro on lancamentos_financeiros(subcentro_id);
+create index idx_fin_status_pendente on lancamentos_financeiros(status) where status = 'PENDENTE';
+create index idx_fin_rateio_grupo on lancamentos_financeiros(rateio_grupo_id) where rateio_grupo_id is not null;
 alter table lancamentos_financeiros enable row level security;
 create policy lancamentos_financeiros_por_conta on lancamentos_financeiros for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+-- Baixas (Fase 2, migração 056) — quando vence/foi pago, parcela, por
+-- qual conta bancária. Um título sem nenhuma baixa é o comportamento
+-- de sempre ("não rastreado"); N baixas = título parcelado. Nunca mexe
+-- em lancamentos_financeiros/movimentacao_id — filha por lancamento_id,
+-- sem afetar a unicidade que sustenta o registro compilado/travado.
+create table lancamento_baixas (
+  id                uuid primary key default gen_random_uuid(),
+  conta_id          uuid not null references contas(id) default fn_conta_atual(),
+  lancamento_id     uuid not null references lancamentos_financeiros(id) on delete cascade,
+  numero_parcela    int not null default 1,
+  total_parcelas    int not null default 1,
+  data_vencimento   date,
+  data_pagamento    date,
+  valor             numeric(14,2) not null,
+  conta_bancaria_id uuid references contas_bancarias(id),
+  observacao        text,
+  created_at        timestamptz not null default now(),
+  constraint uq_lancamento_baixa_parcela unique (lancamento_id, numero_parcela)
+);
+create index idx_lancamento_baixas_lancamento on lancamento_baixas(lancamento_id);
+create index idx_lancamento_baixas_aberto on lancamento_baixas(data_vencimento) where data_pagamento is null;
+alter table lancamento_baixas enable row level security;
+create policy lancamento_baixas_por_conta on lancamento_baixas for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+-- tipo do lançamento é sempre derivado do subcentro escolhido
+-- (subcentro → centro → classe → tipo), nunca digitado manualmente —
+-- mesmo princípio de campo derivado automaticamente já usado em
+-- sexo/grupo_faixa_etaria de categoria de animal
+create or replace function fn_resolver_tipo_lancamento_financeiro()
+returns trigger as $$
+begin
+  select cf.tipo into new.tipo
+  from subcentros_custo sc
+  join centros_custo cc on cc.id = sc.centro_custo_id
+  join classes_financeiras cf on cf.id = cc.classe_financeira_id
+  where sc.id = new.subcentro_id;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_resolver_tipo_lancamento_financeiro
+before insert or update of subcentro_id on lancamentos_financeiros
+for each row execute function fn_resolver_tipo_lancamento_financeiro();
+
+-- valor líquido de uma movimentação comercial — mesma fórmula já
+-- usada no frontend (valorLiquido, components/relatorios/tipos.ts):
+-- valor_total − soma(desconto) + soma(acréscimo)
+create or replace function fn_valor_liquido_movimentacao(p_movimentacao_id uuid)
+returns numeric
+language sql
+stable
+as $$
+  select m.valor_total
+    - coalesce(sum(a.valor) filter (where i.tipo = 'DESCONTO'), 0)
+    + coalesce(sum(a.valor) filter (where i.tipo = 'ACRESCIMO'), 0)
+  from movimentacoes_rebanho m
+  left join movimentacao_ajustes a on a.movimentacao_id = m.id
+  left join itens_ajuste_financeiro i on i.id = a.item_id
+  where m.id = p_movimentacao_id
+  group by m.valor_total;
+$$;
+
+-- toda Compra/Venda em Pé/Venda Abate salva cria ou atualiza um
+-- lançamento financeiro ligado por movimentacao_id, já classificado
+-- automaticamente (via os 3 produtos-sistema seedados junto do plano
+-- de contas) e sempre em status PENDENTE — precisa de confirmação
+-- humana explícita na tela financeira antes de contar como oficial,
+-- porque quem lança a movimentação no pecuário pode ser diferente de
+-- quem controla o financeiro. Qualquer alteração posterior na
+-- movimentação resincroniza o lançamento e volta o status pra
+-- PENDENTE (exige nova conferência). Mesmo molde de
+-- fn_compilar_pesagem_movimentacao, mais acima neste arquivo.
+create or replace function fn_compilar_lancamento_financeiro_movimentacao()
+returns trigger as $$
+declare
+  v_produto_nome text;
+  v_produto_id   uuid;
+  v_subcentro_id uuid;
+  v_valor        numeric;
+begin
+  if new.tipo not in ('COMPRA', 'VENDA_PE', 'VENDA_ABATE') then
+    return new;
+  end if;
+
+  v_produto_nome := case new.tipo
+    when 'COMPRA' then 'Gado — Compra'
+    when 'VENDA_PE' then 'Gado — Venda em Pé'
+    when 'VENDA_ABATE' then 'Gado — Venda Abate'
+  end;
+
+  select id, subcentro_custo_id into v_produto_id, v_subcentro_id
+  from produtos_financeiros
+  where conta_id = new.conta_id and nome = v_produto_nome and sistema = true;
+
+  if v_produto_id is null then
+    return new;
+  end if;
+
+  v_valor := fn_valor_liquido_movimentacao(new.id);
+
+  insert into lancamentos_financeiros
+    (conta_id, fazenda_id, descricao, data, valor, subcentro_id, produto_id, movimentacao_id, status, pessoa_id, proprietario_id)
+  values
+    (new.conta_id, new.fazenda_id, v_produto_nome, new.data, v_valor, v_subcentro_id, v_produto_id, new.id, 'PENDENTE', new.cliente_fornecedor_id, new.proprietario_id)
+  on conflict (movimentacao_id) do update set
+    fazenda_id      = excluded.fazenda_id,
+    data            = excluded.data,
+    valor           = excluded.valor,
+    subcentro_id    = excluded.subcentro_id,
+    produto_id      = excluded.produto_id,
+    status          = 'PENDENTE',
+    confirmado_por  = null,
+    confirmado_em   = null,
+    pessoa_id       = excluded.pessoa_id,
+    proprietario_id = excluded.proprietario_id;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_compilar_lancamento_financeiro_movimentacao
+after insert or update on movimentacoes_rebanho
+for each row execute function fn_compilar_lancamento_financeiro_movimentacao();
+
+-- desconto/acréscimo (movimentacao_ajustes) afeta o valor líquido mas
+-- é uma tabela separada da movimentação em si — recalcula o
+-- lançamento vinculado sempre que um ajuste muda, não só quando a
+-- movimentação em si muda
+create or replace function fn_recompilar_lancamento_por_ajuste()
+returns trigger as $$
+declare
+  v_movimentacao_id uuid;
+begin
+  v_movimentacao_id := coalesce(new.movimentacao_id, old.movimentacao_id);
+  update lancamentos_financeiros
+  set valor          = fn_valor_liquido_movimentacao(v_movimentacao_id),
+      status         = 'PENDENTE',
+      confirmado_por = null,
+      confirmado_em  = null
+  where movimentacao_id = v_movimentacao_id;
+  return coalesce(new, old);
+end;
+$$ language plpgsql;
+
+create trigger trg_recompilar_lancamento_por_ajuste
+after insert or update or delete on movimentacao_ajustes
+for each row execute function fn_recompilar_lancamento_por_ajuste();
+
+-- lançamento compilado automaticamente não pode ser excluído direto
+-- na tela financeira — mesmo molde de fn_validar_delete_pesagem, mais
+-- acima neste arquivo, incluindo a mesma checagem de "a movimentação
+-- ainda existe" pra não travar a cascata quando é a própria
+-- movimentação que está sendo apagada
+create or replace function fn_validar_delete_lancamento_financeiro()
+returns trigger as $$
+begin
+  if old.movimentacao_id is not null
+     and exists (select 1 from movimentacoes_rebanho where id = old.movimentacao_id) then
+    raise exception 'Esse lançamento foi gerado automaticamente por uma movimentação — edite ou exclua a movimentação para alterá-lo.';
+  end if;
+  return old;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_delete_lancamento_financeiro
+before delete on lancamentos_financeiros
+for each row execute function fn_validar_delete_lancamento_financeiro();
+
+-- movimentação com lançamento financeiro vinculado já CONFIRMADO
+-- (pago/recebido) não pode ser editada nem excluída direto no
+-- pecuário — evita que uma edição resincronize o lançamento e desfaça
+-- silenciosamente a confirmação (ver
+-- fn_compilar_lancamento_financeiro_movimentacao acima). O usuário
+-- precisa primeiro "Estornar" o lançamento em Financeiro (volta pra
+-- PENDENTE) antes de editar/excluir a movimentação de origem.
+create or replace function fn_validar_edicao_movimentacao_lancamento_confirmado()
+returns trigger as $$
+begin
+  if exists (
+    select 1 from lancamentos_financeiros
+    where movimentacao_id = old.id and status = 'CONFIRMADO'
+  ) then
+    raise exception 'Esta movimentação tem um lançamento financeiro já confirmado. Estorne o lançamento em Financeiro antes de editar ou excluir esta movimentação.';
+  end if;
+  return coalesce(new, old);
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_edicao_movimentacao_lancamento_confirmado
+before update or delete on movimentacoes_rebanho
+for each row execute function fn_validar_edicao_movimentacao_lancamento_confirmado();
 
 create table regras_rateio (
   id                uuid primary key default gen_random_uuid(),
@@ -3675,6 +3976,154 @@ create table regras_rateio (
 alter table regras_rateio enable row level security;
 create policy regras_rateio_por_conta on regras_rateio for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+-- toda conta nova ganha o plano de contas inteiro (12 Classes, 35
+-- Centros, 123 Subcentros, todos sistema=true) e os 3 produtos-sistema
+-- pra integração com Movimentações — mesmo princípio de
+-- fn_seed_categorias_subtipos_conta, mais acima neste arquivo. Função
+-- separada de trigger (recebe p_conta_id) pra poder ser chamada tanto
+-- pela trigger quanto no backfill manual de "Conta Principal" (ver bloco
+-- de seed no fim deste arquivo — não dispara a trigger pelo mesmo
+-- motivo de ordem: foi inserida antes desta trigger existir).
+create or replace function fn_seed_plano_contas_conta(p_conta_id uuid)
+returns void
+language plpgsql
+as $$
+begin
+  insert into classes_financeiras (conta_id, numero, nome, tipo, sistema, ordem)
+  values
+    (p_conta_id, 1, 'Receitas operacionais', 'CREDITO', true, 1),
+    (p_conta_id, 2, 'Receitas não operacionais', 'CREDITO', true, 2),
+    (p_conta_id, 3, 'Investimentos', 'DEBITO', true, 3),
+    (p_conta_id, 4, 'Suporte à produção', 'DEBITO', true, 4),
+    (p_conta_id, 5, 'Mão de obra permanente', 'DEBITO', true, 5),
+    (p_conta_id, 6, 'Despesas com atividades produtivas', 'DEBITO', true, 6),
+    (p_conta_id, 7, 'Prejuízo', 'DEBITO', true, 7),
+    (p_conta_id, 8, 'Financiamentos créditos', 'CREDITO', true, 8),
+    (p_conta_id, 9, 'Financiamentos débito', 'DEBITO', true, 9),
+    (p_conta_id, 10, 'Almoxarifado', 'DEBITO', true, 10),
+    (p_conta_id, 11, 'Aporte de capital', 'CREDITO', true, 11),
+    (p_conta_id, 12, 'Dividendos', 'DEBITO', true, 12);
+
+  insert into centros_custo (conta_id, classe_financeira_id, numero, nome, sistema, ordem)
+  select p_conta_id, cf.id, v.numero, v.nome, true, v.numero
+  from (values
+    (1, 1, 'Cultura - Receita'), (1, 2, 'Rebanho'),
+    (2, 1, 'Arrendamento'), (2, 2, 'Receitas Parque de máquinas'), (2, 3, 'Receitas financeiras'),
+    (2, 4, 'Receitas outros'), (2, 5, 'Vendas outros animais'), (2, 6, 'Venda de Imóveis'),
+    (3, 1, 'Investimentos em infraestrutura'), (3, 2, 'Investimentos em RH'),
+    (3, 3, 'Rebanho Investimento'), (3, 4, 'Investimentos em outros animais'),
+    (4, 1, 'Suporte à Produção Administração'), (4, 2, 'Manutenção da fazenda'),
+    (4, 3, 'Suporte à Produção Parque de máquinas'), (4, 4, 'Outros animais'), (4, 5, 'Taxas e impostos'),
+    (5, 1, 'Administração'), (5, 2, 'Cultura'), (5, 3, 'Parque de Máquinas'),
+    (5, 4, 'Rebanho'), (5, 5, 'Manutenção da Fazenda'), (5, 6, 'Geral'),
+    (6, 1, 'Culturas - Despesa'), (6, 2, 'Pastagens'), (6, 3, 'Insumos do rebanho'),
+    (7, 1, 'Prejuízo Administração'), (7, 2, 'Prejuízo Almoxarifado'),
+    (8, 1, 'Empréstimos sócios crédito'), (8, 2, 'Financiamentos créditos'),
+    (9, 1, 'Empréstimos sócios débito'), (9, 2, 'Financiamentos débitos'),
+    (10, 1, 'Almoxarifado'),
+    (11, 1, 'Aporte de capital'),
+    (12, 1, 'Dividendos')
+  ) as v(classe_numero, numero, nome)
+  join classes_financeiras cf on cf.conta_id = p_conta_id and cf.numero = v.classe_numero;
+
+  insert into subcentros_custo (conta_id, centro_custo_id, numero, nome, sistema)
+  select p_conta_id, cc.id, v.numero, v.nome, true
+  from (values
+    (1,1,1,'Culturas - Receita'), (1,1,2,'Receitas parceria agrícola'),
+    (1,2,1,'Abate'), (1,2,2,'Em pé'), (1,2,3,'Sêmen e embriões'),
+
+    (2,1,1,'Arrendamento'),
+    (2,2,1,'Venda veículos tratores e implementos'), (2,2,2,'Aluguel de Máquinas'),
+    (2,3,1,'Rendimento financeiro juros'), (2,3,2,'Participação nos Lucros, Cooperativas e Outros (PLL)'),
+    (2,4,1,'Madeiras e outros'), (2,4,2,'Recicláveis'), (2,4,3,'Vendas ferramentas e equipamentos'), (2,4,4,'Outros Créditos'),
+    (2,5,1,'Venda tropa de reprodução'), (2,5,2,'Venda tropa de serviço'),
+    (2,6,1,'Imóveis Rurais'), (2,6,2,'Imóveis Urbanos'),
+
+    (3,1,1,'Compra equipamentos informática, telefonia e comunicação'),
+    (3,1,2,'Compra veículos, tratores e implementos'),
+    (3,1,3,'Formação de pasto'), (3,1,4,'Imóveis rurais e urbanos'), (3,1,5,'Investimento em segurança'),
+    (3,1,6,'Nova rede hidráulica'), (3,1,7,'Novas cercas'), (3,1,8,'Novas estradas e pontes'),
+    (3,1,9,'Novas ferramentas e equipamentos'), (3,1,10,'Novas instalações pecuárias'),
+    (3,1,11,'Novas instalações residenciais'), (3,1,12,'Novas construções, barracões e outros'),
+    (3,1,13,'Novos móveis e eletrodomésticos'), (3,1,14,'Nova rede elétrica'),
+    (3,1,15,'Projetos, medições e outros'), (3,1,16,'Reflorestamento'),
+    (3,1,17,'Solo, contenções, destoca e recuperação'),
+    (3,2,1,'Cursos e treinamentos'), (3,2,2,'Eventos e presentes'), (3,2,3,'Benefícios a funcionários'), (3,2,4,'Uniformes e EPI'),
+    (3,3,1,'Rebanho'),
+    (3,4,1,'Compra de aves'), (3,4,2,'Compra suínos'), (3,4,3,'Compra tropa de serviço'),
+    (3,4,4,'Compra tropa reprodução'), (3,4,5,'Compra de ovinos'),
+
+    (4,1,1,'Aluguéis e Condomínios'), (4,1,2,'Comunicação e energia da fazenda'),
+    (4,1,3,'Contabilidade, jurídico, consultorias e sistemas'), (4,1,4,'Deslocamento, alimentação e hospedagem'),
+    (4,1,5,'Despesa financeira'), (4,1,6,'Despesas casa sede'), (4,1,7,'Outras despesas administrativas'),
+    (4,2,1,'Horta, pomar e jardins'), (4,2,2,'Manutenção, construções, barracões e outros'),
+    (4,2,3,'Manutenção em segurança'), (4,2,4,'Manutenção estradas e pontes'),
+    (4,2,5,'Manutenção ferramentas e equipamentos'), (4,2,6,'Manutenção informática'),
+    (4,2,7,'Manutenção instalações pecuárias'), (4,2,8,'Manutenção instalações residenciais'),
+    (4,2,9,'Manutenção móveis e eletrodomésticos'), (4,2,10,'Manutenção rede elétrica'),
+    (4,2,11,'Manutenção rede hidráulica'), (4,2,12,'Manutenção de cercas'),
+    (4,3,1,'Combustíveis'), (4,3,2,'Manutenção e conserto de máquinas e implementos'),
+    (4,3,3,'Seguros, impostos, multas e outros'),
+    (4,4,1,'Custeio de aves'), (4,4,2,'Custeio tropa reprodução'), (4,4,3,'Ovinos'), (4,4,4,'Suínos'), (4,4,5,'Tropa serviço'),
+    (4,5,1,'Taxas e impostos. S/Venda'), (4,5,2,'Taxas e impostos S/Lucro'),
+    (4,5,3,'Taxas, Impostos Sobre Propriedade, ITR, IPTU'),
+
+    (5,1,1,'Salários e Encargos Administração'), (5,1,2,'Prêmios e benefícios Administração'), (5,1,3,'Rescisões e Acertos Administração'),
+    (5,2,1,'Salários e Encargos Cultura'), (5,2,2,'Prêmios e benefícios Cultura'), (5,2,3,'Rescisões e Acertos Cultura'),
+    (5,3,1,'Salários e Encargos Parque de Máquinas'), (5,3,2,'Prêmios e benefícios Parque de Máquinas'), (5,3,3,'Rescisões e Acertos Parque de Máquinas'),
+    (5,4,1,'Salários e Encargos Rebanho'), (5,4,2,'Prêmios e benefícios Rebanho'), (5,4,3,'Rescisões e Acertos Rebanho'),
+    (5,5,1,'Salários e Encargos Manutenção da Fazenda'), (5,5,2,'Prêmios e benefícios Manutenção da Fazenda'), (5,5,3,'Rescisões e Acertos Manutenção da Fazenda'),
+    (5,6,1,'Salários e Encargos Geral'), (5,6,2,'Prêmios e benefícios Geral'), (5,6,3,'Rescisões e Acertos Geral'),
+
+    (6,1,1,'Colheita e transporte'), (6,1,2,'Corretivos, fertilizantes e adubos'), (6,1,3,'Defensivos'),
+    (6,1,4,'Despesas comerciais e outras'), (6,1,5,'Parceria agrícola'), (6,1,6,'Sementes/Mudas, tratamentos e serviços'),
+    (6,1,7,'Energia para irrigação agrícola'), (6,1,8,'Aluguel de Máquinas Terceirizadas'), (6,1,9,'Preparo de Solo'),
+    (6,2,1,'Arrendamento de pastagem'), (6,2,2,'Manutenção de pastagem'),
+    (6,3,1,'Despesas comercias, fretes e comissões'), (6,3,2,'Identificação animal e rastreamento'), (6,3,3,'Nutrição'),
+    (6,3,4,'Reprodução'), (6,3,5,'Sanidade'), (6,3,6,'Melhoramento genético'),
+    (6,3,7,'Energia para irrigação pecuária'), (6,3,8,'Arrendamento de Rebanho'),
+
+    (7,1,1,'Perda de investimentos financeiros'),
+    (7,2,1,'Perda por inventário'),
+
+    (8,1,1,'Empréstimos sócios crédito'),
+    (8,2,1,'Financiamentos créditos'), (8,2,2,'Financiamentos cedidos créditos'),
+
+    (9,1,1,'Empréstimos sócios débito'),
+    (9,2,1,'Financiamentos débitos'), (9,2,2,'Financiamentos cedidos débitos'),
+
+    (10,1,1,'Almoxarifado'),
+    (11,1,1,'Aporte de capital'),
+    (12,1,1,'Dividendos')
+  ) as v(classe_numero, centro_numero, numero, nome)
+  join classes_financeiras cf on cf.conta_id = p_conta_id and cf.numero = v.classe_numero
+  join centros_custo cc on cc.classe_financeira_id = cf.id and cc.numero = v.centro_numero;
+
+  insert into produtos_financeiros (conta_id, nome, subcentro_custo_id, sistema)
+  select p_conta_id, v.nome, sc.id, true
+  from (values
+    ('Gado — Compra', 3, 3, 1),
+    ('Gado — Venda em Pé', 1, 2, 2),
+    ('Gado — Venda Abate', 1, 2, 1)
+  ) as v(nome, classe_numero, centro_numero, subcentro_numero)
+  join classes_financeiras cf on cf.conta_id = p_conta_id and cf.numero = v.classe_numero
+  join centros_custo cc on cc.classe_financeira_id = cf.id and cc.numero = v.centro_numero
+  join subcentros_custo sc on sc.centro_custo_id = cc.id and sc.numero = v.subcentro_numero;
+end;
+$$;
+
+create or replace function fn_seed_plano_contas_conta_trigger()
+returns trigger as $$
+begin
+  perform fn_seed_plano_contas_conta(new.id);
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_seed_plano_contas_conta
+after insert on contas
+for each row execute function fn_seed_plano_contas_conta_trigger();
 
 -- =====================================================================
 -- 4. VIEW — ESTOQUE CALCULADO POR FAZENDA / CATEGORIA
@@ -4141,6 +4590,27 @@ cross join (values
   ('Soja', 1), ('Milho', 2), ('Cana-de-açúcar', 3), ('Café', 4)
 ) as s(nome, ordem)
 where t.nome = 'Agricultura';
+
+-- plano de contas financeiro (migração 054): mesma observação de
+-- categorias_animal/subtipos_uso_area acima — a trigger
+-- trg_seed_plano_contas_conta só vale pra conta criada depois dela
+-- existir; "Conta Principal" precisa do seed chamado manualmente.
+select fn_seed_plano_contas_conta(id) from contas where nome = 'Conta Principal';
+
+-- contas bancárias (Fase 2, migração 056): "Conta Principal" também
+-- precisa do seed manual de "Dinheiro (em espécie)" — mesma observação
+-- de categorias_animal/subtipos_uso_area/plano de contas acima, a
+-- trigger só vale pra conta criada depois dela existir.
+insert into contas_bancarias (conta_id, nome, especie, sistema, ordem)
+select id, 'Dinheiro (em espécie)', true, true, 0 from contas where nome = 'Conta Principal';
+
+-- "Conta Principal" já nasce com o recurso "Contas a Pagar/Receber"
+-- contratado (é a conta de uso/teste do próprio usuário)
+insert into conta_recursos (conta_id, dominio, recurso, ativo)
+select id, 'financeiro', 'contas_a_pagar_receber', true from contas where nome = 'Conta Principal';
+
+update configuracoes set controla_contas_pagar_receber = true
+where conta_id = (select id from contas where nome = 'Conta Principal');
 
 -- =====================================================================
 -- FIM DO SCRIPT

@@ -33,6 +33,9 @@ export type ModuloId =
   | 'relatorio_lotacao'
   | 'mudanca_pasto'
   | 'rebanho_por_pasto'
+  | 'lancamentos_financeiros'
+  | 'plano_contas_financeiro'
+  | 'contas_pagar_receber'
 
 type Modulo = {
   id: ModuloId
@@ -93,6 +96,27 @@ export const MODULOS: Modulo[] = [
     href: '/relatorio-rebanho-por-pasto',
     icon: ICONS.rebanhoPorPasto,
     somenteLeitura: true,
+  },
+  {
+    id: 'lancamentos_financeiros',
+    dominio: 'financeiro',
+    label: 'Lançamentos Financeiros',
+    href: '/financeiro',
+    icon: ICONS.financeiro,
+  },
+  {
+    id: 'plano_contas_financeiro',
+    dominio: 'financeiro',
+    label: 'Plano de Contas',
+    href: '/plano-contas',
+    icon: ICONS.planoContas,
+  },
+  {
+    id: 'contas_pagar_receber',
+    dominio: 'financeiro',
+    label: 'Contas a Pagar/Receber',
+    href: '/contas-a-pagar-receber',
+    icon: ICONS.contasPagarReceber,
   },
 ]
 

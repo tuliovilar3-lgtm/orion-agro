@@ -12,8 +12,9 @@ import type { DominioId } from '@/lib/modulos'
 // app/api/contas/route.ts), e configuracoes.controla_pasto continua
 // sendo o que todo o resto do app já lê. Esta lista existe só pra
 // onboarding (CadastrarContaModal) saber o que oferecer.
-export type RecursoId = 'controle_pasto'
+export type RecursoId = 'controle_pasto' | 'contas_a_pagar_receber'
 
 export const RECURSOS: { id: RecursoId; dominio: DominioId; label: string }[] = [
   { id: 'controle_pasto', dominio: 'pecuaria', label: 'Controle por pasto' },
+  { id: 'contas_a_pagar_receber', dominio: 'financeiro', label: 'Contas a Pagar/Receber' },
 ]

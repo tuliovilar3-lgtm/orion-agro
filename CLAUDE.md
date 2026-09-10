@@ -3523,3 +3523,206 @@ não tem linha em `conta_limites` hoje); link "Módulos" presente e funcional na
 "Usuários"; `app/fazendas/page.tsx` sem o card antigo, e a aba "Gestão de Áreas" continuando a
 aparecer normalmente pra "FAZENDA TESTE" (confirma que `controlaPasto` não quebrou com a remoção do
 resto). `npx tsc --noEmit` limpo antes e depois do ajuste do ícone.
+
+## Módulo Financeiro — Fase 1 (plano de contas, lançamentos, integração com Movimentações, rateio)
+
+Primeira entrega real do domínio `financeiro` (reservado desde `lib/modulos.ts`/`DOMINIOS`, sem tela
+nenhuma até agora). Reaproveita a espinha dorsal já existente no schema (`centros_custo`/
+`subcentros_custo`/`lancamentos_financeiros`/`regras_rateio`, do rascunho original do projeto, nunca
+usada por nenhuma tela), corrigindo 2 bugs herdados: `centros_custo.nome` era único globalmente (não
+por conta, mesmo bug que `fazendas.nome` tinha antes da Fase 1 multi-tenant), e
+`lancamentos_financeiros.usuario_id` apontava pra tabela `usuarios` morta.
+
+**Plano de contas é uma transcrição literal de um sistema de referência do usuário (Metryx, PDF
+enviado por ele)**, em cascata estrita de 5 níveis — cada nível restringe o próximo, nunca dimensões
+soltas cruzando livremente: **Tipo** (Crédito/Débito, enum `tipo_lancamento_financeiro` renomeado de
+`RECEITA`/`DESPESA`) → **Classe** (`classes_financeiras`, código de 1 dígito, 12 linhas, catálogo
+fixo sem CRUD) → **Centro de Custo** (`centros_custo`, 2 dígitos, aninhado dentro de uma Classe via
+`classe_financeira_id` — por isso "Rebanho" existe como centro em mais de uma Classe, cada ocorrência
+com sua própria lista de subcentros: `1.2` em Receitas Operacionais, `3.3` em Investimentos, `5.4` em
+Mão de Obra, `6.3` em Despesas Produtivas) → **Subcentro de Custo** (`subcentros_custo`, 3 dígitos,
+aninhado no Centro). **Produto/Serviço** (`produtos_financeiros`) vive fora dessa numeração — catálogo
+à parte, **100% cadastrado pelo usuário, zero seed** (única exceção: 3 produtos-sistema pra
+integração com Movimentações, ver abaixo), **obrigatório em todo lançamento sem exceção**. Pode
+carregar um Subcentro **padrão** opcional — escolher esse produto num lançamento novo pré-preenche a
+classificação inteira (Tipo/Classe/Centro/Subcentro) sozinho, ainda editável. Se o produto ainda não
+existe, um "+ Novo" inline no próprio formulário de lançamento cadastra sem sair da tela (mesmo
+padrão já usado em Cliente/Fornecedor e Subtipo de Uso). Classe/Centro/Subcentro são
+sistema-seeded (12+35+123 linhas) mas extensíveis pelo usuário (mesmo princípio de
+`subtipos_uso_area`) — `fn_seed_plano_contas_conta(p_conta_id)` (migração 054) insere o plano
+inteiro pra uma conta, chamada tanto pela trigger de conta nova (mesmo padrão de
+`fn_seed_categorias_subtipos_conta`) quanto no backfill da "Conta Principal".
+
+**`lancamentos_financeiros.tipo` é sempre derivado, nunca escolhido** — trigger
+`fn_resolver_tipo_lancamento_financeiro` (`before insert or update of subcentro_id`) resolve
+`subcentro_id → centro_custo_id → classe_financeira_id → tipo` a cada vez, mesmo princípio já usado
+pra `sexo`/`grupo_faixa_etaria` de categoria de animal.
+
+**Integração automática com Movimentações** — toda Compra/Venda em Pé/Venda Abate salva no pecuário
+gera (ou atualiza) um lançamento financeiro sozinha, sem duplicar digitação:
+`fn_compilar_lancamento_financeiro_movimentacao` (trigger `after insert or update on
+movimentacoes_rebanho`, mesmo molde de `fn_compilar_pesagem_movimentacao`) resolve a classificação
+via 3 **produtos-sistema** ("Gado — Compra" → `3.3.1 Rebanho`, "Gado — Venda em Pé" → `1.2.2 Em pé`,
+"Gado — Venda Abate" → `1.2.1 Abate`), calcula o valor via `fn_valor_liquido_movimentacao` (mesma
+fórmula do frontend — bruto − desconto + acréscimo) e insere/atualiza (`on conflict (movimentacao_id)
+do update`) sempre com **`status = 'PENDENTE'`**, mesmo se já estava `CONFIRMADO` — qualquer edição na
+movimentação (ou nos ajustes de desconto/acréscimo, via `fn_recompilar_lancamento_por_ajuste`)
+resincroniza o lançamento e exige nova conferência. **Compra de gado entra como Investimento
+(`3.3.1`), não despesa operacional** — decisão do usuário, tratamento contábil correto de gado como
+ativo biológico (o custo só vira resultado quando o animal é vendido).
+
+**Fluxo Pendente → Confirmado**: lançamento gerado por movimentação nasce `PENDENTE`; a tela
+Financeiro só permite **Confirmar** (binário) — nunca editar valor/classificação ali. Se o valor não
+bate, o usuário precisa editar a movimentação de origem no pecuário (link direto na tela), que
+resincroniza o lançamento automaticamente. Lançamento manual (digitado direto em Financeiro) nasce
+direto `CONFIRMADO` — sem fila de conferência, já que não veio de nenhum outro módulo pra reconciliar.
+Lançamento vinculado a movimentação é um **registro compilado e travado**, mesmo princípio de
+`fn_validar_delete_pesagem`: `fn_validar_delete_lancamento_financeiro` bloqueia exclusão direta na
+tela financeira enquanto a movimentação de origem ainda existir (com a mesma checagem de "a
+movimentação ainda existe" pra não travar a cascata quando é ela própria que está sendo apagada).
+
+**Rateio (cost-splitting entre fazendas)** é ad-hoc por lançamento nesta fase — sem regra
+salva/reutilizável (`regras_rateio` fica reservada pra um fast-follow). Materializa como **N linhas
+por fazenda no momento de salvar** (`rateio_grupo_id`, mesmo princípio de correlação de
+`grupo_lancamento_id` em Movimentações), 3 critérios: `POR_CABECA` (via `fn_resumo_rebanho_atual`),
+`POR_AREA` (via `fn_area_por_uso`), `PERCENTUAL_FIXO` (manual) — arredondamento tratado dando à
+última fazenda o resto (`valorNum - somaLancada`), garantindo soma exata.
+
+**Excluir lançamento manual**: só entradas sem `movimentacao_id` (não vinculadas a nenhuma
+movimentação) ganham botão "Excluir" com confirmação inline (nunca `window.confirm()`) nos cards
+avulsos de `app/financeiro/page.tsx` — as vinculadas a movimentação continuam bloqueadas pela trigger
+de sempre, e mostram "Estornar" no lugar (ver seção seguinte).
+
+**Telas**: `app/plano-contas/page.tsx` (duas abas — Classes/Centros/Subcentros em acordeão, e
+Produtos e Serviços com cadastro + Subcentro padrão opcional) e `app/financeiro/page.tsx` (pendentes
+de conferência no topo, "+ Novo Lançamento" colapsável com rateio opcional, listagem filtrável por
+status/fazenda, grupos de rateio exibidos agrupados por `rateio_grupo_id`). `lib/modulos.ts` ganha
+`lancamentos_financeiros`/`plano_contas_financeiro` sob `dominio: 'financeiro'`; grupo "Financeiro"
+novo na Sidebar substitui o placeholder "em breve" que existia desde a criação do sistema de módulos.
+
+Verificado no navegador de ponta a ponta: cadastro de plano de contas batendo linha a linha com o PDF
+de referência (12 classes, todos os centros/subcentros nas classes certas); lançamento manual com
+produto pré-cadastrado auto-classificando; "+ Novo produto" inline funcionando sem sair da tela;
+Compra/Venda em Pé geradas em Movimentações aparecendo como Pendente já classificadas corretamente
+(`3.3.1 Rebanho` / `1.2.2 Em pé`); Confirmar mudando o status; editar o valor da movimentação de
+origem depois de confirmado devolvendo o lançamento pra Pendente sozinho; exclusão de lançamento
+manual funcionando com confirmação inline.
+
+### Trava de estorno — lançamento confirmado bloqueia edição/exclusão da movimentação de origem
+
+Observação do usuário depois de usar o fluxo: como a resincronização automática
+(`fn_compilar_lancamento_financeiro_movimentacao`) sempre volta o status pra `PENDENTE` a cada edição
+da movimentação, **um pagamento/recebimento já confirmado podia ser desfeito silenciosamente** só por
+alguém editar a movimentação no pecuário — sem nenhum aviso de que aquele valor já tinha sido dado
+como pago/recebido. Migração 055 fecha essa lacuna: `fn_validar_edicao_movimentacao_lancamento_confirmado`
+(trigger `before update or delete on movimentacoes_rebanho`) bloqueia com exceção qualquer edição ou
+exclusão de uma movimentação cujo lançamento financeiro vinculado esteja `CONFIRMADO`, com a mensagem
+apontando pra Financeiro.
+
+**Único jeito de destravar**: novo botão **"Estornar"** em `app/financeiro/page.tsx`, só nos cards
+vinculados a movimentação (`l.movimentacao_id`), com confirmação inline (`warning`, "Sim, estornar"/
+"Cancelar", nunca `window.confirm()`) — faz um `update` direto (`status: 'PENDENTE', confirmado_por:
+null, confirmado_em: null`), sem precisar de função SQL nova (não passa pela movimentação, só ajusta
+o lançamento). Depois de estornado, a movimentação volta a ficar editável/excluível normalmente, e o
+lançamento reaparece em "Pendentes de conferência" pra nova conferência.
+
+A trigger retorna `coalesce(new, old)` (não só `old`) — necessário pra não sobrescrever silenciosamente
+os valores da edição com os antigos num `before update` (armadilha comum: retornar `old` num trigger
+de update substitui a escrita pretendida em vez de só validar). Nenhuma mudança foi necessária nos
+pontos que já excluem/editam movimentação (`excluirMovimentacao`/`excluirGrupo`/`handleSubmit`/
+`handleSubmitLote` em `app/movimentacoes/page.tsx`) — todos já repassam `error.message` do banco via
+`alert()`, mesmo padrão usado em toda trava de trigger do sistema.
+
+Verificado no navegador de ponta a ponta: Compra de teste lançada → lançamento apareceu Pendente
+classificado corretamente → Confirmar → tentar excluir a movimentação bloqueado com a mensagem exata
+da trigger → tentar editar (Salvar edição sem mudar nada) também bloqueado → Estornar em Financeiro
+(volta pra Pendente) → editar a mesma movimentação agora permitido sem erro → exclusão da movimentação
+de teste (lançamento já Pendente, não mais bloqueado) removeu o lançamento financeiro junto via
+cascade (`movimentacao_id ... on delete cascade`). Dados de teste totalmente revertidos ao final.
+
+## Módulo Financeiro — Fase 2 (Contas a Pagar/Receber: título × baixa, contas bancárias, recurso pago)
+
+Depois de usar a Fase 1 (livro-razão simples, sem noção de vencimento/pagamento), o usuário viu a
+tela de um software de referência e pediu contas a pagar/receber de verdade: vencimento,
+parcelamento, status derivado (Aberto/Vencido/Pago — "Conciliado" fica pra uma Fase 3 separada, exige
+importação de extrato bancário), cadastro de contas bancárias (+ "Dinheiro em espécie"), e que isso
+seja um recurso pago (mesmo mecanismo de "Controle por pasto"). Migração 056.
+
+**Decisão de arquitetura — separar "título" de "baixa"**: em vez de colocar vencimento/pagamento/
+parcela como colunas em `lancamentos_financeiros`, criei `lancamento_baixas` (filha, 1:N via
+`lancamento_id`). Motivo: `lancamentos_financeiros.movimentacao_id` é `unique` — sustenta todo o
+mecanismo de "registro compilado e travado" (Fase 1) e a trava de estorno (migração 055). Se
+vencimento/parcela vivessem no próprio título, uma Compra parcelada em N vezes exigiria N linhas de
+`lancamentos_financeiros`, e não haveria mais "a" linha única pra vincular à movimentação. Com baixa
+como tabela filha, `lancamentos_financeiros` nunca muda de formato (rateio entre fazendas continua
+gerando M linhas de título exatamente como já fazia) — parcelar só insere linhas em
+`lancamento_baixas`, então **título vindo de movimentação também pode ser parcelado**, sem tocar em
+`movimentacao_id`/na trava de estorno. Rateio × parcelamento combinam de graça: cada linha de título
+(rateada ou não) recebe suas próprias N baixas, valor daquela linha ÷ N — nunca recalcula proporção.
+
+**`lancamento_baixas`** (`numero_parcela`, `total_parcelas`, `data_vencimento`, `data_pagamento`,
+`valor`, `conta_bancaria_id`, `observacao`) — um título sem nenhuma baixa é "não rastreado", o
+comportamento de sempre (todo lançamento criado antes desta fase, e qualquer um novo sem preencher o
+bloco de pagamento). Status é sempre **derivado, nunca guardado** (mesmo princípio usado em toda
+parte do sistema pra evitar estado que fica obsoleto sem cron): `PAGO` se `data_pagamento` preenchida,
+`VENCIDO` se `data_vencimento < hoje` e ainda não paga, senão `ABERTO`.
+
+**`contas_bancarias`** — catálogo pequeno (nome + `especie` boolean + `sistema` + `ativo`), mesmo
+princípio de `itens_ajuste_financeiro`/`subtipos_uso_area`. Toda conta (tenant) ganha automaticamente
+uma linha **"Dinheiro (em espécie)"** (`especie=true, sistema=true`, protegida contra exclusão — só
+inativação) via trigger `after insert on contas`, mesmo padrão de `fn_criar_configuracoes_conta`.
+
+**`lancamentos_financeiros` ganha só 3 colunas**: `pessoa_id` (Fornecedor/Cliente), `proprietario_id`
+(dono do lote — mesmo conceito e mesma regra de obrigatoriedade já usada em Movimentações: opcional
+com 0-1 proprietário cadastrado, obrigatório com 2+, mesmo pra lançamento sem relação nenhuma com
+gado — decisão consciente do usuário de manter a regra consistente), `numero_documento`.
+`fn_compilar_lancamento_financeiro_movimentacao` (migração 054) passa a herdar `pessoa_id`/
+`proprietario_id` direto de `movimentacoes_rebanho.cliente_fornecedor_id`/`proprietario_id` — fecha
+uma lacuna real (Compra financeira antes não mostrava fornecedor/dono nenhum).
+
+**Recurso pago** (`conta_recursos`, mesmo catálogo de `lib/conta-recursos.ts` usado por
+"Controle por pasto"): `configuracoes.controla_contas_pagar_receber` (mesma "coluna de efeito" que
+`controla_pasto` já usa) — concedido no onboarding (`app/api/contas/route.ts`, mesmo branch já
+existente pra `controle_pasto`) ou via SQL direto pra conta já existente. "Conta Principal" já nasce
+com o recurso ativo (backfill na própria migração).
+
+**Uma tela só de cadastro — `/financeiro` ganha os campos, sem segundo formulário**: decisão do
+usuário depois de eu ter sugerido inicialmente uma tela separada para "+ Novo" — o formulário de
+"+ Novo Lançamento" (mesmo `handleSubmit` de sempre) ganha, só quando `controla_contas_pagar_receber`
+é `true`: select de Fornecedor/Cliente (`pessoas`, "+ Novo" inline — papel resolvido automaticamente
+pelo `tipo` derivado: DEBITO→FORNECEDOR, CREDITO→CLIENTE), select de Proprietário (mesmo componente/
+regra de Movimentações), Número de documento, e um bloco de pagamento com 3 opções: "Não informar
+agora" (sem baixa nenhuma — comportamento de sempre, mesmo com o recurso contratado), "Já foi pago/
+recebido" (data + conta bancária, 1 baixa já liquidada) ou "A pagar/A receber" (vencimento obrigatório
++ toggle "Parcelar em N vezes" — demais parcelas +1 mês da anterior, valor total/N com resto na
+última, mesmo padrão de arredondamento já usado no rateio).
+
+**Fluxo automático: Confirmar vira Confirmar + Dar baixa no mesmo passo** — como Compra/Venda em
+Pé/Venda Abate nunca passam pelo formulário de criação (nascem Pendente sozinhas), é ao clicar
+"Confirmar" em `/financeiro` que os mesmos 3 campos de pagamento aparecem (só quando o recurso está
+contratado — painel inline no próprio card, mesmo padrão de expansão já usado em outros pontos do
+app), com um botão extra **"Pular por enquanto"** que mantém o clique único de sempre (zero baixa
+criada, pode ser adicionada depois). Sem o recurso contratado, "Confirmar" continua idêntico a antes
+desta fase.
+
+**Nova tela `/contas-a-pagar-receber`** — só acompanhamento, sem "+ Novo" próprio (confirma a
+pergunta do usuário: "aparecerão os lançamentos que ainda estão em aberto? é isso?" — sim). Gate do
+recurso vive na própria página (mesmo raciocínio de `controla_pasto` em `app/fazendas/page.tsx` — a
+Sidebar não lê `configuracoes`, só o link normal por `usuario_modulos`/domínio). Duas abas: **Em
+aberto** (tabela — a unidade de linha é uma baixa, não um título; join até fazenda/produto/
+subcentro→centro→classe/pessoa/proprietário; filtros de Tipo/Fazenda + "Incluir pagas", que por
+padrão fica desmarcado; ações "Dar baixa"/"Desfazer baixa" por linha) e **Contas Bancárias** (CRUD —
+criar + toggle ativo/inativo; "Dinheiro em espécie" só pode inativar).
+
+Verificado no navegador de ponta a ponta: conta bancária real cadastrada; lançamento manual com
+vencimento + parcelado em 3x (R$1.200 → 3× R$400, vencimentos com +1 mês exatos) aparecendo
+corretamente nas duas telas; Dar baixa numa parcela específica marcando só aquela como Paga
+(conferido que as outras 2 permaneceram Abertas) e atualizando o card em `/financeiro` ("0 de 3" →
+acompanhando); Desfazer baixa revertendo; Compra lançada em Movimentações aparecendo Pendente em
+`/financeiro`, Confirmar abrindo o painel, escolher "Já foi pago" + conta bancária confirmando com
+`pessoa_id`/`proprietario_id` **herdados automaticamente** da movimentação (Frigorífico Central /
+Carlos Cesar Pereira - Tinho, nenhum dos dois digitado à mão); card resultante mostrando "Pago" +
+"Confirmado — estorne antes de editar/excluir" (confirma que a trava de estorno da migração 055
+continua intacta, sem nenhuma mudança). Dados de teste revertidos: lançamento manual excluído,
+lançamento automático estornado e a movimentação de origem excluída (cascade removeu o lançamento e a
+baixa junto), conta bancária de teste inativada. `npx tsc --noEmit` limpo.
