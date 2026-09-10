@@ -7,6 +7,7 @@ import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 
 export default function LoginPage() {
   const [existeDono, setExisteDono] = useState<boolean | null>(null)
+  const [erroConexao, setErroConexao] = useState(false)
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
@@ -21,10 +22,33 @@ export default function LoginPage() {
   const supabase = createClient()
   const router = useRouter()
 
-  useEffect(() => {
+  // checa se já existe um administrador — se o Supabase estiver fora do ar
+  // (ex.: projeto pausado por inatividade no plano gratuito) essa chamada
+  // pode nunca responder, não só devolver `error`; por isso corre contra um
+  // timeout em vez de confiar só no `.then()` pra decidir quando desistir
+  function verificarExisteDono() {
+    setErroConexao(false)
+    setExisteDono(null)
+    let resolvido = false
+    const timeoutId = setTimeout(() => {
+      if (resolvido) return
+      resolvido = true
+      setErroConexao(true)
+    }, 10000)
     supabase.rpc('fn_existe_dono').then(({ data, error }) => {
-      if (!error) setExisteDono(Boolean(data))
+      if (resolvido) return
+      resolvido = true
+      clearTimeout(timeoutId)
+      if (error) {
+        setErroConexao(true)
+      } else {
+        setExisteDono(Boolean(data))
+      }
     })
+  }
+
+  useEffect(() => {
+    verificarExisteDono()
     // lido do próprio window (não useSearchParams) pra não exigir um
     // Suspense boundary só por causa desse aviso pontual
     if (new URLSearchParams(window.location.search).get('inativo') === '1') setAvisoInativo(true)
@@ -104,7 +128,20 @@ export default function LoginPage() {
         </div>
 
         <div className="rounded-card border border-border bg-surface p-6">
-          {existeDono === null ? (
+          {erroConexao ? (
+            <div className="space-y-3 text-center">
+              <p className="text-sm text-error">
+                Não foi possível conectar ao sistema. Verifique sua internet e tente novamente.
+              </p>
+              <button
+                type="button"
+                onClick={verificarExisteDono}
+                className="rounded-control border border-border px-4 py-2 text-sm text-text-primary"
+              >
+                Tentar de novo
+              </button>
+            </div>
+          ) : existeDono === null ? (
             <div className="animate-pulse space-y-3">
               <div className="h-9 rounded-control bg-border" />
               <div className="h-9 rounded-control bg-border" />
