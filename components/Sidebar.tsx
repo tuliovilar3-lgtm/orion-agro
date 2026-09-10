@@ -66,6 +66,7 @@ const GROUPS: NavGroup[] = [
 
 const PAINEL: NavItem = { label: 'Painel', href: '/', icon: ICONS.painel }
 const USUARIOS: NavItem = { label: 'Usuários', href: '/usuarios', icon: ICONS.acesso }
+const MODULOS_LINK: NavItem = { label: 'Módulos', href: '/modulos', icon: ICONS.modulos }
 
 const PLACEHOLDERS: NavItem[] = [
   { label: 'Financeiro', href: '#', icon: ICONS.financeiro },
@@ -160,6 +161,19 @@ function NavLinks({
           >
             {USUARIOS.icon}
             {!collapsed && USUARIOS.label}
+          </Link>
+          <Link
+            href={MODULOS_LINK.href}
+            onClick={onNavigate}
+            title={collapsed ? MODULOS_LINK.label : undefined}
+            className={`flex items-center gap-2.5 rounded-r-control border-l-[3px] px-2.5 py-2 text-[13px] font-medium transition-colors ${
+              pathname === MODULOS_LINK.href
+                ? 'border-brand-500 bg-white/8 text-white font-semibold'
+                : 'border-transparent text-white/70 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            {MODULOS_LINK.icon}
+            {!collapsed && MODULOS_LINK.label}
           </Link>
         </div>
       )}

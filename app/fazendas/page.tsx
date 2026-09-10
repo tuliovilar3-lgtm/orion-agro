@@ -55,9 +55,7 @@ export default function FazendasPage() {
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
-  const [configuracaoId, setConfiguracaoId] = useState<string | null>(null)
   const [controlaPasto, setControlaPasto] = useState(false)
-  const [controlaSubtipoArea, setControlaSubtipoArea] = useState(false)
 
   const [modalAberto, setModalAberto] = useState(false)
   const [fazendaEditandoId, setFazendaEditandoId] = useState<string | null>(null)
@@ -93,14 +91,10 @@ export default function FazendasPage() {
     carregarFazendas()
     supabase
       .from('configuracoes')
-      .select('id, controla_pasto, controla_subtipo_area')
+      .select('controla_pasto')
       .single()
       .then(({ data }) => {
-        if (data) {
-          setConfiguracaoId(data.id)
-          setControlaPasto(data.controla_pasto)
-          setControlaSubtipoArea(data.controla_subtipo_area)
-        }
+        if (data) setControlaPasto(data.controla_pasto)
       })
     supabase
       .from('tipos_uso_area')
@@ -232,61 +226,11 @@ export default function FazendasPage() {
 
   const fazendaSelecionada = fazendas.find((f) => f.id === fazendaSelecionadaId)
 
-  async function handleToggleControlaSubtipoArea() {
-    if (!configuracaoId) return
-    const novoValor = !controlaSubtipoArea
-    setControlaSubtipoArea(novoValor)
-    const { error } = await supabase
-      .from('configuracoes')
-      .update({ controla_subtipo_area: novoValor })
-      .eq('id', configuracaoId)
-    if (error) {
-      alert('Erro ao atualizar: ' + error.message)
-      setControlaSubtipoArea(!novoValor)
-    }
-  }
-
   return (
     <ModuloGate modulo="fazendas">
     <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
       <h1 className="text-2xl font-extrabold text-text-primary">Fazendas</h1>
       <p className="mt-1 text-sm text-text-secondary">Cadastre e acompanhe as fazendas do grupo.</p>
-
-      <div className="mt-6 space-y-3 rounded-card border border-border bg-surface p-5">
-        <div>
-          <p className="flex items-center gap-2 text-sm font-medium text-text-primary">
-            Controle de rebanho por pasto
-            {controlaPasto ? (
-              <span className="rounded-control bg-success-bg px-2 py-0.5 text-xs font-semibold text-success">
-                Ativo
-              </span>
-            ) : (
-              <span className="rounded-control bg-bg px-2 py-0.5 text-xs font-semibold text-text-muted">
-                Não contratado
-              </span>
-            )}
-          </p>
-          <p className="text-sm text-text-secondary">
-            {controlaPasto
-              ? 'Habilita o cadastro e controle do rebanho por pastos.'
-              : 'Recurso vendido à parte — fale com o Suporte pra contratar.'}
-          </p>
-        </div>
-
-        <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
-          <input
-            type="checkbox"
-            className="accent-brand-500"
-            checked={controlaSubtipoArea}
-            disabled={!configuracaoId}
-            onChange={handleToggleControlaSubtipoArea}
-          />
-          Controle de subtipo de uso de área
-        </label>
-        <p className="text-sm text-text-secondary">
-          Habilita detalhar Pecuária e Agricultura por subtipo (ex.: Corte/Leite, Soja/Milho) em Gestão de Áreas.
-        </p>
-      </div>
 
       <div className="mt-6 flex flex-wrap items-center gap-2.5">
         {loading ? (

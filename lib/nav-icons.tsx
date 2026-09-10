@@ -104,6 +104,13 @@ export const ICONS = {
       <path d="M15 9.3c0-1.4-1.4-1.9-3-1.9s-3 .7-3 1.9 1.4 1.7 3 1.9 3 .7 3 1.9-1.4 1.9-3 1.9-3-.5-3-1.9" />
     </Icon>
   ),
+  modulos: (
+    <Icon>
+      <path d="M12 3 4 7v10l8 4 8-4V7Z" />
+      <path d="M4 7l8 4 8-4" />
+      <path d="M12 11v10" />
+    </Icon>
+  ),
   configuracoes: (
     <Icon>
       <path d="M4 6h16" />
