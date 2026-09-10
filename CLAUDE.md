@@ -3306,3 +3306,154 @@ dos seletores de lançamento, então uma checagem de UI é suficiente.
 
 Verificado no navegador: tentar inativar "Piquete 1" (33 cabeças) bloqueou com o alerta correto e o
 pasto continuou ativo; inativar "Pasto 2" (sem gado) funcionou normalmente; revertido ao final.
+
+## Redesign da tela Fazendas + conversão pasto↔talhão (ILP) + incorporar/desincorporar área
+
+Redesign grande, conduzido inteiramente por mockup HTML iterativo (aprovado passo a passo pelo
+usuário antes de qualquer código real) e implementado em 6 fases sequenciais, cada uma testada no
+navegador antes da próxima. Antes de escrever qualquer código, uma investigação no app real revelou
+que boa parte do que apareceu no mockup de Gestão de Áreas **já estava implementado**: renomear/
+excluir módulo e pasto, mover pasto entre módulos, cor customizada por pasto, aviso de "pastos sem
+contorno", "+ Módulo"/"+ Pasto", gráfico de barras verticais em Distribuição da Área — o mockup tinha
+reconstruído essas peças do zero sem conferir contra o código real a cada passo. Só o que realmente
+faltava virou trabalho novo.
+
+**Fase 1 — Layout da tela `app/fazendas/page.tsx`**: chips de texto viraram **cards de fazenda**
+(avatar com iniciais do nome, área total + cabeças como subtítulo). A fazenda selecionada ganhou uma
+**barra de estatísticas fixa** (`sticky top-14 md:top-0`, mesmo padrão já usado noutras barras
+sticky do app) mostrando Área total/Pecuária/Agricultura/Cabeças — os dois últimos vêm de
+`fn_area_por_uso` (resolvendo os ids de Pecuária/Agricultura uma vez, no mount) e
+`fn_resumo_rebanho_atual` (mesma RPC do Painel), essa última buscada **uma vez pra todas as fazendas**
+(não por seleção) e reaproveitada tanto nos cards quanto na barra. O antigo link de texto "Editar"
+virou um **botão "Dados Cadastrais" visível** (estilo botão secundário) ao lado de um **menu de 3
+pontos** (Inativar/Excluir) — mesmo padrão de popover com `mousedown`+`ref` já usado noutros pontos
+do app.
+
+**Fase 2 — Área Inicial vira aba própria, abas primárias/secundárias**: `type Aba` ganha
+`'area-inicial'`. A barra de abas passa a ter dois grupos visuais: **Distribuição da Área** e
+**Gestão de Áreas** em destaque (uso do dia a dia); **Saldo Inicial** e **Área Inicial**, editadas
+raramente, ficam menores e à direita (`ml-auto`, fonte menor). **Descoberta que mudou o desenho**: o
+padrão de "trava pré-emptiva" que o mockup tinha desenhado pra Área Inicial (status pill + botão
+"Editar" que precisa ser clicado antes de destravar os campos) **não é o padrão real** usado em Saldo
+Inicial — lá os campos ficam sempre editáveis, existe uma ação explícita separada "Confirmar saldo
+inicial", e salvar depois de confirmado só mostra um aviso pedindo confirmação extra, nunca um
+pré-bloqueio. Decisão: não replicar a trava do mockup — `AreaInicialForm` só precisou ser extraído
+pra virar aba própria, sem nenhuma UI de trava nova (já tinha seu próprio aviso via
+`fn_checar_edicao_area`). A seção "Corrigir declaração inicial" (que existia dentro de
+`DistribuicaoAreaPanel.tsx`, ver "Área Inicial fundida no cadastro da fazenda" acima) foi removida —
+duplicava o mesmo formulário agora que Área Inicial é aba própria; o `refreshKey` que existia só pra
+empurrar essa correção pro gráfico acima também saiu, porque trocar de aba já remonta o componente
+(`{condição && <Componente/>}`) e refaz a busca sozinho.
+
+**Fase 3 — "+ Novo Lançamento" em Distribuição da Área**: "Lançar mudança de uso" (formulário sempre
+visível) virou o mesmo padrão colapsado já usado em Lançamento de Movimentações — estado
+`formularioAberto` (default `false`), um botão em destaque (`border-dashed border-brand-500`) até
+ser clicado, "Fechar"/"Cancelar edição" reaproveitando as mesmas funções de limpeza.
+`iniciarEdicao(m)` também abre o formulário automaticamente ao clicar "Editar" numa linha existente.
+
+**Fase 4 — Card "Área alocada em pastos" em Gestão de Áreas**: barra de progresso nova
+(`GestaoAreasPanel.tsx`) comparando a soma das áreas de pasto ativas contra a área alocada em
+Pecuária hoje (`fn_area_por_uso`), com cor por faixa (`success` < 80%, `warning` 80-100%, `error` ≥
+100%) — mesmo princípio "avisa antes do limite" já usado noutros lugares do app. Complementa, sem
+substituir, a "Conferência com pastos" já existente em `DistribuicaoAreaPanel.tsx`.
+
+**Fase 5 — Conversão pasto↔talhão / ILP, migração 052**: até aqui `modulos.tipo_utilizacao` só
+aceitava `PECUARIA` por constraint (`ck_modulo_tipo_utilizacao`), mesmo o enum já tendo `AGRICULTURA`
+reservado desde a criação da tabela. A migração solta essa constraint (o enum já restringe sozinho) e
+adiciona o mecanismo de conversão em si:
+- **Nomes default do módulo/pasto "Geral" auto-criado mudaram**, pedido do usuário pra ficar mais
+  intuitivo no cadastro: o par PECUARIA (`fn_criar_modulo_pasto_geral`) passa a se chamar **"Módulo
+  1"/"Pasto 1"** (era "Geral"/"Geral"); um par novo AGRICULTURA, **"Geral (Agricultura)"/"Talhão 1"**,
+  é criado junto. Os dois continuam `sistema = true` (protegidos contra exclusão, sempre
+  renomeáveis — a proteção nunca dependeu do nome). Só vale pra fazenda **nova**; fazendas já
+  existentes ganharam só o par AGRICULTURA via backfill idempotente, mantendo "Geral"/"Geral" como
+  estava.
+- **`fn_validar_area_pasto` ficou tipo_utilização-aware**: antes somava *todos* os pastos da fazenda
+  contra só a área de Pecuária — inofensivo até então (não existia módulo AGRICULTURA de verdade),
+  mas teria misturado talhão com pasto assim que um existisse. Agora soma só pastos/talhões de
+  módulos do mesmo `tipo_utilizacao` do módulo sendo validado, contra a área alocada nesse mesmo
+  tipo de uso.
+- **`fn_converter_pasto_talhao(p_pasto_id, p_modulo_destino_id)`** (nova função) converte um pasto
+  pra um módulo de tipo oposto, atomicamente: insere a `MUDANCA_USO` correspondente (dispara
+  `fn_validar_saldo_area` sozinha, bloqueando se não houver área suficiente na origem) e só então
+  move `pastos.modulo_id` — tudo dentro da mesma função, então uma `MUDANCA_USO` rejeitada nunca
+  deixa o pasto mudar de módulo sem o lançamento correspondente.
+- **Frontend** (`GestaoAreasPanel.tsx`): "+ Módulo" ganha um seletor de tipo (Pecuária/Agricultura);
+  cada módulo mostra um badge de tipo; cada pasto/talhão não-sistema com módulo do tipo oposto
+  disponível ganha um ícone "Converter em Talhão"/"Converter em Pasto" que abre um popover (mesmo
+  padrão do "Mover pra outro módulo") listando só módulos do tipo oposto, chamando a RPC em vez de
+  um `update` direto.
+- **Bug real encontrado ao rodar a migração**: o backfill de fazendas existentes, rodado direto no
+  SQL Editor (fora de uma sessão de app), inseria `conta_id` como `null` — o `default
+  fn_conta_atual()` de `modulos`/`pastos.conta_id` depende de `auth.uid()`, que não existe rodando
+  como superusuário. Corrigido selecionando `fazendas.conta_id` explicitamente e passando nos dois
+  inserts do backfill.
+
+**Fase 6 — Incorporar/desincorporar área, migração 053**: até aqui `fazendas.area_ha` só mudava por
+edição manual em "Dados Cadastrais", e `MUDANCA_USO` só realoca área que já existe entre tipos de uso
+— nenhum lançamento cobria "a fazenda comprou/vendeu uma área e o total precisa mudar". Dois tipos
+novos no ledger (`movimentacoes_area`), reaproveitando a mesma mecânica de
+`fn_area_por_uso`/`fn_validar_saldo_area` já existente, **sem** nenhum "tipo de uso" fictício (ex.:
+um "Fora da Fazenda" artificial foi cogitado e descartado — exigiria filtrar essa entrada fantasma em
+todo lugar que lista tipos de uso, risco real de vazar em algum lugar novo no futuro):
+- **`INCORPORACAO_AREA`**: só `tipo_uso_destino_id` (mesmo formato de `SALDO_INICIAL`) — área nova
+  entra direto num tipo de uso, sem checagem de saldo (não existe "de onde" descontar).
+- **`DESINCORPORACAO_AREA`**: só `tipo_uso_origem_id` (espelho) — área sai de um tipo de uso
+  existente, com a mesma checagem de saldo suficiente que `MUDANCA_USO` já tem (sem o nível de
+  subtipo — não faz sentido exigir saldo específico de "Geral" quando a área pode ter entrado via
+  `SALDO_INICIAL` sem detalhamento por subtipo).
+- **`tipo_uso_destino_id`/`subtipo_uso_destino_id` viraram nullable** (só `DESINCORPORACAO_AREA` vem
+  sem destino) — as duas constraints (`ck_area_movimentacao_origem`/`ck_subtipo_area_origem`) foram
+  reescritas explicitando "destino not null" nos 3 tipos que continuam exigindo, já que a coluna em
+  si não garante mais isso sozinha.
+- **`fn_atualizar_area_total_fazenda`** (trigger nova, `after insert or update or delete on
+  movimentacoes_area`) soma/subtrai `fazendas.area_ha` automaticamente — inclui UPDATE/DELETE por
+  completude, mesmo sem UI de editar/excluir essas linhas nesta rodada.
+- **`fn_delta_area_para_tipo`** (usada pela trajetória de edição, `fn_checar_edicao_area`) passou a
+  tratar `DESINCORPORACAO_AREA` igual `MUDANCA_USO` pro lado origem — sem isso, editar/excluir uma
+  desincorporação já lançada não seria contabilizado corretamente na checagem de saldo futuro.
+- **Frontend** (`DistribuicaoAreaPanel.tsx`): segunda seção colapsável "Incorporar ou desincorporar
+  área", mesmo padrão "+ Novo Lançamento" da Fase 3, com toggle Incorporar/Desincorporar, um único
+  seletor de tipo de uso (vira origem ou destino conforme o toggle), e o mesmo hint de "área
+  disponível" já usado em mudança de uso. A lista "Últimas mudanças de uso" virou **"Últimas
+  movimentações de área"**, unificando os 3 tipos — `labelMovimentacao(m)` mostra `+ Tipo` (incorporação),
+  `− Tipo` (desincorporação) ou `Origem → Destino` (mudança de uso); só mudança de uso mostra
+  "Editar" (decisão de escopo: sem editar/excluir incorporação/desincorporação nesta rodada, só
+  criar — mesmo espírito de "cobre criar, editar fica pra depois" já aceito noutras fases recentes).
+- **Sem coluna de banco nova** — só reaproveita `movimentacoes_area` já existente com dois valores
+  novos de enum (`alter type ... add value`, obrigatoriamente rodado numa transação separada da que
+  usa esses valores, restrição do Postgres pra enum recém-criado).
+
+**Dois bugs reais de staleness encontrados durante o teste da Fase 6, ambos consertados**:
+1. **Lançar uma mudança de uso (ou a incorporação/desincorporação nova) nunca atualizava a tabela/
+   gráfico de "Distribuição de área" nem a "Conferência com pastos" sem recarregar a página** — bug
+   pré-existente desde antes desta leva de fases (o `refreshKey` que existia só cobria a correção de
+   Área Inicial, removido na Fase 2 por parecer redundante — reintroduzido aqui do jeito certo,
+   cobrindo os 3 `useEffect` que buscam dado nessa aba, incrementado nos 3 pontos onde um lançamento
+   é salvo/editado). Como a barra de estatísticas fixa (Fase 1) vive em `app/fazendas/page.tsx`, fora
+   do painel, ganhou seu próprio aviso: `DistribuicaoAreaPanel` recebe um prop opcional
+   `onAreaChanged`, chamado nos mesmos 3 pontos, que a página usa pra bumpar seu próprio
+   `statsRefreshKey` e rechamar `carregarFazendas()`.
+2. **"Conferência com pastos" (`DistribuicaoAreaPanel.tsx`) e o card novo "Área alocada em pastos"
+   (Fase 4) somavam *todos* os pastos da fazenda contra só a área de Pecuária** — o mesmo problema já
+   corrigido em `fn_validar_area_pasto` (Fase 5), só que no frontend: inofensivo até existir um
+   talhão de verdade, mas exposto assim que a conversão pasto↔talhão ficou disponível. Corrigido
+   filtrando por `tipo_utilizacao = 'PECUARIA'` nos dois lugares (a query de `pastosAtivos` em
+   `DistribuicaoAreaPanel.tsx`, e um `Set` de módulos Pecuária em `GestaoAreasPanel.tsx`).
+
+Verificado no navegador de ponta a ponta: cards de fazenda com iniciais/área/cabeças corretos; barra
+de estatísticas batendo com os valores já conhecidos da fazenda de teste; abas primárias/secundárias
+visualmente distintas, Área Inicial abrindo como aba própria com os dados certos; "+ Nova mudança de
+uso" abrindo/fechando e "Editar" reabrindo automaticamente; card de área alocada com cor certa (verde
+a 3%, depois amarelo a 87% num teste com números ajustados); conversão de um pasto em talhão e volta
+(ida: `MUDANCA_USO` "Pecuária → Agricultura" lançada sozinha, Pecuária/Agricultura recalculando
+certo; volta: idêntico em sentido inverso); incorporação de +50 ha em Pecuária e desincorporação de
+-20 ha, os dois atualizando Área total/Pecuária ao vivo (sem reload, confirmando o fix do
+`onAreaChanged`) e bloqueio correto ao tentar desincorporar mais área do que existia disponível. Duas
+mensagens de erro do React ("hook array mudou de tamanho") que apareceram no meio do teste eram
+artefato do Fast Refresh numa aba de navegador com muitas edições ao vivo acumuladas — confirmado
+falso-positivo numa aba nova, zero erros. Dados de teste (incorporação/desincorporação/conversões de
+"Pasto 2") ficaram no banco ao final desta rodada — não fazem parte do histórico real da fazenda de
+testes, removíveis via `delete from movimentacoes_area where observacao like 'Teste de%' or
+observacao like 'Gerado automaticamente pela conversão de "Pasto 2"%'` se algum dia incomodar (a
+trigger da Fase 6 desfaz o efeito em `fazendas.area_ha` sozinha ao excluir).
