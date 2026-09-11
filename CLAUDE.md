@@ -3993,3 +3993,35 @@ pago"/"A pagar" apareceram corretos (tipo Débito), e a 4ª parcela editada pra 
 persistiu corretamente, com Fornecedor/Proprietário herdados automaticamente da movimentação de
 origem. Dados de teste revertidos: lançamento manual excluído; lançamento automático estornado e a
 movimentação de origem excluída (cascade removeu lançamento e baixas). `npx tsc --noEmit` limpo.
+
+## Centro de Custo "2.6" renomeado pra Receitas Imobiliárias + subcentro Aluguel de Imóveis (migração 059)
+
+Pedido do usuário: o Centro de Custo `2.6 — Venda de Imóveis` (dentro de `2 Receitas não
+operacionais`) ficaria estreito demais depois que ele decidir incluir recebimento de aluguel de
+imóvel como subcentro — renomeado pra `Receitas Imobiliárias`, e ganhou o subcentro novo `2.6.3 —
+Aluguel de Imóveis` (mesmo padrão de nome já usado em `2.2.2 — Aluguel de Máquinas`).
+
+Como Classe/Centro/Subcentro do plano de contas são catálogo `sistema = true` (sem UI de
+renomear/excluir, só ativar/inativar — mesmo princípio de `categorias_animal.sistema`), a mudança é
+puramente de dado/seed, sem nenhum código de frontend tocado: nenhuma tela referencia o nome
+"Venda de Imóveis" hardcoded, tudo é lido dinamicamente via join (`centro.nome`). Migração 059 faz a
+correção em duas partes, **por número de classe/centro (`classe.numero = 2, centro.numero = 6`), não
+por nome** — imune a qualquer rename futuro e aplicada de uma vez pra **todas** as contas existentes
+(incluindo "Conta Principal", sem precisar do backfill explícito que os seeds de tabela nova
+costumam exigir, já que aqui é um `update`/`insert` direto sobre linhas já existentes, não uma
+trigger que só vale daqui pra frente): `update centros_custo set nome = 'Receitas Imobiliárias' ...`
+e `insert into subcentros_custo (...) select ... on conflict (centro_custo_id, nome) do nothing`.
+`fn_seed_plano_contas_conta` (a função de seed usada por toda conta nova) também foi atualizada no
+`orion_agro_schema.sql` com o nome novo do centro e o subcentro novo, pra uma instalação do zero já
+nascer correta sem depender da migração 059.
+
+Verificado no navegador: `/plano-contas`, expandindo a Classe 2, mostra `2.6 — Receitas Imobiliárias`
+com os 3 subcentros (`2.6.1 Imóveis Rurais`, `2.6.2 Imóveis Urbanos`, `2.6.3 Aluguel de Imóveis`).
+`npx tsc --noEmit` limpo (nenhum arquivo `.tsx`/`.ts` tocado nesta mudança).
+
+**Ajuste de acompanhamento (migração 060)**: com `2.6.3 Aluguel de Imóveis` existindo ao lado deles,
+`2.6.1`/`2.6.2` ficaram ambíguos entre venda e aluguel — renomeados pra `Venda de Imóveis Rurais`/
+`Venda de Imóveis Urbanos`. Mesmo padrão da 059 (junção por número de classe/centro/subcentro, não
+por nome; `fn_seed_plano_contas_conta` também atualizada). Verificado no navegador: `/plano-contas`
+mostra os 3 subcentros corretos (`2.6.1 Venda de Imóveis Rurais`, `2.6.2 Venda de Imóveis Urbanos`,
+`2.6.3 Aluguel de Imóveis`).
