@@ -4025,3 +4025,32 @@ com os 3 subcentros (`2.6.1 Imóveis Rurais`, `2.6.2 Imóveis Urbanos`, `2.6.3 A
 por nome; `fn_seed_plano_contas_conta` também atualizada). Verificado no navegador: `/plano-contas`
 mostra os 3 subcentros corretos (`2.6.1 Venda de Imóveis Rurais`, `2.6.2 Venda de Imóveis Urbanos`,
 `2.6.3 Aluguel de Imóveis`).
+
+**Fusão dos centros 2.1 e 2.6 num só (migração 061)**: o usuário decidiu que "Arrendamento" (2.1) e
+"Receitas Imobiliárias" (2.6) deveriam ser o mesmo centro — mantido o **2.1**, renomeado pra
+`Receitas Imobiliárias`, reunindo os 4 subcentros da receita imobiliária inteira:
+`2.1.1 Venda de Imóveis Rurais`, `2.1.2 Venda de Imóveis Urbanos`, `2.1.3 Aluguel de Imóveis
+Urbanos` (o antigo `2.6.3`, renomeado de novo — agora especificando "Urbanos", já que ganhou um
+contraponto rural em `2.1.4`), `2.1.4 Arrendamento de Imóveis Rurais` (o antigo `2.1.1
+Arrendamento`, renumerado e renomeado). O centro `2.6` foi apagado depois de esvaziado — sem
+`fn_validar_delete_*` protegendo `centros_custo` contra exclusão de linha `sistema = true` (diferente
+de `categorias_animal`/`pastos`), um `delete` direto funciona assim que não sobra nenhum
+`subcentros_custo` apontando pra ele.
+
+**Ordem de execução importa nesta migração** — os 4 passos rodam em sequência específica pra evitar
+dois problemas: (1) mover os subcentros de 2.6 pra dentro de 2.1 e só *depois* apagar 2.6, senão a
+FK de `subcentros_custo.centro_custo_id` (`on delete cascade`) apagaria os subcentros junto; (2)
+apagar o centro 2.6 antes de renomear 2.1 pra "Receitas Imobiliárias", senão colidiria com
+`uq_centro_custo_nome` (dois centros com o mesmo nome na mesma Classe ao mesmo tempo). Como
+`subcentros_custo.numero` não tem constraint de unicidade, mover os 3 subcentros de 2.6 preservando
+seus números (1/2/3) pra dentro de 2.1 exigiu primeiro tirar o "Arrendamento" original de 2.1 do
+caminho, renumerando-o pra 4 — mesmo sem risco real de erro de banco, feito assim pra nunca existir
+um estado intermediário com dois subcentros "número 1" no mesmo centro. Mesmo princípio de junção
+por número de classe/centro/subcentro (nunca por nome) das migrações 059/060 — imune a qualquer
+rename futuro e aplicado de uma vez pra todas as contas. `fn_seed_plano_contas_conta` também
+atualizada (centro `2.6` removido da lista, `2.1` já nasce com os 4 subcentros finais) — uma conta
+nova não passa mais pelo estado intermediário "separado", nasce direto fundida.
+
+Verificado no navegador: `/plano-contas`, Classe 2 expandida, mostra só `2.1 — Receitas
+Imobiliárias` com os 4 subcentros na ordem certa, e nenhum `2.6` sobrando na lista (ia direto de
+`2.5` pro fim da Classe). `npx tsc --noEmit` limpo (nenhum arquivo `.tsx`/`.ts` tocado).

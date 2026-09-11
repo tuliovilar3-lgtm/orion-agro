@@ -4104,8 +4104,8 @@ begin
   select p_conta_id, cf.id, v.numero, v.nome, true, v.numero
   from (values
     (1, 1, 'Cultura - Receita'), (1, 2, 'Rebanho'),
-    (2, 1, 'Arrendamento'), (2, 2, 'Receitas Parque de máquinas'), (2, 3, 'Receitas financeiras'),
-    (2, 4, 'Receitas outros'), (2, 5, 'Vendas outros animais'), (2, 6, 'Receitas Imobiliárias'),
+    (2, 1, 'Receitas Imobiliárias'), (2, 2, 'Receitas Parque de máquinas'), (2, 3, 'Receitas financeiras'),
+    (2, 4, 'Receitas outros'), (2, 5, 'Vendas outros animais'),
     (3, 1, 'Investimentos em infraestrutura'), (3, 2, 'Investimentos em RH'),
     (3, 3, 'Rebanho Investimento'), (3, 4, 'Investimentos em outros animais'),
     (4, 1, 'Suporte à Produção Administração'), (4, 2, 'Manutenção da fazenda'),
@@ -4128,12 +4128,12 @@ begin
     (1,1,1,'Culturas - Receita'), (1,1,2,'Receitas parceria agrícola'),
     (1,2,1,'Abate'), (1,2,2,'Em pé'), (1,2,3,'Sêmen e embriões'),
 
-    (2,1,1,'Arrendamento'),
+    (2,1,1,'Venda de Imóveis Rurais'), (2,1,2,'Venda de Imóveis Urbanos'),
+    (2,1,3,'Aluguel de Imóveis Urbanos'), (2,1,4,'Arrendamento de Imóveis Rurais'),
     (2,2,1,'Venda veículos tratores e implementos'), (2,2,2,'Aluguel de Máquinas'),
     (2,3,1,'Rendimento financeiro juros'), (2,3,2,'Participação nos Lucros, Cooperativas e Outros (PLL)'),
     (2,4,1,'Madeiras e outros'), (2,4,2,'Recicláveis'), (2,4,3,'Vendas ferramentas e equipamentos'), (2,4,4,'Outros Créditos'),
     (2,5,1,'Venda tropa de reprodução'), (2,5,2,'Venda tropa de serviço'),
-    (2,6,1,'Venda de Imóveis Rurais'), (2,6,2,'Venda de Imóveis Urbanos'), (2,6,3,'Aluguel de Imóveis'),
 
     (3,1,1,'Compra equipamentos informática, telefonia e comunicação'),
     (3,1,2,'Compra veículos, tratores e implementos'),
