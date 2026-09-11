@@ -3707,6 +3707,67 @@ create trigger trg_criar_conta_bancaria_especie
 after insert on contas
 for each row execute function fn_criar_conta_bancaria_especie();
 
+-- Atividades Econômicas (migração 058) — dimensão de classificação
+-- ortogonal ao plano de contas (que classifica o TIPO da despesa/
+-- receita) e à Fazenda: classifica A QUAL NEGÓCIO o lançamento
+-- pertence, pra famílias/fazendas que operam mais de uma atividade ao
+-- mesmo tempo. Catálogo pequeno, mesmo molde de contas_bancarias.
+create table atividades_economicas (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  nome       text not null,
+  sistema    boolean not null default false,
+  ativo      boolean not null default true,
+  ordem      int not null default 0,
+  created_at timestamptz not null default now(),
+  constraint uq_atividade_economica_nome unique (conta_id, nome)
+);
+alter table atividades_economicas enable row level security;
+create policy atividades_economicas_por_conta on atividades_economicas for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+-- 14 sugestões comuns do meio rural, sempre INATIVAS por padrão —
+-- diferente de outros seeds (categorias_animal, subtipos_uso_area),
+-- que nascem ativos: aqui a lista inteira é só um cardápio de
+-- possibilidades (a maioria das fazendas usa só 1-3 das 14), não um
+-- ponto de partida universal — o usuário ativa só as que fazem
+-- sentido pra ela.
+create or replace function fn_seed_atividades_economicas_conta(p_conta_id uuid)
+returns void
+language plpgsql
+as $$
+begin
+  insert into atividades_economicas (conta_id, nome, sistema, ativo, ordem)
+  values
+    (p_conta_id, 'Pecuária Campo', true, false, 1),
+    (p_conta_id, 'Pecuária Genética', true, false, 2),
+    (p_conta_id, 'Pecuária Confinamento', true, false, 3),
+    (p_conta_id, 'Agricultura Anual', true, false, 4),
+    (p_conta_id, 'Agricultura Permanente', true, false, 5),
+    (p_conta_id, 'Silvicultura', true, false, 6),
+    (p_conta_id, 'Imobiliária / Arrendamento', true, false, 7),
+    (p_conta_id, 'Financiamento', true, false, 8),
+    (p_conta_id, 'Haras', true, false, 9),
+    (p_conta_id, 'Armazém', true, false, 10),
+    (p_conta_id, 'Almoxarifado', true, false, 11),
+    (p_conta_id, 'Fábrica de Ração', true, false, 12),
+    (p_conta_id, 'Piscicultura', true, false, 13),
+    (p_conta_id, 'Transportadora', true, false, 14);
+end;
+$$;
+
+create or replace function fn_seed_atividades_economicas_conta_trigger()
+returns trigger as $$
+begin
+  perform fn_seed_atividades_economicas_conta(new.id);
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_seed_atividades_economicas_conta
+after insert on contas
+for each row execute function fn_seed_atividades_economicas_conta_trigger();
+
 -- Produto/Serviço: 4º campo do plano de contas, fora da numeração
 -- Classe/Centro/Subcentro — catálogo próprio, sem seed nenhum (exceto
 -- os 3 produtos-sistema pra integração com Movimentações, seedados
@@ -3758,6 +3819,9 @@ create table lancamentos_financeiros (
   pessoa_id         uuid references pessoas(id),
   proprietario_id   uuid references pessoas(id),
   numero_documento  text,
+  -- migração 058 — dimensão opcional, ortogonal ao plano de contas;
+  -- sempre null pra lançamento automático (Compra/Venda) nesta fase
+  atividade_economica_id uuid references atividades_economicas(id),
   created_at        timestamptz not null default now()
 );
 
@@ -4647,6 +4711,11 @@ select id, 'financeiro', 'contas_a_pagar_receber', true from contas where nome =
 
 update configuracoes set controla_contas_pagar_receber = true
 where conta_id = (select id from contas where nome = 'Conta Principal');
+
+-- atividades econômicas (migração 058): "Conta Principal" também
+-- precisa do seed manual, mesma observação de sempre — a trigger só
+-- vale pra conta criada depois dela existir.
+select fn_seed_atividades_economicas_conta(id) from contas where nome = 'Conta Principal';
 
 -- =====================================================================
 -- FIM DO SCRIPT

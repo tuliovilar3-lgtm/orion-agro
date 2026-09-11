@@ -139,6 +139,12 @@ export const ICONS = {
       <path d="M3 19h18" />
     </Icon>
   ),
+  atividadesEconomicas: (
+    <Icon>
+      <path d="M12 3v18" />
+      <path d="M17 6.5c0-1.5-2-2-5-2s-5 .8-5 2.2S9 8.8 12 9s5 .6 5 2.3-2 2.2-5 2.2-5-.5-5-2" />
+    </Icon>
+  ),
   configuracoes: (
     <Icon>
       <path d="M4 6h16" />

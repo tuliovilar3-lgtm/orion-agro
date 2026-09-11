@@ -3858,3 +3858,138 @@ domínio estiver desmarcado. Removida a seção "Recursos adicionais" separada e
 Verificado no navegador nos dois modais: "Pecuária" mostra "Controle por pasto" logo abaixo quando
 marcado; "Financeiro" mostra "Contas a Pagar/Receber"; domínios sem recurso nenhum (Agricultura/
 Máquinas/Clima) não mostram nada abaixo. `npx tsc --noEmit` limpo.
+
+## Atividades Econômicas (migração 058)
+
+Pedido do usuário depois de ver a tela "Atividades Econômicas" de um sistema de referência: em
+famílias/fazendas que operam mais de um negócio ao mesmo tempo (ex.: pecuária + fábrica de ração),
+separar o resultado financeiro por atividade — não só por Fazenda ou por Centro de Custo. **Diferença
+confirmada com o usuário em relação ao que já existe**: Centro de Custo (plano de contas) classifica
+**o tipo** da despesa/receita (Rebanho, Suporte à Produção...); Atividade Econômica classifica **a
+qual negócio** aquilo pertence — dimensão nova, ortogonal ao plano de contas e à Fazenda (a mesma
+fazenda pode ter mais de uma atividade; a mesma atividade pode aparecer em fazendas diferentes).
+Decisão explícita de escopo: implementar o catálogo + o campo agora, mas **nenhum relatório/DRE
+agrupado por atividade nesta rodada** (o sistema ainda não tem nenhum relatório financeiro) e
+**lançamentos automáticos (Compra/Venda em Pé/Venda Abate) não ganham atividade nenhuma** — a coluna
+fica `null` pra eles, sem mexer no formulário de Movimentações nem no painel de Confirmar+baixa.
+
+**`atividades_economicas`** — mesmo molde de `contas_bancarias`: `id, conta_id, nome, sistema, ativo,
+ordem, created_at`, RLS `conta_id = fn_conta_atual()`, `unique (conta_id, nome)`. Seed automático
+(`fn_seed_atividades_economicas_conta`, trigger `after insert on contas`, mesmo princípio de
+`fn_criar_conta_bancaria_especie`) insere as 14 atividades do sistema de referência (Pecuária Campo/
+Genética/Confinamento, Agricultura Anual/Permanente, Silvicultura, Imobiliária/Arrendamento,
+Financiamento, Haras, Armazém, Almoxarifado, Fábrica de Ração, Piscicultura, Transportadora) pra toda
+conta nova — **`ativo = false` por padrão**, diferente de outros seeds como `categorias_animal`/
+`subtipos_uso_area` (que nascem ativos): a lista inteira representa "possibilidades", a maioria das
+fazendas usa só 1-3 delas, então o usuário ativa só as que fazem sentido, no mesmo espírito de
+like/dislike do print de referência. Backfill idêntico pra "Conta Principal" na própria migração.
+
+**`lancamentos_financeiros.atividade_economica_id`** (nullable, referencia `atividades_economicas`)
+— sempre opcional, sem exigência condicional como Proprietário tem: não há um argumento de
+"obrigatoriedade contábil" aqui, é só uma classificação de relatório.
+
+**Nova tela `/atividades-economicas`** — cópia estrutural de `app/contas-bancarias/page.tsx` (lista +
+"+ Nova" + toggle ativo/inativo, sem edição/exclusão): `ModuloId` novo `atividades_economicas`,
+`dominio: 'financeiro'`, **sem gate de recurso** (base do módulo Financeiro, mesmo critério já usado
+pra Produtos e Serviços/Contas Bancárias) — linkada no grupo Gerenciamento da Sidebar, ao lado de
+Produtos e Serviços/Contas Bancárias.
+
+**`app/financeiro/page.tsx`**: formulário de "+ Novo Lançamento" ganha um select opcional "Atividade
+Econômica" logo após o bloco de Classificação — **sem gate de `controlaContasPagarReceber`** (ao
+contrário de Fornecedor/Proprietário/pagamento, que são específicos do recurso pago; Atividade é
+classificação de base, disponível pra qualquer lançamento manual) e **sem "+ Nova" inline** (mesmo
+padrão de Contas Bancárias — cadastro só pela tela própria). Card da listagem ganha uma linha
+"Atividade: X" (junto de Fornecedor/Proprietário, mesmo formato) quando preenchido, e um filtro por
+atividade na barra de filtros (mesmo padrão de `filtroFazendaId`) — só aparece quando existe pelo
+menos uma atividade ativa cadastrada.
+
+Verificado no navegador de ponta a ponta: `/atividades-economicas` listada em Gerenciamento com as 14
+atividades todas inativas (confirma o backfill); ativar 2 + criar "Turismo Rural (teste)" via "+ Nova"
+funcionou; em `/financeiro`, o select "Atividade Econômica" apareceu logo após Classificação, com só
+as 3 ativas listadas; lançamento manual salvo com atividade selecionada mostrou "· Propriet.: Túlio ·
+Atividade: Turismo Rural (teste)" no card; filtro por atividade reduziu a listagem corretamente nos
+dois sentidos (zerar ao filtrar por uma atividade diferente, mostrar ao filtrar pela certa). Dados de
+teste revertidos: lançamento excluído, as 3 atividades voltaram a `inativa` (não existe exclusão de
+atividade, mesmo padrão de Contas Bancárias — "Turismo Rural (teste)" fica como linha inativa no
+catálogo, sem efeito em nenhum seletor). `npx tsc --noEmit` limpo.
+
+## Revisão do formulário de lançamento financeiro (Tipo primeiro, classificação reversível, rateio com prévia, status/parcelamento por tipo)
+
+Pedido do usuário depois de usar o formulário de "+ Novo Lançamento" na prática — sete ajustes
+pontuais, todos em `app/financeiro/page.tsx`, sem migração de banco (todas as colunas/tabelas
+envolvidas já existiam).
+
+**Tipo (Receita/Despesa) vira o primeiro campo do formulário**, acima de "Data de emissão" —
+`tipoLancamento` (`'CREDITO' | 'DEBITO' | ''`), radio, `required`. Filtra o `<select>` de Classe
+(`classes.filter(cl => cl.tipo === tipoLancamento)`) e o mantém `disabled` até ser escolhido — o
+`<select>` de Subcentro também fica `disabled` até esse ponto (ver reversibilidade abaixo).
+`handleEscolherTipo` reresolve a troca de tipo limpando Classe/Centro/Subcentro/Produto já escolhidos
+(podiam pertencer ao tipo anterior). Produto e Subcentro (ver próximo item) também **derivam**
+`tipoLancamento` automaticamente quando escolhidos primeiro — a exigência de "primeiro campo" é sobre
+a ordem sugerida do formulário, não um bloqueio rígido contra preencher por outro caminho.
+
+**"Data" vira "Data de emissão"** — só troca de rótulo (já vinha pré-preenchida com hoje desde a Fase
+1; sem mudança de comportamento).
+
+**Classificação aceita ser preenchida de trás pra frente** — antes, o `<select>` de Subcentro só
+listava as opções do Centro já escolhido e ficava desabilitado sem ele. Agora, sem Centro escolhido
+ainda, lista **todos** os subcentros do Tipo (e da Classe, se já escolhida) já **agrupados por
+Centro** via `<optgroup>` (`subcentrosVisiveis`, `useMemo`) — escolher um subcentro direto
+(`handleEscolherSubcentro`) resolve Centro, Classe e Tipo sozinho, espelhando a mesma lógica que
+`handleEscolherProduto` já usava pra produto→classificação. O fluxo forward (Classe → Centro →
+Subcentro) continua idêntico a antes.
+
+**Rateio ganha prévia ao vivo de quantidade/área + percentual, pros 3 critérios** — antes, só
+"Percentual fixo" tinha algo visível (o campo de input); "Por cabeça"/"Por área" eram uma caixa preta
+até o submit. Agora cada fazenda listada mostra, ao lado do checkbox: cabeças de hoje (`fn_resumo_rebanho_atual`,
+buscada uma vez pra todas as fazendas via `useEffect` quando o critério é "Por cabeça") ou área
+(`fazendas.area_ha`, já carregada) conforme o critério, e — pra fazendas **selecionadas** — o
+percentual correspondente (`rateioProporcoesPreview`, `useMemo`, mesma fórmula usada no submit real,
+só que como prévia). Uma linha "Total do rateio: X%" soma tudo (`rateioSomaPct`), em `error` se
+diferente de 100% (só possível em Percentual Fixo, já que os outros dois critérios sempre somam 100%
+por construção quando o total é positivo). O cálculo real no submit não mudou — continua recalculando
+do zero, a prévia é só informativa.
+
+**Fornecedor/Cliente vira um rótulo só, condicional ao Tipo** — `labelPessoa` mostra "Cliente" pra
+Receita, "Fornecedor" pra Despesa (era sempre "Fornecedor/Cliente"). `handleCriarPessoa` (o "+ Novo"
+inline) já resolvia o papel certo a partir da classe escolhida — só trocou de ler `classes.find(...)`
+pra ler `tipoLancamento` direto (mesmo resultado, mais direto agora que o Tipo é uma variável própria
+do formulário).
+
+**Status do pagamento vira 2 opções só, com rótulo condicional ao Tipo** — a 3ª opção "Não informar
+agora" foi removida (pedido explícito do usuário: "deve ter apenas duas opções"); `pagamento` deixa de
+aceitar `'NAO_INFORMAR'`, passa a nascer em `'A_PAGAR'` por padrão — mesmo default que o painel
+"Confirmar + Dar baixa" dos lançamentos automáticos já usava, então os dois formulários convergem pro
+mesmo modelo de 2 estados. Rótulos: "Já foi pago"/"A pagar" pra Despesa, "Já foi recebido"/"A receber"
+pra Receita (`labelJaPago`/`labelAPagar`, derivados de `tipoLancamento` no formulário manual; o painel
+de Confirmar usa `l.tipo` direto, já que ali o lançamento automático já vem classificado). Como
+consequência: **todo lançamento manual, com o recurso contratado, agora sempre grava pelo menos uma
+baixa** (não existe mais o estado "não rastreado" pra lançamento novo — só pra lançamentos manuais
+criados antes desta mudança, que continuam sem nenhuma linha em `lancamento_baixas`).
+
+**Parcelamento ganha data de vencimento editável por parcela** — antes, só a 1ª parcela tinha campo
+(`vencimentoData`); as demais eram sempre `+1 mês` calculado internamente no submit
+(`somarMeses`), sem chance de ajuste (parcelamento semestral/anual/irregular não era possível). Agora
+um novo estado, `parcelasDatasExtras` (array das datas da parcela 2 em diante — a 1ª continua sendo
+sempre `vencimentoData`), é pré-preenchido mensalmente via `useEffect` toda vez que `parcelar`/
+`numParcelas`/`vencimentoData` mudam, mas cada data vira um `<input type="date">` próprio
+("Parcela 2 de N", "Parcela 3 de N"...), editável individualmente depois disso —
+editar `numParcelas`/`vencimentoData` de novo recalcula os defaults (mudança estrutural invalida
+qualquer ajuste manual anterior, esperado). `gerarLinhasBaixa` passa a montar as datas como
+`[vencimentoData, ...parcelasDatasExtras]` em vez de `somarMeses` em loop, com validação de que
+nenhuma ficou vazia. **Mesmo tratamento no painel "Confirmar + Dar baixa"** dos automáticos
+(`confirmarParcelasDatasExtras`/`atualizarConfirmarParcelaExtra`) — os dois formulários usam
+exatamente o mesmo padrão, evitando duas UX diferentes de parcelamento no mesmo módulo.
+
+Verificado no navegador de ponta a ponta: escolher "Despesa" filtrou a Classe pra só as 8 classes de
+débito; escolher o Subcentro "Rebanho" direto (sem escolher Classe/Centro antes) preencheu Centro
+("Rebanho Investimento") e Classe ("3 — Investimentos") sozinho; rótulo virou "Fornecedor" (não mais
+"Fornecedor/Cliente") assim que Despesa foi escolhida; rateio por área mostrou "1.500,00 ha · 42.9%" e
+"2.000,00 ha · 57.1%" pras duas fazendas de teste, somando "100.0%"; lançamento salvo com rateio
+gravou R$ 385,71/R$ 514,29 nas duas linhas (proporcional à área) e as 3 parcelas com a 3ª parcela
+editada manualmente pra 15/04/2027 (em vez do +1 mês default) persistiram exatamente como editado em
+`/contas-a-pagar-receber`; no painel de Confirmar de um automático (Compra de Touro), rótulos "Já foi
+pago"/"A pagar" apareceram corretos (tipo Débito), e a 4ª parcela editada pra 01/05/2027 também
+persistiu corretamente, com Fornecedor/Proprietário herdados automaticamente da movimentação de
+origem. Dados de teste revertidos: lançamento manual excluído; lançamento automático estornado e a
+movimentação de origem excluída (cascade removeu lançamento e baixas). `npx tsc --noEmit` limpo.

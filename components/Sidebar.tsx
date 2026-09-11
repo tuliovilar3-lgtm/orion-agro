@@ -30,6 +30,12 @@ const GROUPS: NavGroup[] = [
         icon: ICONS.contasBancarias,
         modulo: 'contas_bancarias',
       },
+      {
+        label: 'Atividades Econômicas',
+        href: '/atividades-economicas',
+        icon: ICONS.atividadesEconomicas,
+        modulo: 'atividades_economicas',
+      },
     ],
   },
   {

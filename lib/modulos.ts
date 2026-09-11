@@ -37,6 +37,7 @@ export type ModuloId =
   | 'plano_contas_financeiro'
   | 'produtos_servicos'
   | 'contas_bancarias'
+  | 'atividades_economicas'
   | 'contas_pagar_receber'
 
 type Modulo = {
@@ -126,6 +127,13 @@ export const MODULOS: Modulo[] = [
     label: 'Contas Bancárias',
     href: '/contas-bancarias',
     icon: ICONS.contasBancarias,
+  },
+  {
+    id: 'atividades_economicas',
+    dominio: 'financeiro',
+    label: 'Atividades Econômicas',
+    href: '/atividades-economicas',
+    icon: ICONS.atividadesEconomicas,
   },
   {
     id: 'contas_pagar_receber',
