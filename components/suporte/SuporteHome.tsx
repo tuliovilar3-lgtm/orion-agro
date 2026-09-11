@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { createClient } from '@/lib/supabase/client'
 import CadastrarContaModal from './CadastrarContaModal'
+import EditarPlanoModal from './EditarPlanoModal'
 
 type Conta = { id: string; nome: string; ativo: boolean }
 
@@ -34,6 +35,7 @@ export default function SuporteHome() {
   const [entrandoId, setEntrandoId] = useState<string | null>(null)
   const [alternandoId, setAlternandoId] = useState<string | null>(null)
   const [modalAberto, setModalAberto] = useState(false)
+  const [contaEditandoPlano, setContaEditandoPlano] = useState<Conta | null>(null)
 
   useEffect(() => {
     carregar()
@@ -138,6 +140,13 @@ export default function SuporteHome() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      onClick={() => setContaEditandoPlano(c)}
+                      className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg"
+                    >
+                      Editar plano
+                    </button>
+                    <button
+                      type="button"
                       disabled={alternandoId === c.id}
                       onClick={() => handleAlternarAtivo(c)}
                       className="rounded-control border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg disabled:opacity-60"
@@ -170,6 +179,15 @@ export default function SuporteHome() {
             setModalAberto(false)
             carregar()
           }}
+        />
+      )}
+
+      {contaEditandoPlano && (
+        <EditarPlanoModal
+          contaId={contaEditandoPlano.id}
+          contaNome={contaEditandoPlano.nome}
+          onClose={() => setContaEditandoPlano(null)}
+          onSaved={() => setContaEditandoPlano(null)}
         />
       )}
     </div>

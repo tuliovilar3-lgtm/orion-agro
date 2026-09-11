@@ -20,8 +20,11 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
   const [dominiosSelecionados, setDominiosSelecionados] = useState<Set<DominioId>>(new Set())
   const [recursosSelecionados, setRecursosSelecionados] = useState<Set<RecursoId>>(new Set())
   const [limitesAbertos, setLimitesAbertos] = useState(false)
-  const [limiteFazendas, setLimiteFazendas] = useState('')
-  const [limiteProprietarios, setLimiteProprietarios] = useState('')
+  // plano de entrada nasce com 1 fazenda/1 proprietário (não ilimitado)
+  // — aumentar depois é o que a tela de Editar Plano permite; ainda
+  // editável/limpável aqui se o Suporte quiser onboardar sem limite
+  const [limiteFazendas, setLimiteFazendas] = useState('1')
+  const [limiteProprietarios, setLimiteProprietarios] = useState('1')
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 

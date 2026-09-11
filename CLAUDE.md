@@ -3787,3 +3787,59 @@ JOSÉ · Touro" (era "Gado — Compra" antes da migração) com a classificaçã
 Rebanho Investimento › Rebanho` correta; o produto "Touro" foi criado automaticamente
 (`sistema = true`) com esse subcentro como padrão. Dados de teste revertidos (movimentação excluída,
 produto "Touro" inativado).
+
+## Suporte: editar o plano de uma conta já existente (domínios/recursos/limites)
+
+Fechava o último passo do ciclo de vida de plano: até agora, criar uma conta já definia domínios/
+recursos/limites (onboarding), mas mudar isso depois (upgrade — ex.: conta com só Pecuária contrata
+Financeiro; conta simples adiciona "Controle por pasto"; aumentar o limite de fazendas) só era
+possível via SQL direto. Confirmado com o usuário: desabilitar um módulo nunca apaga dado nenhum, só
+tira o acesso — os dados voltam a aparecer sozinhos se o módulo for religado depois.
+
+**`app/api/contas/[id]/route.ts`** ganha `GET` (novo — lê `conta_modulos`/`conta_recursos`/
+`conta_limites` de uma conta via cliente admin, já que essas 3 tabelas não têm a mesma exceção de RLS
+`contas_visivel_suporte` que `contas` ganhou na migração 048 — sem o cliente admin, Suporte "em casa"
+só enxergaria as linhas da própria conta) e `PATCH` ganha `dominios`/`recursos`/`limiteFazendas`/
+`limiteProprietarios` (além do `ativo` que já existia): domínios e recursos são substituídos por
+completo (apaga e reinsere, mesmo princípio de `usuario_modulos`/`pessoa_papeis`); **domínio
+removido também apaga de `usuario_modulos` (dessa conta) todo módulo daquele domínio** — é o pedido
+explícito do usuário, pra não sobrar concessão individual "fantasma" se o domínio for recontratado
+depois (domínio **adicionado** não concede nada a usuário nenhum sozinho — quem assigna telas
+continua sendo o dono, em `/usuarios`); recurso que sai ou entra espelha o mesmo efeito colateral que
+o onboarding já aplica na criação (liga/desliga `configuracoes.controla_pasto`/
+`controla_contas_pagar_receber`), agora nos dois sentidos; limites fazem `upsert` (valor informado)
+ou `delete` (`null` = sem limite).
+
+**`components/suporte/EditarPlanoModal.tsx`** (novo) — mesmo modelo visual de
+`CadastrarContaModal.tsx`, só a parte de plano (sem nome/administrador); carrega o estado atual via
+`GET` ao abrir, mesma UI de checkboxes de domínio/recurso (com a mesma poda de recurso órfão ao
+desmarcar um domínio) e o mesmo acordeão de limites. Botão **"Editar plano"** novo em cada card de
+`components/suporte/SuporteHome.tsx`, ao lado de "Inativar"/"Entrar".
+
+**`CadastrarContaModal.tsx`**: `limiteFazendas`/`limiteProprietarios` passam a nascer como `'1'` (era
+`''`) — plano de entrada já começa com 1 fazenda/1 proprietário em vez de ilimitado; ainda editável/
+limpável se o Suporte quiser onboardar sem limite desde já.
+
+**Bug real encontrado (e corrigido) durante o teste, não relacionado a esta feature**: o domínio
+`financeiro` nunca tinha sido adicionado a `conta_modulos` da "Conta Principal" — desde que o Módulo
+Financeiro foi construído (migração 054+), o acesso só funcionava porque todo teste neste projeto foi
+feito com o usuário logado como Suporte, e `podeAcessar` bypassa a checagem de domínio inteira sempre
+que `emModoSuporte` é verdadeiro (`if (emModoSuporte) return true`, antes de chegar na checagem real
+de `dominiosDaConta`). Um usuário não-suporte da própria conta (ou um funcionário real) teria
+`/financeiro`, `/plano-contas`, etc. bloqueados por "Acesso restrito" apesar da conta usar esses
+módulos há semanas. Corrigido com a própria tela nova: `dominios` da Conta Principal passou a incluir
+`financeiro` (mantendo `pecuaria`), confirmado em `/modulos` mostrando "Financeiro: Contratado".
+
+Verificado no navegador de ponta a ponta: `GET`/`PATCH` isolados por `conta_id` (confirmado editando
+"Fazenda Teste 1" sem afetar a Conta Principal, e vice-versa); teste do cascade real — gravei os
+módulos exatos de 3 usuários de teste da Conta Principal (10/4/7 módulos, todos do domínio Pecuária)
+via `GET /api/usuarios`, desmarquei "Pecuária" em Editar Plano, confirmei os 3 usuários com
+`modulos: []`, remarquei o domínio e restaurei os módulos exatos de cada um via `PATCH /api/usuarios/
+[id]` — conferido que voltaram idênticos ao estado original; `+ Nova Conta` mostra "1"/"1" pré-
+preenchido nos campos de limite. **Nota de processo**: o primeiro teste do cascade usou os dados
+errados por um instante — logo depois de "Entrar" numa conta, a checagem de sessão do usuário
+(`usuarios_app.id = auth.uid()`) sempre inclui a própria linha do usuário logado nas consultas de
+`/usuarios`/RLS, então a primeira leitura após trocar de conta pode momentaneamente refletir o estado
+anterior até o navegador reconciliar — resolvido simplesmente esperando mais antes de ler, sem
+nenhuma mudança de código necessária (comportamento pré-existente do mecanismo de impersonation, não
+desta feature). `npx tsc --noEmit` limpo.
