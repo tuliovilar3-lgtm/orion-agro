@@ -28,8 +28,6 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
-  const recursosDisponiveis = RECURSOS.filter((r) => dominiosSelecionados.has(r.dominio))
-
   function alternarDominio(id: DominioId) {
     const desmarcando = dominiosSelecionados.has(id)
     setDominiosSelecionados((prev) => {
@@ -152,40 +150,41 @@ export default function CadastrarContaModal({ onClose, onSaved }: { onClose: () 
 
           <div className="border-t border-border pt-4">
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">Módulos contratados</label>
-            <div className="grid grid-cols-1 gap-1.5 rounded-control border border-border p-3 sm:grid-cols-2">
-              {DOMINIOS.map((d) => (
-                <label key={d.id} className="flex items-center gap-2 text-sm text-text-primary">
-                  <input
-                    type="checkbox"
-                    checked={dominiosSelecionados.has(d.id)}
-                    onChange={() => alternarDominio(d.id)}
-                  />
-                  {d.label}
-                </label>
-              ))}
+            <div className="space-y-1 rounded-control border border-border p-3">
+              {DOMINIOS.map((d) => {
+                const recursosDoDominio = RECURSOS.filter((r) => r.dominio === d.id)
+                return (
+                  <div key={d.id}>
+                    <label className="flex items-center gap-2 text-sm text-text-primary">
+                      <input
+                        type="checkbox"
+                        checked={dominiosSelecionados.has(d.id)}
+                        onChange={() => alternarDominio(d.id)}
+                      />
+                      {d.label}
+                    </label>
+                    {dominiosSelecionados.has(d.id) && recursosDoDominio.length > 0 && (
+                      <div className="ml-6 mt-1 space-y-1 border-l border-border pl-3">
+                        {recursosDoDominio.map((r) => (
+                          <label key={r.id} className="flex items-center gap-2 text-sm text-text-secondary">
+                            <input
+                              type="checkbox"
+                              checked={recursosSelecionados.has(r.id)}
+                              onChange={() => alternarRecurso(r.id)}
+                            />
+                            {r.label}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
             <p className="mt-1 text-xs text-text-muted">
               Sem nenhum módulo marcado, o administrador consegue entrar mas só vê o Painel.
             </p>
           </div>
-
-          {recursosDisponiveis.length > 0 && (
-            <div className="border-t border-border pt-4">
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">Recursos adicionais</label>
-              <div className="grid grid-cols-1 gap-1.5 rounded-control border border-border p-3 sm:grid-cols-2">
-                {recursosDisponiveis.map((r) => (
-                  <label key={r.id} className="flex items-center gap-2 text-sm text-text-primary">
-                    <input
-                      type="checkbox"
-                      checked={recursosSelecionados.has(r.id)}
-                      onChange={() => alternarRecurso(r.id)}
-                    />
-                    {r.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="border-t border-border pt-4">
             <button

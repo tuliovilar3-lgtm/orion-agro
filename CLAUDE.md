@@ -3843,3 +3843,18 @@ errados por um instante — logo depois de "Entrar" numa conta, a checagem de se
 anterior até o navegador reconciliar — resolvido simplesmente esperando mais antes de ler, sem
 nenhuma mudança de código necessária (comportamento pré-existente do mecanismo de impersonation, não
 desta feature). `npx tsc --noEmit` limpo.
+
+## Recursos adicionais em cascata sob o domínio, em vez de seção separada
+
+Pedido do usuário depois de ver `CadastrarContaModal`/`EditarPlanoModal`: "Recursos adicionais" vivia
+numa seção à parte, obrigando quem lê a inferir a que domínio cada recurso pertencia. Nos dois
+modais, a lista de `DOMINIOS` passa a renderizar, logo abaixo de cada domínio marcado, os recursos
+daquele domínio (`RECURSOS.filter(r => r.dominio === d.id)`) indentados (`ml-6 border-l`) — some
+sozinho se o domínio não tiver nenhum recurso no catálogo (Agricultura/Máquinas/Clima hoje) ou se o
+domínio estiver desmarcado. Removida a seção "Recursos adicionais" separada e a variável
+`recursosDisponiveis` (não usada em mais nenhum lugar). Nenhuma mudança de lógica —
+`alternarDominio`/`alternarRecurso` continuam idênticos, só a estrutura visual mudou.
+
+Verificado no navegador nos dois modais: "Pecuária" mostra "Controle por pasto" logo abaixo quando
+marcado; "Financeiro" mostra "Contas a Pagar/Receber"; domínios sem recurso nenhum (Agricultura/
+Máquinas/Clima) não mostram nada abaixo. `npx tsc --noEmit` limpo.
