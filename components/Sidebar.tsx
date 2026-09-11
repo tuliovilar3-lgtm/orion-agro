@@ -101,6 +101,12 @@ const GROUPS: NavGroup[] = [
         icon: ICONS.contasPagarReceber,
         modulo: 'contas_pagar_receber',
       },
+      {
+        label: 'Relatórios Financeiros',
+        href: '/relatorios-financeiros',
+        icon: ICONS.relatoriosFinanceiros,
+        modulo: 'relatorios_financeiros',
+      },
     ],
   },
 ]

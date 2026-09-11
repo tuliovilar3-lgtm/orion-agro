@@ -39,6 +39,7 @@ export type ModuloId =
   | 'contas_bancarias'
   | 'atividades_economicas'
   | 'contas_pagar_receber'
+  | 'relatorios_financeiros'
 
 type Modulo = {
   id: ModuloId
@@ -141,6 +142,14 @@ export const MODULOS: Modulo[] = [
     label: 'Contas a Pagar/Receber',
     href: '/contas-a-pagar-receber',
     icon: ICONS.contasPagarReceber,
+  },
+  {
+    id: 'relatorios_financeiros',
+    dominio: 'financeiro',
+    label: 'Relatórios Financeiros',
+    href: '/relatorios-financeiros',
+    icon: ICONS.relatoriosFinanceiros,
+    somenteLeitura: true,
   },
 ]
 

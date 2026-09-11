@@ -4461,34 +4461,36 @@ $$;
 -- (entradas/saidas agregadas antes do join, sem fan-out), parametrizada
 -- por data e por uma lista de fazendas (soma direto, sem quebrar por
 -- fazenda). Sem filtro de ativa/ativo de propósito — relatório histórico.
-create or replace function fn_estoque_rebanho_na_data(p_fazenda_ids uuid[], p_data date)
+create or replace function fn_estoque_rebanho_na_data(
+  p_fazenda_ids uuid[], p_data date, p_proprietario_ids uuid[] default null
+)
 returns table(categoria_id uuid, quantidade int)
 language sql
 stable
 as $$
   with entradas as (
-    select fazenda_id, categoria_id, quantidade
+    select fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
     union all
-    select fazenda_destino_id as fazenda_id, categoria_id, quantidade
+    select fazenda_destino_id as fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo = 'TRANSFERENCIA' and data <= p_data
     union all
-    select fazenda_id, categoria_destino_id as categoria_id, quantidade
+    select fazenda_id, categoria_destino_id as categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and data <= p_data
   ),
   saidas as (
-    select fazenda_id, categoria_id, quantidade
+    select fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
     union all
-    select fazenda_origem_id as fazenda_id, categoria_id, quantidade
+    select fazenda_origem_id as fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo = 'TRANSFERENCIA' and data <= p_data
     union all
-    select fazenda_id, categoria_id, quantidade
+    select fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo = 'MUDANCA_CATEGORIA' and data <= p_data
   ),
@@ -4496,12 +4498,14 @@ as $$
     select categoria_id, sum(quantidade) as total
     from entradas
     where fazenda_id = any(p_fazenda_ids)
+      and (p_proprietario_ids is null or proprietario_id = any(p_proprietario_ids))
     group by categoria_id
   ),
   saidas_agg as (
     select categoria_id, sum(quantidade) as total
     from saidas
     where fazenda_id = any(p_fazenda_ids)
+      and (p_proprietario_ids is null or proprietario_id = any(p_proprietario_ids))
     group by categoria_id
   )
   select
@@ -4517,8 +4521,13 @@ $$;
 -- fn_relatorio_lotacao_mensal integra dia a dia (mesmo princípio de
 -- fn_area_media_ponderada, aplicado a rebanho/peso em vez de área). Peso
 -- resolvido = pesagem mais recente da categoria naquela(s) fazenda(s)
--- até a data, caindo pro peso de referência.
-create or replace function fn_indicadores_rebanho_dia(p_fazenda_ids uuid[], p_data date)
+-- até a data, caindo pro peso de referência. p_proprietario_ids
+-- (migração 062, default null) filtra só a quantidade — peso médio de
+-- uma categoria não depende de quem é o dono, então pesagens nunca são
+-- filtradas por proprietário.
+create or replace function fn_indicadores_rebanho_dia(
+  p_fazenda_ids uuid[], p_data date, p_proprietario_ids uuid[] default null
+)
 returns table(headcount int, peso_vivo_total numeric)
 language sql
 stable
@@ -4531,7 +4540,7 @@ as $$
        order by p.data desc limit 1),
       c.peso_referencia_kg
     )), 0)
-  from fn_estoque_rebanho_na_data(p_fazenda_ids, p_data) e
+  from fn_estoque_rebanho_na_data(p_fazenda_ids, p_data, p_proprietario_ids) e
   join categorias_animal c on c.id = e.categoria_id
   where e.quantidade > 0
 $$;
@@ -4541,11 +4550,14 @@ $$;
 -- dia — não só a última pesagem), área média em Pecuária (reaproveitando
 -- fn_area_media_ponderada) e dias_no_mes (pro frontend derivar o resumo
 -- do período inteiro ponderando pelos dias de cada mês, mesmo princípio
--- já usado em fn_relatorio_distribuicao_area pra área).
+-- já usado em fn_relatorio_distribuicao_area pra área). p_proprietario_ids
+-- (migração 062, default null) alimenta os Relatórios Financeiros
+-- (Desembolso R$/cab./mês) — repassado direto pra fn_indicadores_rebanho_dia.
 create or replace function fn_relatorio_lotacao_mensal(
   p_fazenda_ids uuid[],
   p_data_inicio date,
-  p_data_fim date
+  p_data_fim date,
+  p_proprietario_ids uuid[] default null
 ) returns table(
   mes int,
   ano int,
@@ -4582,7 +4594,7 @@ begin
 
     for v_dia in select generate_series(v_janela_ini, v_janela_fim, interval '1 day')::date
     loop
-      select * into v_ind from fn_indicadores_rebanho_dia(p_fazenda_ids, v_dia);
+      select * into v_ind from fn_indicadores_rebanho_dia(p_fazenda_ids, v_dia, p_proprietario_ids);
       v_soma_headcount := v_soma_headcount + v_ind.headcount;
       v_soma_peso_vivo := v_soma_peso_vivo + v_ind.peso_vivo_total;
       v_dias := v_dias + 1;

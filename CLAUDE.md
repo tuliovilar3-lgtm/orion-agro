@@ -4054,3 +4054,91 @@ nova não passa mais pelo estado intermediário "separado", nasce direto fundida
 Verificado no navegador: `/plano-contas`, Classe 2 expandida, mostra só `2.1 — Receitas
 Imobiliárias` com os 4 subcentros na ordem certa, e nenhum `2.6` sobrando na lista (ia direto de
 `2.5` pro fim da Classe). `npx tsc --noEmit` limpo (nenhum arquivo `.tsx`/`.ts` tocado).
+
+## Relatórios Financeiros (Balancete, Desembolso R$/cab., Desembolso/Custeio R$/@) — migração 062
+
+Três relatórios interativos em cascata, pedido do usuário pra fechar o módulo Financeiro com uma
+camada de análise (até aqui só existiam o livro-razão de `/financeiro` e o acompanhamento de
+`/contas-a-pagar-receber`, nenhum relatório agregado). Base conceitual ancorada na metodologia
+Inttegra/Chaker já documentada no projeto (ver memória `metodologia_inttegra_chaker.md`) — a mesma
+distinção Aquisição/Custeio da tabela de economia unitária virou a distinção Desembolso/Custeio dos
+Relatórios 2/3. Quatro decisões fechadas com o usuário via `AskUserQuestion` antes de implementar:
+
+- **Regime**: Balancete usa competência (`lancamentos_financeiros.data`, igual ao livro-razão);
+  Desembolso/Custeio (Relatórios 2/3) usam **caixa** (`lancamento_baixas.data_pagamento`) — os dois
+  regimes respondem perguntas diferentes ("o que competiu ao período" vs. "o que efetivamente saiu
+  do caixa"), e misturar os dois no mesmo relatório confundiria mais que ajudaria.
+- **Desembolso vs. Custeio** (definição do usuário, verbatim): "Desembolso engloba os débitos com
+  Suporte à Produção, Mão de Obra, Despesas com Atividades Produtivas e investimento (Exclui
+  Investimentos de Compra de gado). Custeio é o desembolso menos investimentos." → Desembolso =
+  Classes 3 (exceto centro `3.3 Rebanho Investimento`, onde cai a Compra de gado) + 4 + 5 + 6;
+  Custeio = só 4 + 5 + 6. Implementado em `passaEscopo()`, `app/relatorios-financeiros/page.tsx`.
+- **"@ Produzida" completa** (não a versão simples saída−entrada): `Produção = Estoque_final −
+  Estoque_inicial − Entradas + Saídas`, mass-balance completo que inclui o ganho de peso do rebanho
+  que nunca saiu da fazenda — não só o que foi comprado/vendido no período.
+- **Filtro de Atividade Econômica só no Balancete** — Atividade não existe em
+  `movimentacoes_rebanho` (só em `lancamentos_financeiros`), então filtrar os Relatórios 2/3 por
+  Atividade filtraria só o numerador (R$), nunca o denominador (cabeças/@), distorcendo o indicador;
+  decisão do usuário foi esconder esse filtro nos dois relatórios de indicador, mantendo só no
+  Balancete (que não tem denominador nenhum pra distorcer).
+
+**Migração 062** — estende `fn_estoque_rebanho_na_data`/`fn_indicadores_rebanho_dia`/
+`fn_relatorio_lotacao_mensal` (já existentes, do Relatório de Lotação) com um parâmetro opcional
+`p_proprietario_ids uuid[] default null` no fim da lista (`create or replace function`, sem
+`drop function` — só muda o retorno ou a ordem/tipo de parâmetros já existentes que exige isso),
+mesmo padrão de `fn_saldo_categoria_proprietario` (migração 044): a condição
+`proprietario_id = any(p_proprietario_ids)` nunca bate com `null`, então Mudança de Categoria/
+Desmame (que nunca têm `proprietario_id`) ficam de fora automaticamente quando o filtro está ativo,
+sem caso especial. Reaproveita 100% da infraestrutura do Relatório de Lotação pro denominador dos
+Relatórios 2/3 — zero função SQL nova além da extensão de proprietário.
+
+**`components/relatorios-financeiros/arvore.ts`** — módulo de construção de árvore compartilhado
+pelas 3 abas (`construirArvore`, `mesesDoIntervalo`, `nomeMesCurto`): monta Tipo→Classe→Centro→
+Subcentro→Produto só com os nós que de fato tiveram lançamento no período filtrado — nunca lista os
+~150 nós do plano de contas inteiro vazios (diferente do padrão estático de `/plano-contas`, que
+lista o catálogo inteiro). Cada nó guarda `valor` (total do período) e `valoresPorMes` (Record por
+`'YYYY-MM'`), preenchidos sempre os dois independente do modo de agrupamento escolhido na tela —
+trocar entre Acumulado/Mensal é só uma escolha de qual campo renderizar, sem reconsultar o banco.
+
+**`app/relatorios-financeiros/page.tsx`** — reaproveita integralmente `useFiltroGlobal()` (fazendas/
+proprietários/período, mesmo JSX de `app/relatorios/page.tsx`) e os componentes genéricos
+`FiltroMultiSelect`/`PainelFiltroColapsavel` já existentes; só Atividade Econômica precisa de estado
+local (não vive no contexto global). Numerador dos Relatórios 2/3: `lancamento_baixas` joined até
+`lancamentos_financeiros` (mesmo padrão de `/contas-a-pagar-receber` — sem `!inner`, filtro de
+fazenda/tipo/status feito client-side após o fetch), **sem `.limit(200)`** — diferente do precedente
+de `/contas-a-pagar-receber` (uma listagem operacional, onde 200 linhas recentes bastam), aqui é um
+relatório analítico de período completo, que pode legitimamente ter mais de 200 baixas.
+
+**Produção mensal (Aba 3) via N+1 snapshots**: `estoquePorData` busca `fn_indicadores_rebanho_dia`
+uma vez por data de fronteira (véspera do início do período + fim de cada mês, ou a data final do
+período se ela cair antes do fim do último mês) — não um snapshot por dia. `producaoPorMes` deriva
+`estoqueFinal(mês) − estoqueInicial(mês) − entradas(mês) + saídas(mês)` encadeando os snapshots
+(`estoqueFinal` de um mês = `estoqueInicial` do próximo), e a soma das produções mensais bate
+automaticamente com a produção do período inteiro (`producaoAcumulada`) sem reconsultar nada — mesmo
+telescoping já usado em `fn_area_media_ponderada`/`fn_relatorio_lotacao_mensal` pra outras médias por
+período. `entradaSaidaPorMes` soma `COMPRA`/`TRANSFERENCIA`/`VENDA_PE`/`VENDA_ABATE`/`MORTE`/
+`CONSUMO_DOACAO` (peso em @ ou kg, mesma resolução `peso_morto_kg/15` pra Venda Abate e
+`peso_total_kg/30` fallback pros demais já usada em `app/relatorios/page.tsx`) — **`NASCIMENTO` fica
+de propósito fora das entradas**: um bezerro nascido na fazenda é ganho de peso orgânico do rebanho
+que já estava lá, não uma "entrada" que precisa ser descontada da produção — contá-lo como entrada
+subtrairia da produção um peso que é, na verdade, produção em si.
+
+**Bug real encontrado e corrigido durante o teste**: o filtro de Atividade Econômica no Balancete
+excluía **todas** as linhas sempre que a conta não tinha nenhuma atividade cadastrada/ativa
+(`todasAtividadesSelecionadas = atividades.length > 0 && ...` ficava `false` com lista vazia, e o
+filtro então exigia `l.atividade_economica_id` presente em uma lista de ids vazia — nunca bate).
+Corrigido pra `atividades.length === 0 || atividadeIds.length === atividades.length` — sem nenhuma
+atividade cadastrada, o filtro nunca se aplica (mesmo espírito de "ausência de linha = sem filtro"
+já usado em `conta_limites`/outros catálogos opcionais do sistema).
+
+Verificado no navegador: lançamento manual de teste (R$1.500, Suporte à Produção › Parque de
+Máquinas › Combustíveis, pago em 15/06/2025) apareceu corretamente nos 3 relatórios — Balancete
+(cascata Tipo→Classe→Centro completa, Débito R$1.500,00, Resultado R$-1.500,00), Desembolso R$/cab.
+(rebanho médio 423 cab., R$3,55/cab.) e Desembolso/Custeio R$/@ (6.398,67 @ produzidas, R$0,23/@; kg
+confirmado consistente — 191.960 kg ÷ 30 = 6.398,67 @); agrupamento Mensal testado nas 3 abas,
+valor sempre caindo no mês correto (emissão ou pagamento, conforme o regime da aba); toggles
+Desembolso↔Custeio e @↔kg funcionando sem erro. Período de teste inicial (2020-2026, 80 meses) expôs
+que `fn_relatorio_lotacao_mensal` (função pré-existente do Relatório de Lotação, não alterada nesta
+entrega) tem custo alto pra períodos muito largos (itera dia a dia); não é bug desta entrega — um
+período realista (1 ano) funcionou normalmente. Dados de teste revertidos ao final (lançamento
+excluído, filtro de período global restaurado pra "Safra atual").
