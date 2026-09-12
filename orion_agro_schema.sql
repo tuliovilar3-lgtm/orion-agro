@@ -1647,25 +1647,30 @@ create policy pastos_por_conta on pastos for all
 -- tela, mas todo lançamento de rebanho sempre tem pra onde apontar, e
 -- toda conversão pasto↔talhão sempre tem um módulo do tipo oposto pra
 -- receber (migração 052)
+-- conta_id gravado explicitamente (new.conta_id) em vez de confiar no
+-- default fn_conta_atual() — este último só resolve corretamente numa
+-- sessão de app autenticada; um insert de fazenda feito fora dela (ex.:
+-- script rodando com a chave service-role) não tem auth.uid() nenhum, e
+-- o default viraria null (migração 063).
 create or replace function fn_criar_modulo_pasto_geral()
 returns trigger as $$
 declare
   v_modulo_pecuaria_id    uuid;
   v_modulo_agricultura_id uuid;
 begin
-  insert into modulos (fazenda_id, nome, tipo_utilizacao, ordem, sistema)
-  values (new.id, 'Módulo 1', 'PECUARIA', 0, true)
+  insert into modulos (conta_id, fazenda_id, nome, tipo_utilizacao, ordem, sistema)
+  values (new.conta_id, new.id, 'Módulo 1', 'PECUARIA', 0, true)
   returning id into v_modulo_pecuaria_id;
 
-  insert into pastos (modulo_id, nome, ordem, sistema)
-  values (v_modulo_pecuaria_id, 'Pasto 1', 0, true);
+  insert into pastos (conta_id, modulo_id, nome, ordem, sistema)
+  values (new.conta_id, v_modulo_pecuaria_id, 'Pasto 1', 0, true);
 
-  insert into modulos (fazenda_id, nome, tipo_utilizacao, ordem, sistema)
-  values (new.id, 'Geral (Agricultura)', 'AGRICULTURA', 1, true)
+  insert into modulos (conta_id, fazenda_id, nome, tipo_utilizacao, ordem, sistema)
+  values (new.conta_id, new.id, 'Geral (Agricultura)', 'AGRICULTURA', 1, true)
   returning id into v_modulo_agricultura_id;
 
-  insert into pastos (modulo_id, nome, ordem, sistema)
-  values (v_modulo_agricultura_id, 'Talhão 1', 0, true);
+  insert into pastos (conta_id, modulo_id, nome, ordem, sistema)
+  values (new.conta_id, v_modulo_agricultura_id, 'Talhão 1', 0, true);
 
   return new;
 end;

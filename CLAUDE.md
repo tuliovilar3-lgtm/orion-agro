@@ -4186,3 +4186,58 @@ de Pasto); navegar direto pra `/controle-pasto` mostra "Rebanho" já aberto sozi
 página ativa, sobrevivendo a um reload); recolher o menu geral (ícone-only) continua mostrando todos
 os itens de todos os grupos normalmente, sem nenhum acordeão; o mesmo comportamento (grupo ativo
 aberto, chevron correto) se repete no drawer mobile. `npx tsc --noEmit` limpo.
+
+## Dados reais de validação (Fazenda Teste 1) + bug em `fn_criar_modulo_pasto_geral` (migração 063)
+
+O usuário pediu pra popular a conta "Fazenda Teste 1" com dados reais de um grupo de fazendas (4
+fazendas, 2 delas com o levantamento de pastos em KML) — pra validar o app com volume/geografia real
+e continuar desenvolvendo em cima de dado de verdade em vez de só teste sintético revertido ao final
+(diferente de toda a metodologia de teste usada no resto desta sessão: **estes lançamentos ficam**).
+Cadastrado até aqui: pessoa "Paulo Afonso Silveira" (Proprietário); as 4 fazendas (Arrendamento
+Atílio 760 ha, Confinamento 1 ha, Estância Betânia 2.331,38 ha, Estância Esmeralda 5.016,55 ha); os
+módulos/pastos reais de Estância Betânia (161 pastos, 12 módulos numéricos + 1 piquete avulso "PIQ
+CASA") e Estância Esmeralda (275 pastos, 49 módulos numéricos + 17 piquetes avulsos com nome
+próprio, por pedido explícito do usuário de não agrupá-los — cada um vira seu próprio módulo de um
+pasto só, mesmo padrão do módulo/pasto "Geral" que toda fazenda já ganha sozinha). Domínio
+`financeiro` e recurso `controle_pasto` concedidos a essa conta (pecuária/agricultura já estavam).
+
+**Extração dos pastos a partir de KML, sem passar pela tela**: dado o volume (436 polígonos ao
+todo), a importação foi feita por um script Node ad-hoc (fora do repositório, no scratchpad da
+sessão — não é código do produto) usando o cliente `service_role` (mesma chave que
+`lib/supabase/admin.ts` já usa) e `@turf/area` (mesma lib que `lib/kml.ts` usa no navegador) pra
+calcular a área de cada polígono exatamente como a importação de KML pela UI calcularia — só que sem
+precisar clicar linha por linha nas 436 revisões que a tela pediria. Nomes de pasto seguem um padrão
+real (prefixo numérico = módulo, ex. `47B`/`47C`/`47A1` → "Módulo 47"; alguns poucos sem prefixo
+numérico são piquetes com nome próprio) — detectado por inspeção antes de importar, confirmado com o
+usuário antes de rodar. Todas as triggers de validação de negócio (`fn_validar_area_pasto`, soma dos
+pastos ≤ área alocada em Pecuária) continuaram rodando normalmente — nada foi bypassado, só a
+interação manual via clique foi substituída por chamadas diretas à mesma API que a UI usa.
+
+**Bug real encontrado e corrigido**: `fn_criar_modulo_pasto_geral()` (trigger que cria "Módulo 1"/
+"Pasto 1" + "Geral (Agricultura)"/"Talhão 1" toda vez que uma fazenda é criada) nunca gravava
+`conta_id` explicitamente nos 4 inserts — dependia do `default fn_conta_atual()`, que resolve pelo
+`auth.uid()` da sessão. Isso sempre funcionou pra qualquer usuário normal logado (a sessão sempre
+bate com a própria conta), mas quebra pra qualquer insert de fazenda feito fora de uma sessão de app
+autenticada — como um script rodando com a chave `service_role`, sem `auth.uid()` nenhum: o default
+vira `null`, violando a constraint `not null` de `modulos.conta_id`, e a fazenda inteira falha ao
+criar (o `insert` na trigger roda na mesma transação do `insert` em `fazendas`). Mesma classe de bug
+já tinha sido corrigida uma vez, mas só no backfill pontual da conversão pasto↔talhão (migração 052,
+"selecionando `fazendas.conta_id` explicitamente") — nunca na função/trigger em si, que é chamada
+por **qualquer** insert de fazenda, incluindo os futuros. Migração 063 corrige gravando
+`conta_id = new.conta_id` explicitamente nos 4 inserts (2 de `modulos`, 2 de `pastos`) — a fazenda
+recém-inserida já sabe sua própria conta, não precisa nunca depender do `auth.uid()` da sessão que a
+está criando.
+
+Verificado no navegador: as 4 fazendas aparecem em `/fazendas` com área/proprietário corretos; barra
+de estatísticas de Estância Esmeralda mostra Pecuária 4.446,64 ha batendo com o `SALDO_INICIAL`
+lançado; "Gestão de Áreas" lista os 49 módulos numéricos + 17 avulsos com os pastos certos
+(conferido "Módulo 01": 1C2/1C1/1D1/1D2/01A2/01B2/1A1/1B1, 8 pastos, áreas batendo com o cálculo
+prévio); o mapa renderiza os 275 polígonos reais sobre satélite, com a forma e posição batendo
+visualmente com a geografia real da fazenda; card "Área alocada em pastos" mostra 4.444,64 de
+4.446,64 ha (99,96%) pra Esmeralda e 2.225,01 de 2.227,01 ha (99,91%) pra Betânia — a área
+"Pecuária" declarada em cada uma foi calculada a partir da soma real dos polígonos (não do número de
+"área útil" informado de cabeça pelo usuário, que era só uma estimativa arredondada — a diferença
+ficou registrada como nota, não como bloqueio: `fazendas.area_util_ha` continua sendo só informativo,
+quem trava o cadastro de pasto é a "Distribuição da Área" real). Arrendamento Atílio e Confinamento
+ficam só com o "Pasto 1" padrão (sem KML), por pedido do usuário. Trabalho em andamento — módulos/
+pastos ficam prontos pra receber o rebanho e os lançamentos financeiros reais, ainda a caminho.
