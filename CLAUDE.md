@@ -4471,11 +4471,10 @@ salvar, cada linha com `existingId` é atualizada, cada linha nova é inserida, 
 não sobrou na lista final (categoria removida do bloco, ou bloco de pasto inteiro removido) é
 apagado explicitamente ao final.
 
-**Fora do escopo desta rodada**: o detalhamento por safra do bezerro (o ✎ que abre um painel pra
-dividir a quantidade entre safras, mockup já aprovado numa rodada anterior) continua **não
-implementado** em nenhuma das duas abas — o campo de safra aqui é o mesmo input simples de sempre
-(um valor só). Fica pra uma extensão futura, combinável com "Saldo por Pasto" (a mesma categoria bezerro
-poderia, em teoria, ter divisão por pasto E por safra ao mesmo tempo — não coberto ainda).
+**Detalhamento por safra do bezerro (o ✎) implementado nas duas abas nesta rodada** — ver seção
+própria "Detalhamento por safra do bezerro nas duas abas de Saldo Inicial" mais abaixo, que combina
+naturalmente com "Saldo por Pasto" (a mesma categoria bezerro pode ter divisão por pasto E por safra
+ao mesmo tempo, cada bloco de pasto com seu próprio detalhamento).
 
 Verificação: `npx tsc --noEmit` limpo depois de cada mudança. Não foi possível testar no navegador
 local nesta rodada (mesma limitação já registrada — o servidor de preview exige login, e a senha não
@@ -4505,3 +4504,73 @@ sempre que `pastoSelecionadoMapaId` muda, localiza a linha via `data-pasto-row={
 container de scroll da lista (`listaScrollRef`) e chama `scrollIntoView({ block: 'nearest', behavior:
 'smooth' })` — funciona nos dois sentidos (clicar no mapa rola a lista; clicar na lista, que já
 estava visível por definição, não precisa rolar nada).
+
+## Detalhamento por safra do bezerro nas duas abas de Saldo Inicial (migrações 068/069)
+
+Fecha o gap deixado de propósito na entrega de "Saldo Inicial por Pasto" (seção anterior): o
+detalhamento por safra do bezerro (o ✎ que abre um painel pra dividir a quantidade entre safras de
+nascimento, mockup aprovado numa rodada anterior — ver "Bezerro Saldo Inicial single-safra
+limitation" no histórico da carga de dados reais) passa a existir nas duas abas de
+`SaldoInicialPanel.tsx` ("Saldo por Categorias" e "Saldo por Pasto"), não só no script ad-hoc usado
+pra dividir a Esmeralda na carga de dados reais.
+
+**`components/fazendas/DetalheSafraBezerro.tsx`** (novo, compartilhado pelas duas abas) — closed
+state mostra só o texto da safra (`formatSafraInput`) + ✎; popover abre com uma safra só (editável,
+`value = quantidadeTotal`) enquanto não dividido; clicar "+ Adicionar safra" transforma numa lista de
+linhas com quantidade própria por linha + rodapé de validação ao vivo ("soma precisa bater com N") —
+mesmo espírito do mockup aprovado ("editar essa linha ou clicar + Adicionar"). Com exatamente 1
+entrada, a quantidade é sempre **implícita** (= total da categoria, nunca editada/guardada
+separadamente); só a partir de 2+ entradas cada linha ganha seu próprio campo de quantidade. Ano de
+safra é sempre um `<input>` livre (`extrairAnoSafraDigitado`/`formatSafraInput`, de `lib/periodo.ts`)
+— nunca um dropdown travado, mesmo princípio "sempre sugerida, nunca travada" já documentado pra
+safra em qualquer outro formulário do sistema.
+
+**Bug real descoberto ainda durante a implementação, antes de qualquer teste em dado real** — as
+triggers de constraint adiáveis da migração 066 (`fn_validar_soma_saldo_inicial_safra`/
+`fn_validar_quantidade_saldo_inicial_com_safra`, `deferrable initially deferred`) só protegem
+corretamente dentro de **uma única transação**. O supabase-js executa cada `.update()`/`.insert()`/
+`.delete()` como sua própria transação com auto-commit — editar uma linha já dividida por safra
+(mudar a quantidade total **e** o detalhamento ao mesmo tempo) exigiria duas chamadas separadas
+(1: atualiza a linha-mãe; 2: apaga e reinsere o detalhamento), e a chamada 1 sozinha já dispara a
+checagem "soma do detalhamento antigo bate com a quantidade nova?" — que só ficaria certa depois da
+chamada 2, que nunca chega a rodar. **Migração 068** resolve criando
+`fn_salvar_linha_saldo_inicial(...)` — uma RPC que faz o upsert da linha-mãe + apaga-e-reinsere
+condicional do detalhamento (só insere linhas filhas quando `p_detalhamento` tem 2+ itens) inteiros
+numa única chamada, já que uma chamada de RPC é, ela mesma, uma transação só.
+`SaldoInicialPanel.tsx` — `salvarLinhaSaldoInicial(params)` (substituindo o antigo helper
+`salvarDetalhamentoSafra`, que fazia as duas chamadas separadas) chama essa RPC via
+`supabase.rpc(...)`, usada tanto em `executarSalvar` (categorias) quanto em `executarSalvarPorPasto`
+(pasto) — os dois branches convergem pro mesmo ponto único de escrita.
+
+**Segundo bug real, encontrado ao verificar a RPC contra dado real antes de liberar pro frontend**
+(migração 069): o insert em `saldo_inicial_safras` dentro da função não gravava `conta_id`
+explicitamente, dependendo do `default fn_conta_atual()` — mesma classe de bug já corrigida duas
+vezes antes nesta mesma sessão (migrações 063/064, `fn_criar_modulo_pasto_geral`/
+`fn_compilar_pesagem_movimentacao`). Nunca falharia via o app normal (sessão sempre autenticada,
+`auth.uid()` sempre resolve), mas falhava reproduzindo a chamada via um script com a chave
+`service_role` (usado só pra testar a RPC antes de confiar nela — sem `auth.uid()` nenhum atrás
+dessa conexão). Corrigido lendo `conta_id` da própria linha-mãe (já resolvida no passo anterior da
+função, por default ou explícito) em vez de depender do default de novo no insert filho.
+
+**Verificação da RPC contra uma linha real** (Estância Esmeralda, "Bezerro 00 a 08 Meses", já
+dividida 226 safra 2025/19 safra 2024 desde a carga de dados reais) — chamada idempotente (mesmos
+valores de volta) confirmou round-trip limpo; chamada mudando quantidade total **e** detalhamento na
+mesma invocação (o exato cenário que quebrava em duas chamadas separadas) confirmou sucesso atômico
+sem erro de trigger no meio do caminho. **Efeito colateral do teste, corrigido**: o passo de
+restaurar a linha ao valor original (245, de volta de um valor de teste 255) bateu numa limitação já
+documentada — a trajetória de edição/exclusão (`fn_checar_saldo_lote_futuro`) só lê a safra
+"representativa" e a quantidade da linha-mãe, não o detalhamento por safra; como o bezerro dessa
+safra já foi parcialmente consumido por Desmames reais ao longo do ano, a redução de volta a 245
+(interpretada pela trigger como reduzindo a safra inteira, não só a fração testada) apareceu como
+"saldo ficaria negativo" — falso positivo da limitação conhecida, não um erro de saldo real
+(`fn_saldo_categoria_safra`, a fonte de verdade pro saldo por safra, já lê o detalhamento certo).
+Corrigido com uma correção pontual de dado (fora do fluxo normal de migração, script SQL ad-hoc via
+`set local session_replication_role = replica` — evita o erro "cannot ALTER TABLE ... because it
+has pending trigger events" que `ALTER TABLE ... DISABLE TRIGGER` deu no SQL Editor do Supabase)
+restaurando `quantidade`/`peso_total_kg`/o detalhamento exatamente ao estado original, confirmado
+por leitura direta depois.
+
+Verificado: `npx tsc --noEmit` limpo; a RPC testada de ponta a ponta contra dado real (não sintético)
+via script service-role, incluindo o cenário exato que motivou a migração 068; dado de produção
+restaurado ao estado original bit a bit ao final. Teste de UI no navegador não foi possível nesta
+rodada (mesma limitação de login do servidor de preview já registrada nas rodadas anteriores).

@@ -2523,6 +2523,76 @@ deferrable initially deferred
 for each row execute function fn_validar_quantidade_saldo_inicial_com_safra();
 
 -- ---------------------------------------------------------------------
+-- fn_salvar_linha_saldo_inicial (migração 068, ajustada na 069): grava a
+-- linha-mãe de Saldo Inicial e o detalhamento por safra na mesma
+-- transação — as triggers de constraint adiáveis acima só ajudam dentro
+-- de UMA transação, e o supabase-js faz cada update/insert/delete como
+-- sua própria transação (auto-commit); editar linha-mãe + detalhamento em
+-- duas chamadas separadas falharia no meio (a 1ª chamada sozinha já
+-- checa "soma do detalhamento antigo bate com a quantidade nova?", que
+-- só ficaria certo depois da 2ª chamada, que nunca chegaria a rodar).
+-- conta_id do insert filho (migração 069) é lido explicitamente da
+-- linha-mãe já resolvida, em vez de depender de novo do default
+-- fn_conta_atual() — mesma classe de bug já corrigida nas migrações
+-- 063/064 (o default só resolve com auth.uid() de uma sessão normal).
+-- ---------------------------------------------------------------------
+
+create or replace function fn_salvar_linha_saldo_inicial(
+  p_movimentacao_id uuid,
+  p_fazenda_id uuid,
+  p_categoria_id uuid,
+  p_data date,
+  p_quantidade int,
+  p_peso_medio_kg numeric,
+  p_peso_total_kg numeric,
+  p_pasto_id uuid,
+  p_proprietario_id uuid,
+  p_safra_coluna int,
+  p_detalhamento jsonb
+) returns uuid
+language plpgsql
+as $$
+declare
+  v_id uuid;
+  v_conta_id uuid;
+begin
+  if p_movimentacao_id is not null then
+    update movimentacoes_rebanho set
+      quantidade = p_quantidade,
+      peso_medio_kg = p_peso_medio_kg,
+      peso_total_kg = p_peso_total_kg,
+      pasto_id = p_pasto_id,
+      proprietario_id = p_proprietario_id,
+      data = p_data,
+      safra_nascimento_ano_inicio = p_safra_coluna
+    where id = p_movimentacao_id;
+    v_id := p_movimentacao_id;
+  else
+    insert into movimentacoes_rebanho (
+      fazenda_id, categoria_id, tipo, data, quantidade, peso_medio_kg, peso_total_kg,
+      pasto_id, proprietario_id, safra_nascimento_ano_inicio
+    ) values (
+      p_fazenda_id, p_categoria_id, 'SALDO_INICIAL', p_data, p_quantidade, p_peso_medio_kg, p_peso_total_kg,
+      p_pasto_id, p_proprietario_id, p_safra_coluna
+    )
+    returning id into v_id;
+  end if;
+
+  select conta_id into v_conta_id from movimentacoes_rebanho where id = v_id;
+
+  delete from saldo_inicial_safras where movimentacao_id = v_id;
+
+  if coalesce(jsonb_array_length(p_detalhamento), 0) > 1 then
+    insert into saldo_inicial_safras (conta_id, movimentacao_id, safra_nascimento_ano_inicio, quantidade)
+    select v_conta_id, v_id, (item->>'safra')::int, (item->>'quantidade')::int
+    from jsonb_array_elements(p_detalhamento) as item;
+  end if;
+
+  return v_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------
 -- fn_saldo_categoria_safra (migração 030, renomeada/simplificada na
 -- 031 — só safra, sem mês): mesmo princípio de fn_saldo_categoria_pasto,
 -- mas pra dimensão do lote de nascimento, independente do pasto — as

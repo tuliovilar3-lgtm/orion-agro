@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
-import { safraSugeridaParaData, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
+import { safraSugeridaParaData } from '@/lib/periodo'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
 import { formatQuantidade, formatPeso } from '@/lib/format'
+import DetalheSafraBezerro, { type SafraDetalhe, safraDetalheInicial, safraRepresentativa } from '@/components/fazendas/DetalheSafraBezerro'
 
 type Fazenda = {
   id: string
@@ -27,6 +28,10 @@ type LinhaSaldo = {
   // possível vindo do modo "Saldo por Pasto") — a linha vira somatório
   // somente-leitura aqui, editável de verdade só na aba "Saldo por Pasto"
   multiPasto?: boolean
+  // detalhamento por safra (migração 066) — sempre populado com pelo
+  // menos 1 entrada quando categoriaEhBezerro; length > 1 = dividido de
+  // verdade entre safras (ver DetalheSafraBezerro)
+  detalheSafras: SafraDetalhe[]
 }
 
 type Sexo = 'MACHO' | 'FEMEA'
@@ -46,6 +51,7 @@ type LinhaPastoCategoria = {
   quantidade: string
   pesoMedio: string
   safraNascimento: string
+  detalheSafras: SafraDetalhe[]
 }
 
 type BlocoPasto = {
@@ -269,6 +275,36 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
 
     setFazendaSelecionada(fazenda || null)
 
+    // Detalhamento por safra (migração 066) — uma linha de Saldo Inicial
+    // de bezerro pode ter 0 (caso comum, usa a coluna simples da própria
+    // linha), 1 (idem, guardado explicitamente) ou 2+ entradas aqui
+    // (dividido de verdade entre safras).
+    const idsSaldoInicial = (existentes || []).map((e) => e.id)
+    const { data: safrasDetalhe } =
+      idsSaldoInicial.length > 0
+        ? await supabase
+            .from('saldo_inicial_safras')
+            .select('id, movimentacao_id, safra_nascimento_ano_inicio, quantidade')
+            .in('movimentacao_id', idsSaldoInicial)
+        : { data: [] as { id: string; movimentacao_id: string; safra_nascimento_ano_inicio: number; quantidade: number }[] }
+
+    const detalhesPorMovimentacao = new Map<string, SafraDetalhe[]>()
+    for (const s of safrasDetalhe || []) {
+      const arr = detalhesPorMovimentacao.get(s.movimentacao_id) || []
+      arr.push({ id: s.id, safra: String(s.safra_nascimento_ano_inicio), quantidade: String(s.quantidade) })
+      detalhesPorMovimentacao.set(s.movimentacao_id, arr)
+    }
+
+    function detalheParaLinha(existenteRow: { id: string; quantidade: number; safra_nascimento_ano_inicio: number | null } | undefined): SafraDetalhe[] {
+      if (!existenteRow) return safraDetalheInicial(null, data)
+      const jaDetalhado = detalhesPorMovimentacao.get(existenteRow.id)
+      if (jaDetalhado && jaDetalhado.length > 0) return jaDetalhado
+      return safraDetalheInicial(
+        existenteRow.safra_nascimento_ano_inicio != null ? String(existenteRow.safra_nascimento_ano_inicio) : null,
+        data
+      ).map((d) => ({ ...d, quantidade: String(existenteRow.quantidade) }))
+    }
+
     // Agrupa por categoria primeiro — uma categoria pode ter mais de uma
     // linha existente (uma por pasto, vindo do modo "Saldo por Pasto"). No
     // modo "por Categorias" isso vira uma linha somatório somente-leitura
@@ -305,6 +341,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
           pesoMedio: qtdTotal > 0 ? String(round2(pesoTotalSoma / qtdTotal)) : '',
           safraNascimento: '',
           multiPasto: true,
+          detalheSafras: [],
         }
       }
 
@@ -317,6 +354,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         quantidade: existente ? String(existente.quantidade) : '',
         pesoMedio: existente && existente.peso_medio_kg != null ? String(existente.peso_medio_kg) : '',
         safraNascimento: existente?.safra_nascimento_ano_inicio != null ? String(existente.safra_nascimento_ano_inicio) : '',
+        detalheSafras: detalheParaLinha(existente),
       }
     })
     setLinhas(novasLinhas)
@@ -337,6 +375,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         quantidade: String(e.quantidade),
         pesoMedio: e.peso_medio_kg != null ? String(e.peso_medio_kg) : '',
         safraNascimento: e.safra_nascimento_ano_inicio != null ? String(e.safra_nascimento_ano_inicio) : '',
+        detalheSafras: detalheParaLinha(e),
       })
       porPasto.set(e.pasto_id, arr)
     }
@@ -371,6 +410,10 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     setLinhas((prev) => prev.map((l) => (l.categoriaId === categoriaId ? { ...l, [campo]: valor } : l)))
   }
 
+  function atualizarDetalheSafra(categoriaId: string, novo: SafraDetalhe[]) {
+    setLinhas((prev) => prev.map((l) => (l.categoriaId === categoriaId ? { ...l, detalheSafras: novo } : l)))
+  }
+
   // --- modo "Saldo por Pasto" ---------------------------------------
 
   function mudarPastoBloco(blocoId: string, pastoId: string) {
@@ -392,12 +435,30 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             if (l.id !== linhaId) return l
             if (campo === 'categoriaId') {
               const info = linhas.find((x) => x.categoriaId === valor)
-              return { ...l, categoriaId: valor, categoriaNome: info?.categoriaNome ?? '', categoriaEhBezerro: info?.categoriaEhBezerro ?? false }
+              return {
+                ...l,
+                categoriaId: valor,
+                categoriaNome: info?.categoriaNome ?? '',
+                categoriaEhBezerro: info?.categoriaEhBezerro ?? false,
+                // trocar de categoria invalida qualquer detalhamento por
+                // safra que já existisse (era de outra categoria)
+                detalheSafras: safraDetalheInicial(null, data),
+              }
             }
             return { ...l, [campo]: valor }
           }),
         }
       })
+    )
+  }
+
+  function atualizarDetalheSafraPasto(blocoId: string, linhaId: string, novo: SafraDetalhe[]) {
+    setBlocosPasto((prev) =>
+      prev.map((b) =>
+        b.id === blocoId
+          ? { ...b, linhas: b.linhas.map((l) => (l.id === linhaId ? { ...l, detalheSafras: novo } : l)) }
+          : b
+      )
     )
   }
 
@@ -420,6 +481,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                   quantidade: '',
                   pesoMedio: '',
                   safraNascimento: '',
+                  detalheSafras: safraDetalheInicial(null, data),
                 },
               ],
             }
@@ -452,6 +514,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                 quantidade: '',
                 pesoMedio: '',
                 safraNascimento: '',
+                detalheSafras: safraDetalheInicial(null, data),
               },
             ]
           : [],
@@ -485,6 +548,75 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       .sort((a, b) => b.qtd - a.qtd)
   })()
 
+  // soma das linhas de detalhamento por safra precisa bater exatamente com
+  // a quantidade da categoria — mesma invariante que o banco cobra
+  // (fn_validar_soma_saldo_inicial_safra, migração 066), checada aqui
+  // antes pra dar um aviso amigável em vez de deixar o erro estourar cru
+  function encontrarErroDetalheSafra(itens: { categoriaNome: string; quantidade: string; detalheSafras: SafraDetalhe[] }[]): string | null {
+    for (const item of itens) {
+      if (item.detalheSafras.length <= 1) continue
+      const total = parseInt(item.quantidade, 10) || 0
+      const soma = item.detalheSafras.reduce((s, d) => s + (parseInt(d.quantidade, 10) || 0), 0)
+      if (soma !== total) {
+        return `A soma das safras de "${item.categoriaNome}" (${soma}) precisa bater com a quantidade da categoria (${total}).`
+      }
+    }
+    return null
+  }
+
+  // safra gravada na coluna da linha-mãe: quando dividido, a safra
+  // "representativa" (maior quantidade); senão, o valor único informado
+  function resolverSafraColuna(categoriaEhBezerro: boolean, detalheSafras: SafraDetalhe[]): number | null {
+    if (!categoriaEhBezerro) return null
+    if (detalheSafras.length > 1) return safraRepresentativa(detalheSafras)
+    return detalheSafras[0]?.safra ? parseInt(detalheSafras[0].safra, 10) : safraSugeridaParaData(data)
+  }
+
+  // Grava a linha-mãe (insert ou update) + o detalhamento por safra numa
+  // única transação via RPC — as triggers de constraint adiáveis
+  // (migrações 066/068) só protegem corretamente dentro de UMA transação,
+  // e duas chamadas separadas do supabase-js (update da linha-mãe, depois
+  // apaga-e-reinsere do detalhamento) cada uma vira sua própria transação
+  // com auto-commit, quebrando no meio sempre que a quantidade e o
+  // detalhamento mudam juntos. Devolve o id da linha (novo ou existente),
+  // ou null se deu erro (já reportado via alert).
+  async function salvarLinhaSaldoInicial(params: {
+    movimentacaoId: string | null
+    categoriaId: string
+    quantidade: number
+    pesoMedio: number
+    pastoId: string
+    proprietarioId: string | null
+    categoriaEhBezerro: boolean
+    detalheSafras: SafraDetalhe[]
+  }): Promise<string | null> {
+    const pesoTotal = round2(params.pesoMedio * params.quantidade)
+    const safraColuna = resolverSafraColuna(params.categoriaEhBezerro, params.detalheSafras)
+    const detalhamento = params.categoriaEhBezerro
+      ? params.detalheSafras.map((d) => ({ safra: parseInt(d.safra, 10) || 0, quantidade: parseInt(d.quantidade, 10) || 0 }))
+      : []
+
+    const { data: idSalvo, error } = await supabase.rpc('fn_salvar_linha_saldo_inicial', {
+      p_movimentacao_id: params.movimentacaoId,
+      p_fazenda_id: fazendaId,
+      p_categoria_id: params.categoriaId,
+      p_data: data,
+      p_quantidade: params.quantidade,
+      p_peso_medio_kg: params.pesoMedio,
+      p_peso_total_kg: pesoTotal,
+      p_pasto_id: params.pastoId,
+      p_proprietario_id: params.proprietarioId,
+      p_safra_coluna: safraColuna,
+      p_detalhamento: detalhamento,
+    })
+
+    if (error) {
+      alert('Erro ao salvar: ' + error.message)
+      return null
+    }
+    return idSalvo as unknown as string
+  }
+
   function handleSalvarClick() {
     const incompletas = linhas.filter((l) => (!!l.quantidade) !== (!!l.pesoMedio))
     if (incompletas.length > 0) {
@@ -493,6 +625,12 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
           .map((l) => l.categoriaNome)
           .join(', ')}`
       )
+      return
+    }
+
+    const erroSafra = encontrarErroDetalheSafra(linhas)
+    if (erroSafra) {
+      alert(erroSafra)
       return
     }
 
@@ -530,40 +668,17 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       const linhaVazia = !linha.quantidade && !linha.pesoMedio
 
       if (linhaCompleta) {
-        const pesoTotal = round2(pesoMedioNum * quantidadeNum)
-        const safraNascimento = linha.categoriaEhBezerro
-          ? linha.safraNascimento
-            ? parseInt(linha.safraNascimento, 10)
-            : safraSugeridaParaData(data)
-          : null
         const proprietarioResolvido = resolverProprietarioId(proprietarioId)
-        if (linha.existingId) {
-          await supabase
-            .from('movimentacoes_rebanho')
-            .update({
-              quantidade: quantidadeNum,
-              peso_medio_kg: pesoMedioNum,
-              peso_total_kg: pesoTotal,
-              pasto_id: pastoId,
-              proprietario_id: proprietarioResolvido,
-              data,
-              safra_nascimento_ano_inicio: safraNascimento,
-            })
-            .eq('id', linha.existingId)
-        } else {
-          await supabase.from('movimentacoes_rebanho').insert({
-            fazenda_id: fazendaId,
-            categoria_id: linha.categoriaId,
-            tipo: 'SALDO_INICIAL',
-            data,
-            quantidade: quantidadeNum,
-            peso_medio_kg: pesoMedioNum,
-            peso_total_kg: pesoTotal,
-            pasto_id: pastoId,
-            proprietario_id: proprietarioResolvido,
-            safra_nascimento_ano_inicio: safraNascimento,
-          })
-        }
+        await salvarLinhaSaldoInicial({
+          movimentacaoId: linha.existingId,
+          categoriaId: linha.categoriaId,
+          quantidade: quantidadeNum,
+          pesoMedio: pesoMedioNum,
+          pastoId,
+          proprietarioId: proprietarioResolvido,
+          categoriaEhBezerro: linha.categoriaEhBezerro,
+          detalheSafras: linha.detalheSafras,
+        })
       } else if (linhaVazia && linha.existingId) {
         await supabase.from('movimentacoes_rebanho').delete().eq('id', linha.existingId)
       }
@@ -596,6 +711,12 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         }
         vistas.add(l.categoriaId)
       }
+
+      const erroSafra = encontrarErroDetalheSafra(bloco.linhas)
+      if (erroSafra) {
+        alert(erroSafra)
+        return
+      }
     }
 
     if (mostrarSeletorProprietario && !proprietarioId) {
@@ -622,47 +743,20 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         const linhaCompleta = quantidadeNum > 0 && pesoMedioNum > 0
         if (!linhaCompleta) continue
 
-        const pesoTotal = round2(pesoMedioNum * quantidadeNum)
-        const safraNascimento = linha.categoriaEhBezerro
-          ? linha.safraNascimento
-            ? parseInt(linha.safraNascimento, 10)
-            : safraSugeridaParaData(data)
-          : null
         const proprietarioResolvido = resolverProprietarioId(proprietarioId)
 
-        if (linha.existingId) {
-          idsSalvos.add(linha.existingId)
-          await supabase
-            .from('movimentacoes_rebanho')
-            .update({
-              quantidade: quantidadeNum,
-              peso_medio_kg: pesoMedioNum,
-              peso_total_kg: pesoTotal,
-              pasto_id: bloco.pastoId,
-              proprietario_id: proprietarioResolvido,
-              data,
-              safra_nascimento_ano_inicio: safraNascimento,
-            })
-            .eq('id', linha.existingId)
-        } else {
-          const { data: nova } = await supabase
-            .from('movimentacoes_rebanho')
-            .insert({
-              fazenda_id: fazendaId,
-              categoria_id: linha.categoriaId,
-              tipo: 'SALDO_INICIAL',
-              data,
-              quantidade: quantidadeNum,
-              peso_medio_kg: pesoMedioNum,
-              peso_total_kg: pesoTotal,
-              pasto_id: bloco.pastoId,
-              proprietario_id: proprietarioResolvido,
-              safra_nascimento_ano_inicio: safraNascimento,
-            })
-            .select('id')
-            .single()
-          if (nova) idsSalvos.add(nova.id)
-        }
+        if (linha.existingId) idsSalvos.add(linha.existingId)
+        const idSalvo = await salvarLinhaSaldoInicial({
+          movimentacaoId: linha.existingId,
+          categoriaId: linha.categoriaId,
+          quantidade: quantidadeNum,
+          pesoMedio: pesoMedioNum,
+          pastoId: bloco.pastoId,
+          proprietarioId: proprietarioResolvido,
+          categoriaEhBezerro: linha.categoriaEhBezerro,
+          detalheSafras: linha.detalheSafras,
+        })
+        if (idSalvo) idsSalvos.add(idSalvo)
       }
     }
 
@@ -907,15 +1001,11 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                           {existeCategoriaBezerro && (
                             <td className="p-2.5">
                               {l.categoriaEhBezerro && (
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  className={`w-24 ${inputClass}`}
-                                  value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                                  onChange={(e) =>
-                                    atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
-                                  }
-                                  onFocus={(e) => e.target.select()}
+                                <DetalheSafraBezerro
+                                  quantidadeTotal={qtd}
+                                  dataReferencia={data}
+                                  detalhes={l.detalheSafras}
+                                  onChange={(novo) => atualizarDetalheSafra(l.categoriaId, novo)}
                                 />
                               )}
                             </td>
@@ -1034,15 +1124,11 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                               <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-text-muted">
                                 Safra <Required />
                               </label>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                className={`w-full ${inputClass}`}
-                                value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                                onChange={(e) =>
-                                  atualizarLinhaPasto(bloco.id, linha.id, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
-                                }
-                                onFocus={(e) => e.target.select()}
+                              <DetalheSafraBezerro
+                                quantidadeTotal={parseInt(linha.quantidade, 10) || 0}
+                                dataReferencia={data}
+                                detalhes={linha.detalheSafras}
+                                onChange={(novo) => atualizarDetalheSafraPasto(bloco.id, linha.id, novo)}
                               />
                             </div>
                           )}
