@@ -2109,10 +2109,19 @@ alter table movimentacoes_rebanho enable row level security;
 create policy movimentacoes_rebanho_por_conta on movimentacoes_rebanho for all
   using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
--- no máximo um SALDO_INICIAL por fazenda+categoria — evita duplicidade
--- antes da confirmação (a trava de edição/exclusão cuida do "depois")
+-- no máximo um SALDO_INICIAL por fazenda+categoria+pasto — evita
+-- duplicidade antes da confirmação (a trava de edição/exclusão cuida do
+-- "depois"). Pasto entra na constraint (migração 067) pra permitir o modo
+-- "Saldo por Pasto" — a mesma categoria pode legitimamente ter uma linha
+-- em cada pasto onde tem cabeças; fn_saldo_categoria/fn_saldo_categoria_
+-- pasto já somam "total da fazenda = soma dos pastos" nativamente, sem
+-- precisar de nenhuma outra mudança. Categoria bezerro que precisa
+-- declarar mais de uma safra de nascimento dentro do mesmo total continua
+-- com uma única linha por pasto — o detalhamento por safra é feito à
+-- parte, em `saldo_inicial_safras` (migração 066), nunca duplicando a
+-- linha-mãe.
 create unique index uq_saldo_inicial_por_categoria
-  on movimentacoes_rebanho (fazenda_id, categoria_id)
+  on movimentacoes_rebanho (fazenda_id, categoria_id, pasto_id)
   where tipo = 'SALDO_INICIAL';
 
 -- ---------------------------------------------------------------------
@@ -2391,10 +2400,136 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
+-- saldo_inicial_safras (migração 066): detalhamento por safra de
+-- nascimento dentro de uma única linha de Saldo Inicial de categoria
+-- bezerro — o rebanho inicial pode legitimamente conter animais de mais
+-- de uma safra (ex.: uma leva nascida no fim da safra anterior, outra já
+-- na corrente), mas a linha de Saldo Inicial continua sendo uma só por
+-- categoria (nunca duplicada) — mesmo princípio já usado em
+-- `lancamento_baixas`/`movimentacao_ajustes` (tabela filha detalha uma
+-- linha-mãe, sem duplicá-la). Quando existe detalhamento, a soma das
+-- safras precisa ser exatamente igual à quantidade total da linha-mãe —
+-- checado por uma trigger de constraint adiável (só valida no fim da
+-- transação, pra permitir apagar-e-reinserir todo o detalhamento de uma
+-- vez, mesmo padrão "apaga e reinsere" já usado noutras listas filhas).
+-- Limitação aceita conscientemente: a trajetória de edição/exclusão
+-- (fn_checar_saldo_lote_futuro/fn_delta_para_par_lote) ainda lê só a
+-- safra/quantidade da própria linha-mãe, não o detalhamento — editar ou
+-- excluir uma linha de Saldo Inicial já dividida por safra não tem, por
+-- enquanto, a mesma proteção fina de "isso deixaria uma safra específica
+-- negativa no futuro" que o resto do sistema tem (Saldo Inicial
+-- normalmente não é reeditado depois de confirmado; extensão futura se
+-- fizer falta na prática).
+-- ---------------------------------------------------------------------
+
+create table saldo_inicial_safras (
+  id                          uuid primary key default gen_random_uuid(),
+  conta_id                    uuid not null references contas(id) default fn_conta_atual(),
+  movimentacao_id             uuid not null references movimentacoes_rebanho(id) on delete cascade,
+  safra_nascimento_ano_inicio int not null,
+  quantidade                  int not null check (quantidade > 0),
+  created_at                  timestamptz not null default now(),
+  constraint uq_saldo_inicial_safra unique (movimentacao_id, safra_nascimento_ano_inicio)
+);
+
+create index idx_saldo_inicial_safras_movimentacao on saldo_inicial_safras(movimentacao_id);
+
+alter table saldo_inicial_safras enable row level security;
+create policy saldo_inicial_safras_por_conta on saldo_inicial_safras for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
+
+create or replace function fn_validar_saldo_inicial_safra()
+returns trigger as $$
+declare
+  v_tipo         tipo_movimentacao;
+  v_categoria_id uuid;
+begin
+  select tipo, categoria_id into v_tipo, v_categoria_id
+  from movimentacoes_rebanho where id = new.movimentacao_id;
+
+  if v_tipo is null then
+    raise exception 'Movimentação % não encontrada.', new.movimentacao_id;
+  end if;
+
+  if v_tipo <> 'SALDO_INICIAL' then
+    raise exception 'Detalhamento por safra só é permitido em lançamentos de Saldo Inicial.';
+  end if;
+
+  if not fn_categoria_e_bezerro(v_categoria_id) then
+    raise exception 'Detalhamento por safra só é permitido em categorias de bezerro.';
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger trg_validar_saldo_inicial_safra
+before insert or update on saldo_inicial_safras
+for each row execute function fn_validar_saldo_inicial_safra();
+
+create or replace function fn_validar_soma_saldo_inicial_safra()
+returns trigger as $$
+declare
+  v_movimentacao_id uuid;
+  v_total_categoria  int;
+  v_soma_safras      int;
+begin
+  v_movimentacao_id := coalesce(new.movimentacao_id, old.movimentacao_id);
+
+  select quantidade into v_total_categoria
+  from movimentacoes_rebanho where id = v_movimentacao_id;
+
+  select coalesce(sum(quantidade), 0) into v_soma_safras
+  from saldo_inicial_safras where movimentacao_id = v_movimentacao_id;
+
+  if v_soma_safras <> v_total_categoria then
+    raise exception 'A soma das quantidades por safra (%) precisa ser igual à quantidade total da categoria (%).',
+      v_soma_safras, v_total_categoria;
+  end if;
+
+  return null;
+end;
+$$ language plpgsql;
+
+create constraint trigger trg_validar_soma_saldo_inicial_safra
+after insert or update or delete on saldo_inicial_safras
+deferrable initially deferred
+for each row execute function fn_validar_soma_saldo_inicial_safra();
+
+create or replace function fn_validar_quantidade_saldo_inicial_com_safra()
+returns trigger as $$
+declare
+  v_soma_safras int;
+begin
+  if new.tipo <> 'SALDO_INICIAL' then
+    return new;
+  end if;
+
+  select coalesce(sum(quantidade), 0) into v_soma_safras
+  from saldo_inicial_safras where movimentacao_id = new.id;
+
+  if v_soma_safras > 0 and v_soma_safras <> new.quantidade then
+    raise exception 'A quantidade da categoria (%) não bate com a soma do detalhamento por safra (%). Ajuste o detalhamento também.',
+      new.quantidade, v_soma_safras;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create constraint trigger trg_validar_quantidade_saldo_inicial_com_safra
+after update of quantidade on movimentacoes_rebanho
+deferrable initially deferred
+for each row execute function fn_validar_quantidade_saldo_inicial_com_safra();
+
+-- ---------------------------------------------------------------------
 -- fn_saldo_categoria_safra (migração 030, renomeada/simplificada na
 -- 031 — só safra, sem mês): mesmo princípio de fn_saldo_categoria_pasto,
 -- mas pra dimensão do lote de nascimento, independente do pasto — as
--- duas dimensões (pasto e lote) não se cruzam.
+-- duas dimensões (pasto e lote) não se cruzam. Entrada de SALDO_INICIAL
+-- passa a vir do detalhamento por safra (saldo_inicial_safras, migração
+-- 066) quando ele existir, em vez da coluna safra_nascimento_ano_inicio
+-- da própria linha.
 -- ---------------------------------------------------------------------
 
 create or replace function fn_saldo_categoria_safra(
@@ -2413,7 +2548,24 @@ begin
     select quantidade from movimentacoes_rebanho
     where fazenda_id = p_fazenda_id and categoria_id = p_categoria_id
       and safra_nascimento_ano_inicio = p_safra
-      and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
+      and tipo in ('NASCIMENTO', 'COMPRA') and data <= p_data
+    union all
+    -- SALDO_INICIAL sem detalhamento por safra (o caso comum): usa a
+    -- própria coluna da linha, como sempre.
+    select m.quantidade from movimentacoes_rebanho m
+    where m.fazenda_id = p_fazenda_id and m.categoria_id = p_categoria_id
+      and m.safra_nascimento_ano_inicio = p_safra
+      and m.tipo = 'SALDO_INICIAL' and m.data <= p_data
+      and not exists (select 1 from saldo_inicial_safras s where s.movimentacao_id = m.id)
+    union all
+    -- SALDO_INICIAL de categoria bezerro com detalhamento por safra
+    -- (migração 066): a quantidade de cada safra vem do detalhamento,
+    -- não da quantidade total da linha.
+    select s.quantidade from saldo_inicial_safras s
+    join movimentacoes_rebanho m on m.id = s.movimentacao_id
+    where m.fazenda_id = p_fazenda_id and m.categoria_id = p_categoria_id
+      and s.safra_nascimento_ano_inicio = p_safra
+      and m.tipo = 'SALDO_INICIAL' and m.data <= p_data
     union all
     select quantidade from movimentacoes_rebanho
     where fazenda_destino_id = p_fazenda_id and categoria_id = p_categoria_id
@@ -3561,7 +3713,13 @@ $$;
 -- pasto_destino_id). on delete cascade na FK cuida da limpeza quando a
 -- movimentação é apagada; o UPDATE do trigger cobre edição (inclusive
 -- apagar o peso de uma Mudança de Pasto, que remove o registro
--- compilado).
+-- compilado). Grava conta_id explicitamente (new.conta_id) em vez de
+-- depender do default fn_conta_atual(), que resolve pelo auth.uid() da
+-- sessão — funciona pra qualquer usuário logado normal, mas quebra pra
+-- qualquer insert de movimentação feito fora de uma sessão de app
+-- autenticada (ex.: script rodando com a chave service-role, sem
+-- auth.uid() nenhum); mesmo bug já corrigido em fn_criar_modulo_pasto_geral
+-- (migração 063), agora também aqui (migração 064).
 -- ---------------------------------------------------------------------
 
 create or replace function fn_compilar_pesagem_movimentacao()
@@ -3576,8 +3734,8 @@ begin
   v_pasto_id := coalesce(new.pasto_destino_id, new.pasto_id);
 
   if new.peso_medio_kg is not null and new.peso_medio_kg > 0 then
-    insert into pesagens (fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
-    values (v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
+    insert into pesagens (conta_id, fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
+    values (new.conta_id, v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
             'Peso compilado automaticamente da movimentação')
     on conflict (movimentacao_id) do update set
       fazenda_id = excluded.fazenda_id,

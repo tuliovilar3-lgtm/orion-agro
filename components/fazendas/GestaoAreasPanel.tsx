@@ -130,6 +130,17 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
   const [importandoKmlPastos, setImportandoKmlPastos] = useState(false)
   const [revisaoImportacao, setRevisaoImportacao] = useState<LinhaRevisaoImportacao[] | null>(null)
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
+  const listaScrollRef = useRef<HTMLDivElement>(null)
+
+  // ao selecionar um pasto (clicando nele no mapa ou na própria lista),
+  // rola a lista — que agora tem scroll próprio, independente do mapa —
+  // pra trazer a linha correspondente pra dentro da área visível, sem
+  // mexer no scroll da página inteira nem no do mapa
+  useEffect(() => {
+    if (!pastoSelecionadoMapaId) return
+    const linha = listaScrollRef.current?.querySelector(`[data-pasto-row="${pastoSelecionadoMapaId}"]`)
+    linha?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [pastoSelecionadoMapaId])
 
   const [desenhoPendente, setDesenhoPendente] = useState<{ geometria: Geometry; areaHa: number } | null>(null)
   const [modoAtribuicao, setModoAtribuicao] = useState<'novo' | 'existente'>('novo')
@@ -877,13 +888,19 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
       )}
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,480px)]">
-        <div className="overflow-hidden rounded-control border border-border">
+        <div ref={listaScrollRef} className="max-h-[560px] overflow-y-auto rounded-control border border-border">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="bg-bg">
-                <th className="border-b border-border p-2 text-left text-text-secondary">Módulo / Pasto</th>
-                <th className="border-b border-border p-2 text-right text-text-secondary">Área (ha)</th>
-                <th className="border-b border-border p-2 text-right text-text-secondary">Ações</th>
+                <th className="sticky top-0 z-10 border-b border-border bg-bg p-2 text-left text-text-secondary">
+                  Módulo / Pasto
+                </th>
+                <th className="sticky top-0 z-10 border-b border-border bg-bg p-2 text-right text-text-secondary">
+                  Área (ha)
+                </th>
+                <th className="sticky top-0 z-10 border-b border-border bg-bg p-2 text-right text-text-secondary">
+                  Ações
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -966,6 +983,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                     {pastosDoModulo.map((p) => (
                       <tr
                         key={p.id}
+                        data-pasto-row={p.id}
                         className={`cursor-pointer ${!p.ativo ? 'opacity-60' : ''} ${
                           pastoSelecionadoMapaId === p.id ? 'bg-brand-100' : ''
                         }`}

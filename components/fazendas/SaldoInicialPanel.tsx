@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ERAS, Era, FAIXA_ETARIA_GRUPO, GRUPO_FAIXA_ETARIA_POR_ERA, PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
 import { safraSugeridaParaData, extrairAnoSafraDigitado, formatSafraInput } from '@/lib/periodo'
@@ -23,6 +23,10 @@ type LinhaSaldo = {
   quantidade: string
   pesoMedio: string
   safraNascimento: string
+  // true quando essa categoria já tem o saldo dividido em 2+ pastos (só
+  // possível vindo do modo "Saldo por Pasto") — a linha vira somatório
+  // somente-leitura aqui, editável de verdade só na aba "Saldo por Pasto"
+  multiPasto?: boolean
 }
 
 type Sexo = 'MACHO' | 'FEMEA'
@@ -30,6 +34,25 @@ type GrupoCategoriaPapel = { id: string; nome: string; sexo: Sexo | null }
 type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modulo: { fazenda_id: string } | null }
 type Modulo = { id: string; fazenda_id: string; nome: string; ativo: boolean; ordem: number }
 type Proprietario = { id: string; nome: string }
+
+type Modo = 'categorias' | 'pasto'
+
+type LinhaPastoCategoria = {
+  id: string
+  existingId: string | null
+  categoriaId: string
+  categoriaNome: string
+  categoriaEhBezerro: boolean
+  quantidade: string
+  pesoMedio: string
+  safraNascimento: string
+}
+
+type BlocoPasto = {
+  id: string
+  pastoId: string
+  linhas: LinhaPastoCategoria[]
+}
 
 function round2(n: number) {
   return Math.round(n * 100) / 100
@@ -62,6 +85,16 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
   const [proprietarioId, setProprietarioId] = useState('')
 
+  // "Saldo por Pasto" — modo alternativo ao tradicional (uma linha por
+  // categoria, um único pasto pra fazenda inteira): pasto vem primeiro,
+  // depois categoria+quantidade+peso dentro de cada bloco de pasto. Só
+  // aparece pra quem usa controle por pasto e tem 2+ pastos cadastrados
+  // (com 0/1 pasto não há o que dividir).
+  const [modo, setModo] = useState<Modo>('categorias')
+  const [blocosPasto, setBlocosPasto] = useState<BlocoPasto[]>([])
+  const [mostrarResumoPasto, setMostrarResumoPasto] = useState(false)
+  const idsOriginaisPastoRef = useRef<Set<string>>(new Set())
+
   const supabase = createClient()
 
   // módulo → pasto é uma cascata de dois níveis — mesmo princípio já
@@ -70,6 +103,13 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   const mostrarSeletorModulo = controlaPasto && modulosDisponiveis.length > 1
   const pastosDoModulo = pastos.filter((p) => p.modulo_id === moduloId)
   const mostrarSeletorPasto = controlaPasto && pastosDoModulo.length > 1
+
+  const idsModulosDaFazenda = new Set(modulosDisponiveis.map((m) => m.id))
+  const pastosDaFazenda = pastos.filter((p) => idsModulosDaFazenda.has(p.modulo_id))
+  const mostrarModoPasto = controlaPasto && pastosDaFazenda.length > 1
+  const modulosComPastos = modulosDisponiveis
+    .map((m) => ({ modulo: m, pastos: pastosDaFazenda.filter((p) => p.modulo_id === m.id) }))
+    .filter((g) => g.pastos.length > 0)
 
   // proprietário: lista global (lib de todo o sistema — ver movimentacoes/page.tsx),
   // um único proprietário por lançamento de saldo inicial, aplicado a todas as
@@ -229,14 +269,50 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
 
     setFazendaSelecionada(fazenda || null)
 
-    const mapaExistentes = new Map((existentes || []).map((e) => [e.categoria_id, e]))
+    // Agrupa por categoria primeiro — uma categoria pode ter mais de uma
+    // linha existente (uma por pasto, vindo do modo "Saldo por Pasto"). No
+    // modo "por Categorias" isso vira uma linha somatório somente-leitura
+    // (multiPasto), pra nunca colapsar/perder a divisão por pasto ao
+    // salvar por aqui sem querer.
+    const porCategoria = new Map<string, typeof existentes>()
+    for (const e of existentes || []) {
+      const arr = porCategoria.get(e.categoria_id) || []
+      arr.push(e)
+      porCategoria.set(e.categoria_id, arr)
+    }
+
+    const mapaCategoriaInfo = new Map(
+      (categorias || []).map((c) => {
+        const papelNome = (c as unknown as { papel: { nome: string } | null }).papel?.nome
+        return [c.id, { nome: c.nome, ehBezerro: !!papelNome && PAPEIS_BEZERRO_MAMANDO.includes(papelNome) }]
+      })
+    )
+
     const novasLinhas: LinhaSaldo[] = (categorias || []).map((c) => {
-      const existente = mapaExistentes.get(c.id)
+      const existentesDaCategoria = porCategoria.get(c.id) || []
       const papelNome = (c as unknown as { papel: { nome: string } | null }).papel?.nome
+      const categoriaEhBezerro = !!papelNome && PAPEIS_BEZERRO_MAMANDO.includes(papelNome)
+
+      if (existentesDaCategoria.length > 1) {
+        const qtdTotal = existentesDaCategoria.reduce((s, e) => s + e.quantidade, 0)
+        const pesoTotalSoma = existentesDaCategoria.reduce((s, e) => s + e.quantidade * (e.peso_medio_kg ?? 0), 0)
+        return {
+          categoriaId: c.id,
+          categoriaNome: c.nome,
+          categoriaEhBezerro,
+          existingId: null,
+          quantidade: String(qtdTotal),
+          pesoMedio: qtdTotal > 0 ? String(round2(pesoTotalSoma / qtdTotal)) : '',
+          safraNascimento: '',
+          multiPasto: true,
+        }
+      }
+
+      const existente = existentesDaCategoria[0]
       return {
         categoriaId: c.id,
         categoriaNome: c.nome,
-        categoriaEhBezerro: !!papelNome && PAPEIS_BEZERRO_MAMANDO.includes(papelNome),
+        categoriaEhBezerro,
         existingId: existente ? existente.id : null,
         quantidade: existente ? String(existente.quantidade) : '',
         pesoMedio: existente && existente.peso_medio_kg != null ? String(existente.peso_medio_kg) : '',
@@ -244,6 +320,37 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
       }
     })
     setLinhas(novasLinhas)
+
+    // Monta os blocos do modo "Saldo por Pasto" a partir das mesmas linhas
+    // existentes, agrupadas por pasto_id dessa vez.
+    const porPasto = new Map<string, LinhaPastoCategoria[]>()
+    for (const e of existentes || []) {
+      const info = mapaCategoriaInfo.get(e.categoria_id)
+      if (!info) continue
+      const arr = porPasto.get(e.pasto_id) || []
+      arr.push({
+        id: e.id,
+        existingId: e.id,
+        categoriaId: e.categoria_id,
+        categoriaNome: info.nome,
+        categoriaEhBezerro: info.ehBezerro,
+        quantidade: String(e.quantidade),
+        pesoMedio: e.peso_medio_kg != null ? String(e.peso_medio_kg) : '',
+        safraNascimento: e.safra_nascimento_ano_inicio != null ? String(e.safra_nascimento_ano_inicio) : '',
+      })
+      porPasto.set(e.pasto_id, arr)
+    }
+    idsOriginaisPastoRef.current = new Set((existentes || []).map((e) => e.id))
+    const novosBlocos: BlocoPasto[] = Array.from(porPasto.entries()).map(([pId, linhasDoBloco]) => ({
+      id: pId,
+      pastoId: pId,
+      linhas: linhasDoBloco,
+    }))
+    setBlocosPasto(
+      novosBlocos.length > 0
+        ? novosBlocos
+        : [{ id: crypto.randomUUID(), pastoId: '', linhas: [] }]
+    )
 
     const primeiraData = (existentes || [])[0]?.data
     if (primeiraData) setData(primeiraData)
@@ -263,6 +370,120 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
   function atualizarLinha(categoriaId: string, campo: 'quantidade' | 'pesoMedio' | 'safraNascimento', valor: string) {
     setLinhas((prev) => prev.map((l) => (l.categoriaId === categoriaId ? { ...l, [campo]: valor } : l)))
   }
+
+  // --- modo "Saldo por Pasto" ---------------------------------------
+
+  function mudarPastoBloco(blocoId: string, pastoId: string) {
+    setBlocosPasto((prev) => prev.map((b) => (b.id === blocoId ? { ...b, pastoId } : b)))
+  }
+
+  function atualizarLinhaPasto(
+    blocoId: string,
+    linhaId: string,
+    campo: 'categoriaId' | 'quantidade' | 'pesoMedio' | 'safraNascimento',
+    valor: string
+  ) {
+    setBlocosPasto((prev) =>
+      prev.map((b) => {
+        if (b.id !== blocoId) return b
+        return {
+          ...b,
+          linhas: b.linhas.map((l) => {
+            if (l.id !== linhaId) return l
+            if (campo === 'categoriaId') {
+              const info = linhas.find((x) => x.categoriaId === valor)
+              return { ...l, categoriaId: valor, categoriaNome: info?.categoriaNome ?? '', categoriaEhBezerro: info?.categoriaEhBezerro ?? false }
+            }
+            return { ...l, [campo]: valor }
+          }),
+        }
+      })
+    )
+  }
+
+  function adicionarCategoriaNoBloco(blocoId: string) {
+    const primeiraCategoria = linhas[0]
+    if (!primeiraCategoria) return
+    setBlocosPasto((prev) =>
+      prev.map((b) =>
+        b.id === blocoId
+          ? {
+              ...b,
+              linhas: [
+                ...b.linhas,
+                {
+                  id: crypto.randomUUID(),
+                  existingId: null,
+                  categoriaId: primeiraCategoria.categoriaId,
+                  categoriaNome: primeiraCategoria.categoriaNome,
+                  categoriaEhBezerro: primeiraCategoria.categoriaEhBezerro,
+                  quantidade: '',
+                  pesoMedio: '',
+                  safraNascimento: '',
+                },
+              ],
+            }
+          : b
+      )
+    )
+  }
+
+  function removerCategoriaDoBloco(blocoId: string, linhaId: string) {
+    setBlocosPasto((prev) =>
+      prev.map((b) => (b.id === blocoId ? { ...b, linhas: b.linhas.filter((l) => l.id !== linhaId) } : b))
+    )
+  }
+
+  function adicionarBlocoPasto() {
+    const primeiraCategoria = linhas[0]
+    setBlocosPasto((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        pastoId: '',
+        linhas: primeiraCategoria
+          ? [
+              {
+                id: crypto.randomUUID(),
+                existingId: null,
+                categoriaId: primeiraCategoria.categoriaId,
+                categoriaNome: primeiraCategoria.categoriaNome,
+                categoriaEhBezerro: primeiraCategoria.categoriaEhBezerro,
+                quantidade: '',
+                pesoMedio: '',
+                safraNascimento: '',
+              },
+            ]
+          : [],
+      },
+    ])
+  }
+
+  function removerBlocoPasto(blocoId: string) {
+    setBlocosPasto((prev) => (prev.length <= 1 ? prev : prev.filter((b) => b.id !== blocoId)))
+  }
+
+  const totalGeralPasto = blocosPasto.reduce(
+    (s, b) => s + b.linhas.reduce((s2, l) => s2 + (parseInt(l.quantidade, 10) || 0), 0),
+    0
+  )
+
+  const resumoPorCategoriaPasto = (() => {
+    const mapa = new Map<string, { qtd: number; pesoTotal: number }>()
+    for (const bloco of blocosPasto) {
+      for (const l of bloco.linhas) {
+        const qtd = parseInt(l.quantidade, 10) || 0
+        const peso = parseFloat(l.pesoMedio) || 0
+        const atual = mapa.get(l.categoriaNome) || { qtd: 0, pesoTotal: 0 }
+        atual.qtd += qtd
+        atual.pesoTotal += qtd * peso
+        mapa.set(l.categoriaNome, atual)
+      }
+    }
+    return Array.from(mapa.entries())
+      .map(([nome, d]) => ({ nome, qtd: d.qtd, pesoMedio: d.qtd > 0 ? round2(d.pesoTotal / d.qtd) : null }))
+      .sort((a, b) => b.qtd - a.qtd)
+  })()
 
   function handleSalvarClick() {
     const incompletas = linhas.filter((l) => (!!l.quantidade) !== (!!l.pesoMedio))
@@ -297,6 +518,12 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     setSalvando(true)
 
     for (const linha of linhas) {
+      // categoria já dividida em 2+ pastos é só leitura aqui (não tem um
+      // existingId único pra atualizar) — editar de verdade só na aba
+      // "Saldo por Pasto", senão salvar aqui criaria uma linha nova
+      // duplicando o que já existe por pasto.
+      if (linha.multiPasto) continue
+
       const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : 0
       const pesoMedioNum = linha.pesoMedio ? parseFloat(linha.pesoMedio) : 0
       const linhaCompleta = quantidadeNum > 0 && pesoMedioNum > 0
@@ -346,6 +573,124 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
     setSalvando(false)
   }
 
+  function handleSalvarPorPastoClick() {
+    for (const bloco of blocosPasto) {
+      if (!bloco.pastoId) {
+        alert('Selecione o pasto em todos os blocos antes de salvar.')
+        return
+      }
+      const incompletas = bloco.linhas.filter((l) => (!!l.quantidade) !== (!!l.pesoMedio))
+      if (incompletas.length > 0) {
+        alert(
+          `Preencha quantidade e peso médio juntos (ou deixe os dois em branco) em: ${incompletas
+            .map((l) => l.categoriaNome)
+            .join(', ')}`
+        )
+        return
+      }
+      const vistas = new Set<string>()
+      for (const l of bloco.linhas) {
+        if (vistas.has(l.categoriaId)) {
+          alert(`A categoria "${l.categoriaNome}" aparece mais de uma vez no mesmo pasto — some numa linha só.`)
+          return
+        }
+        vistas.add(l.categoriaId)
+      }
+    }
+
+    if (mostrarSeletorProprietario && !proprietarioId) {
+      alert('Selecione o proprietário.')
+      return
+    }
+
+    if (confirmado) {
+      setMostrarAvisoEdicao(true)
+    } else {
+      executarSalvarPorPasto()
+    }
+  }
+
+  async function executarSalvarPorPasto() {
+    setMostrarAvisoEdicao(false)
+    setSalvando(true)
+
+    const idsSalvos = new Set<string>()
+    for (const bloco of blocosPasto) {
+      for (const linha of bloco.linhas) {
+        const quantidadeNum = linha.quantidade ? parseInt(linha.quantidade, 10) : 0
+        const pesoMedioNum = linha.pesoMedio ? parseFloat(linha.pesoMedio) : 0
+        const linhaCompleta = quantidadeNum > 0 && pesoMedioNum > 0
+        if (!linhaCompleta) continue
+
+        const pesoTotal = round2(pesoMedioNum * quantidadeNum)
+        const safraNascimento = linha.categoriaEhBezerro
+          ? linha.safraNascimento
+            ? parseInt(linha.safraNascimento, 10)
+            : safraSugeridaParaData(data)
+          : null
+        const proprietarioResolvido = resolverProprietarioId(proprietarioId)
+
+        if (linha.existingId) {
+          idsSalvos.add(linha.existingId)
+          await supabase
+            .from('movimentacoes_rebanho')
+            .update({
+              quantidade: quantidadeNum,
+              peso_medio_kg: pesoMedioNum,
+              peso_total_kg: pesoTotal,
+              pasto_id: bloco.pastoId,
+              proprietario_id: proprietarioResolvido,
+              data,
+              safra_nascimento_ano_inicio: safraNascimento,
+            })
+            .eq('id', linha.existingId)
+        } else {
+          const { data: nova } = await supabase
+            .from('movimentacoes_rebanho')
+            .insert({
+              fazenda_id: fazendaId,
+              categoria_id: linha.categoriaId,
+              tipo: 'SALDO_INICIAL',
+              data,
+              quantidade: quantidadeNum,
+              peso_medio_kg: pesoMedioNum,
+              peso_total_kg: pesoTotal,
+              pasto_id: bloco.pastoId,
+              proprietario_id: proprietarioResolvido,
+              safra_nascimento_ano_inicio: safraNascimento,
+            })
+            .select('id')
+            .single()
+          if (nova) idsSalvos.add(nova.id)
+        }
+      }
+    }
+
+    // linhas que existiam no banco antes de abrir esse formulário e não
+    // sobraram na lista atual (categoria/bloco removido, ou esvaziado) —
+    // mesmo princípio de "apaga e reinsere" já usado noutras listas
+    // filhas do sistema, só que aqui via update-in-place + delete
+    // explícito das que saíram.
+    for (const idAntigo of idsOriginaisPastoRef.current) {
+      if (!idsSalvos.has(idAntigo)) {
+        await supabase.from('movimentacoes_rebanho').delete().eq('id', idAntigo)
+      }
+    }
+
+    await carregarLinhas()
+    setSalvando(false)
+  }
+
+  function handleSalvarClickAtual() {
+    if (modo === 'categorias') handleSalvarClick()
+    else handleSalvarPorPastoClick()
+  }
+
+  function executarSalvarAtual() {
+    if (modo === 'categorias') return executarSalvar()
+    return executarSalvarPorPasto()
+  }
+
   async function handleConfirmar() {
     setSalvando(true)
     const { error } = await supabase
@@ -383,12 +728,39 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
         alteração pede uma confirmação extra — e nunca é permitido deixar o estoque negativo em nenhum momento.
       </p>
 
+      {mostrarModoPasto && (
+        <div className="mt-4 flex gap-1 border-b border-border">
+          <button
+            type="button"
+            onClick={() => setModo('categorias')}
+            className={`px-4 py-2 text-sm font-semibold ${
+              modo === 'categorias'
+                ? 'border-b-2 border-brand-500 text-brand-500'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            Saldo por Categorias
+          </button>
+          <button
+            type="button"
+            onClick={() => setModo('pasto')}
+            className={`px-4 py-2 text-sm font-semibold ${
+              modo === 'pasto'
+                ? 'border-b-2 border-brand-500 text-brand-500'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            Saldo por Pasto
+          </button>
+        </div>
+      )}
+
       <div className="mt-4 flex flex-wrap gap-4">
         <div>
           <label className="mb-1.5 block text-sm font-medium text-text-secondary">Data de referência</label>
           <input type="date" className={inputClass} value={data} onChange={(e) => setData(e.target.value)} />
         </div>
-        {mostrarSeletorModulo && (
+        {modo === 'categorias' && mostrarSeletorModulo && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">
               Módulo
@@ -404,7 +776,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             </select>
           </div>
         )}
-        {mostrarSeletorPasto && (
+        {modo === 'categorias' && mostrarSeletorPasto && (
           <div>
             <label className="mb-1.5 block text-sm font-medium text-text-secondary">
               Pasto
@@ -460,100 +832,299 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
             </div>
           )}
 
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              className="text-sm font-medium text-brand-500 underline"
-              onClick={() => setModalCategoriaAberto(true)}
-            >
-              + Nova categoria
-            </button>
-          </div>
+          {modo === 'categorias' && (
+            <>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  className="text-sm font-medium text-brand-500 underline"
+                  onClick={() => setModalCategoriaAberto(true)}
+                >
+                  + Nova categoria
+                </button>
+              </div>
 
-          <div className="mt-2 overflow-x-auto rounded-card border border-border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-text-secondary">
-                  <th className="p-2.5 font-medium">Categoria</th>
-                  <th className="p-2.5 text-right font-medium">Quantidade</th>
-                  <th className="p-2.5 text-right font-medium">Peso médio (kg)</th>
-                  <th className="p-2.5 text-right font-medium">Peso total (kg)</th>
-                  {existeCategoriaBezerro && <th className="p-2.5 text-left font-medium">Safra do bezerro</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {linhas.map((l) => {
-                  const qtd = parseInt(l.quantidade, 10) || 0
-                  const peso = parseFloat(l.pesoMedio) || 0
-                  const pesoTotal = qtd && peso ? round2(qtd * peso) : null
-                  return (
-                    <tr key={l.categoriaId} className="border-b border-border last:border-0">
-                      <td className="p-2.5 text-text-primary">{l.categoriaNome}</td>
-                      <td className="p-2.5 text-right">
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          className={`w-24 text-right ${inputClass}`}
-                          value={l.quantidade}
-                          onChange={(e) => atualizarLinha(l.categoriaId, 'quantidade', e.target.value)}
-                        />
-                      </td>
-                      <td className="p-2.5 text-right">
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          className={`w-24 text-right ${inputClass}`}
-                          value={l.pesoMedio}
-                          onChange={(e) => atualizarLinha(l.categoriaId, 'pesoMedio', e.target.value)}
-                        />
-                      </td>
-                      <td className="p-2.5 text-right tabular-nums text-text-secondary">
-                        {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
-                      </td>
-                      {existeCategoriaBezerro && (
-                        <td className="p-2.5">
-                          {l.categoriaEhBezerro && (
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              className={`w-24 ${inputClass}`}
-                              value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
-                              onChange={(e) =>
-                                atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
-                              }
-                              onFocus={(e) => e.target.select()}
-                            />
-                          )}
-                        </td>
-                      )}
+              <div className="mt-2 overflow-x-auto rounded-card border border-border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-text-secondary">
+                      <th className="p-2.5 font-medium">Categoria</th>
+                      <th className="p-2.5 text-right font-medium">Quantidade</th>
+                      <th className="p-2.5 text-right font-medium">Peso médio (kg)</th>
+                      <th className="p-2.5 text-right font-medium">Peso total (kg)</th>
+                      {existeCategoriaBezerro && <th className="p-2.5 text-left font-medium">Safra do bezerro</th>}
                     </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td className="p-2.5 text-text-primary">Total</td>
-                  <td className="p-2.5 text-right tabular-nums text-text-primary">{formatQuantidade(totalCabecas)}</td>
-                  <td className="p-2.5 text-right tabular-nums text-text-primary">
-                    {pesoMedioPonderado != null ? formatPeso(pesoMedioPonderado) : '—'}
-                  </td>
-                  <td className="p-2.5 text-right tabular-nums text-text-primary">
-                    {totalCabecas > 0 ? formatPeso(round2(totalPesoKg)) : '—'}
-                  </td>
-                  {existeCategoriaBezerro && <td className="p-2.5"></td>}
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {linhas.map((l) => {
+                      const qtd = parseInt(l.quantidade, 10) || 0
+                      const peso = parseFloat(l.pesoMedio) || 0
+                      const pesoTotal = qtd && peso ? round2(qtd * peso) : null
+                      if (l.multiPasto) {
+                        return (
+                          <tr key={l.categoriaId} className="border-b border-border last:border-0 bg-bg">
+                            <td className="p-2.5 text-text-primary">
+                              {l.categoriaNome}
+                              <div className="mt-0.5 text-xs text-text-muted">
+                                Dividido entre pastos — edite na aba &ldquo;Saldo por Pasto&rdquo;
+                              </div>
+                            </td>
+                            <td className="p-2.5 text-right tabular-nums text-text-secondary">{formatQuantidade(qtd)}</td>
+                            <td className="p-2.5 text-right tabular-nums text-text-secondary">{peso ? formatPeso(peso) : '—'}</td>
+                            <td className="p-2.5 text-right tabular-nums text-text-secondary">
+                              {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
+                            </td>
+                            {existeCategoriaBezerro && <td className="p-2.5"></td>}
+                          </tr>
+                        )
+                      }
+                      return (
+                        <tr key={l.categoriaId} className="border-b border-border last:border-0">
+                          <td className="p-2.5 text-text-primary">{l.categoriaNome}</td>
+                          <td className="p-2.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className={`w-24 text-right ${inputClass}`}
+                              value={l.quantidade}
+                              onChange={(e) => atualizarLinha(l.categoriaId, 'quantidade', e.target.value)}
+                            />
+                          </td>
+                          <td className="p-2.5 text-right">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              className={`w-24 text-right ${inputClass}`}
+                              value={l.pesoMedio}
+                              onChange={(e) => atualizarLinha(l.categoriaId, 'pesoMedio', e.target.value)}
+                            />
+                          </td>
+                          <td className="p-2.5 text-right tabular-nums text-text-secondary">
+                            {pesoTotal != null ? formatPeso(pesoTotal) : '—'}
+                          </td>
+                          {existeCategoriaBezerro && (
+                            <td className="p-2.5">
+                              {l.categoriaEhBezerro && (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  className={`w-24 ${inputClass}`}
+                                  value={formatSafraInput(l.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                                  onChange={(e) =>
+                                    atualizarLinha(l.categoriaId, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
+                                  }
+                                  onFocus={(e) => e.target.select()}
+                                />
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-semibold">
+                      <td className="p-2.5 text-text-primary">Total</td>
+                      <td className="p-2.5 text-right tabular-nums text-text-primary">{formatQuantidade(totalCabecas)}</td>
+                      <td className="p-2.5 text-right tabular-nums text-text-primary">
+                        {pesoMedioPonderado != null ? formatPeso(pesoMedioPonderado) : '—'}
+                      </td>
+                      <td className="p-2.5 text-right tabular-nums text-text-primary">
+                        {totalCabecas > 0 ? formatPeso(round2(totalPesoKg)) : '—'}
+                      </td>
+                      {existeCategoriaBezerro && <td className="p-2.5"></td>}
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          )}
+
+          {modo === 'pasto' && (
+            <div className="mt-4 space-y-4">
+              {blocosPasto.map((bloco) => {
+                const subtotalBloco = bloco.linhas.reduce((s, l) => s + (parseInt(l.quantidade, 10) || 0), 0)
+                return (
+                  <div key={bloco.id} className="overflow-hidden rounded-card border border-border">
+                    <div className="flex flex-wrap items-center gap-3 border-b border-border bg-brand-100 px-4 py-3">
+                      <span className="text-xs font-bold uppercase tracking-wide text-text-secondary">Pasto</span>
+                      <select
+                        className={`${inputClass} max-w-[320px] flex-1 font-semibold`}
+                        value={bloco.pastoId}
+                        onChange={(e) => mudarPastoBloco(bloco.id, e.target.value)}
+                      >
+                        <option value="">Selecione...</option>
+                        {modulosComPastos.map((g) => (
+                          <optgroup key={g.modulo.id} label={g.modulo.nome}>
+                            {g.pastos.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.nome}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <span className="ml-auto text-xs text-text-secondary">
+                        <b className="text-text-primary">{formatQuantidade(subtotalBloco)}</b> cabeças nesse pasto
+                      </span>
+                      <button
+                        type="button"
+                        title="Remover pasto"
+                        disabled={blocosPasto.length <= 1}
+                        onClick={() => removerBlocoPasto(bloco.id)}
+                        className="flex h-7 w-7 items-center justify-center rounded-control border border-border text-text-muted hover:border-error hover:text-error disabled:opacity-30"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="space-y-2.5 p-4">
+                      {bloco.linhas.map((linha) => (
+                        <div
+                          key={linha.id}
+                          className={`grid grid-cols-2 items-end gap-3 rounded-control border border-border p-3 sm:grid-cols-4 ${
+                            linha.categoriaEhBezerro ? 'sm:grid-cols-5' : ''
+                          }`}
+                        >
+                          <div className="col-span-2 sm:col-span-1">
+                            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                              Categoria
+                            </label>
+                            <select
+                              className={`w-full ${inputClass}`}
+                              value={linha.categoriaId}
+                              onChange={(e) => atualizarLinhaPasto(bloco.id, linha.id, 'categoriaId', e.target.value)}
+                            >
+                              {linhas.map((c) => (
+                                <option key={c.categoriaId} value={c.categoriaId}>
+                                  {c.categoriaNome}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                              Quantidade
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              className={`w-full ${inputClass}`}
+                              value={linha.quantidade}
+                              onChange={(e) => atualizarLinhaPasto(bloco.id, linha.id, 'quantidade', e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                              Peso médio (kg)
+                            </label>
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              className={`w-full ${inputClass}`}
+                              value={linha.pesoMedio}
+                              onChange={(e) => atualizarLinhaPasto(bloco.id, linha.id, 'pesoMedio', e.target.value)}
+                            />
+                          </div>
+                          {linha.categoriaEhBezerro && (
+                            <div>
+                              <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                                Safra <Required />
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                className={`w-full ${inputClass}`}
+                                value={formatSafraInput(linha.safraNascimento || (data ? String(safraSugeridaParaData(data)) : ''))}
+                                onChange={(e) =>
+                                  atualizarLinhaPasto(bloco.id, linha.id, 'safraNascimento', extrairAnoSafraDigitado(e.target.value))
+                                }
+                                onFocus={(e) => e.target.select()}
+                              />
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            title="Remover categoria"
+                            onClick={() => removerCategoriaDoBloco(bloco.id, linha.id)}
+                            className="flex h-9 w-9 items-center justify-center justify-self-end rounded-control border border-border text-text-muted hover:border-error hover:text-error"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => adicionarCategoriaNoBloco(bloco.id)}
+                        className="rounded-control border border-dashed border-border px-3 py-1.5 text-xs font-semibold text-brand-500 hover:border-brand-500 hover:bg-brand-100"
+                      >
+                        + Adicionar categoria
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+
+              <button
+                type="button"
+                onClick={adicionarBlocoPasto}
+                className="w-full rounded-card border border-dashed border-brand-500 bg-brand-100/40 py-3 text-sm font-bold text-brand-500 hover:bg-brand-100"
+              >
+                + Adicionar pasto
+              </button>
+
+              <div className="overflow-hidden rounded-card border border-border">
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm font-bold text-text-secondary">Total geral (todos os pastos)</span>
+                  <span className="text-lg font-extrabold tabular-nums text-text-primary">
+                    {formatQuantidade(totalGeralPasto)} cabeças
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMostrarResumoPasto((v) => !v)}
+                  className="flex w-full items-center gap-2 border-t border-border px-4 py-2.5 text-left text-xs font-bold text-brand-500"
+                >
+                  <span className={`transition-transform ${mostrarResumoPasto ? 'rotate-90' : ''}`}>▸</span>
+                  Ver quantidade e peso médio por categoria
+                </button>
+                {mostrarResumoPasto && (
+                  <div className="border-t border-border px-4 py-3">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-wide text-text-muted">
+                          <th className="pb-2 font-bold">Categoria</th>
+                          <th className="pb-2 text-right font-bold">Quantidade</th>
+                          <th className="pb-2 text-right font-bold">Peso médio (kg)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {resumoPorCategoriaPasto.map((r) => (
+                          <tr key={r.nome} className="border-t border-border">
+                            <td className="py-1.5 text-text-primary">{r.nome}</td>
+                            <td className="py-1.5 text-right tabular-nums text-text-primary">{formatQuantidade(r.qtd)}</td>
+                            <td className="py-1.5 text-right tabular-nums text-text-secondary">
+                              {r.pesoMedio != null ? formatPeso(r.pesoMedio) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="mt-4 space-y-3">
             {!mostrarAvisoEdicao ? (
               <button
                 type="button"
                 disabled={salvando}
-                onClick={handleSalvarClick}
+                onClick={handleSalvarClickAtual}
                 className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover disabled:opacity-50"
               >
                 {salvando ? 'Salvando...' : 'Salvar'}
@@ -577,7 +1148,7 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                     type="button"
                     disabled={salvando}
                     className="rounded-control bg-warning px-4 py-2 font-semibold text-white disabled:opacity-50"
-                    onClick={executarSalvar}
+                    onClick={executarSalvarAtual}
                   >
                     Sim, ajustar saldo inicial
                   </button>

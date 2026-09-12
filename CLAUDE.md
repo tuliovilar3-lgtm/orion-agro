@@ -4239,5 +4239,269 @@ visualmente com a geografia real da fazenda; card "Área alocada em pastos" most
 "área útil" informado de cabeça pelo usuário, que era só uma estimativa arredondada — a diferença
 ficou registrada como nota, não como bloqueio: `fazendas.area_util_ha` continua sendo só informativo,
 quem trava o cadastro de pasto é a "Distribuição da Área" real). Arrendamento Atílio e Confinamento
-ficam só com o "Pasto 1" padrão (sem KML), por pedido do usuário. Trabalho em andamento — módulos/
-pastos ficam prontos pra receber o rebanho e os lançamentos financeiros reais, ainda a caminho.
+ficam só com o "Pasto 1" padrão (sem KML), por pedido do usuário.
+
+## Estoque inicial do rebanho (Fazenda Teste 1) + segundo bug de `conta_id` (migração 064)
+
+Com fazendas/pastos prontos, o próximo passo foi lançar o **Saldo Inicial** (30/06/2025) do rebanho
+real das 4 fazendas, a partir do relatório "Estoque inicial" (Metryx) enviado pelo usuário —
+mesma abordagem via script service-role (bypassa clique-por-clique, não bypassa trigger nenhuma).
+
+**Mapeamento de categorias fechado com o usuário** (categorias que não batiam 1:1 com o catálogo
+pré-existente): categoria sistema **"Touro" renomeada pra "Reprodutor +36 Meses"** (via SQL direto —
+`alter table categorias_animal disable trigger trg_validar_edicao_categoria`, update, re-enable —
+já que `fn_validar_edicao_categoria` bloqueia renomear categoria `sistema=true` e essa operação não
+dá pra fazer via REST/service-role, só SQL puro); 6 categorias novas criadas (Vaca Descarte +36
+Meses, Reprodutor 24 a 36 Meses, Sinuelo, Vaca Leiteira, Coché Fêmea, Coché Macho — mapeamento e
+regras de era/sexo confirmados linha a linha pelo usuário); "Garrote 24-36" reaproveitada como "Boi
+24-36" já existente; linhas de "Novilha" sem era especificada no relatório resolvidas por peso
+(≥400 kg → 24-36 Meses, <400 kg → 12-24 Meses). Identidade "Luciana Vieira Costa Saddi" (produtora
+no relatório) tratada como o mesmo Paulo Afonso Silveira já cadastrado, por confirmação direta do
+usuário. **Pasto "guarda-tudo"**: sem informação de distribuição por pasto no relatório, todo o
+estoque inicial de cada fazenda foi lançado no primeiro/único pasto de cada uma (Pasto 1/01-A1/1C2,
+conforme a fazenda) — decisão explícita do usuário, com redistribuição por `MUDANÇA_PASTO` fica pra
+depois, se os relatórios de movimentação trouxerem esse detalhe.
+
+**Segundo bug de `conta_id` ausente, mesma classe do da migração 063**: o insert das 25 linhas de
+`SALDO_INICIAL` falhou com `null value in column "conta_id" of relation "pesagens"` — descoberto que
+`fn_compilar_pesagem_movimentacao` (trigger que replica todo `peso_medio_kg` lançado em
+`movimentacoes_rebanho` pra `pesagens`, ver "Peso médio obrigatório e compilação automática em
+Pesagens" acima) também nunca gravava `conta_id` explicitamente, dependendo do mesmo
+`default fn_conta_atual()` que precisa de `auth.uid()` — ausente numa conexão service-role. Corrigido
+na migração 064, mesmo padrão da 063 (`conta_id = new.conta_id` explícito no insert).
+
+25 linhas de `SALDO_INICIAL` (2025-06-30) inseridas com sucesso depois do fix: `proprietario_id` =
+Paulo (único proprietário cadastrado, mesmo princípio de auto-atribuição já documentado em
+"Proprietário do lote de gado vira lista global"), `safra_nascimento_ano_inicio = 2024` nas 4 linhas
+de categoria Bezerro (Betânia: Bezerra×1/Bezerro×3; Esmeralda: Bezerra×277/Bezerro×245) —
+`safraSugeridaParaData('2025-06-30')` (mês 6 < 7 → ano anterior). **Verificado direto no banco**
+(soma de `quantidade`/`peso_total_kg` por fazenda): Arrendamento Atílio 5.537 cab. @ 304,8 kg;
+Confinamento 3.833 cab. @ 505,3 kg; Estância Betânia 3.631 cab. @ 314,6 kg; Estância Esmeralda 9.677
+cab. @ 292,6 kg; **total 22.678 cab. @ 335,0 kg** — bate exatamente com os totais do PDF "Estoque
+inicial" em todas as 4 fazendas. Verificação visual no navegador não foi possível nesta rodada (o
+servidor de preview local exigia login, e a sessão precisa de senha — nunca digitada por mim, mesmo
+que soubesse, por política de segurança); a conferência direta no banco é equivalente e suficiente
+aqui, já que os totais batem exatamente com a fonte.
+
+Os 4 relatórios de "Estoque Final Mensal" (30/07/2025 a 30/06/2026) recebidos junto servem só como
+checkpoint de validação depois que as movimentações reais fossem lançadas — ver seção seguinte pro
+carregamento completo e a validação final.
+
+## Carga de movimentações reais (Fazenda Teste 1) — mapeamento, dois bugs de saldo por proprietário
+## e por safra de bezerro (migrações 065/066), validação final
+
+Com Saldo Inicial já lançado, o usuário enviou 16 relatórios de movimentação pecuária (Nascimentos,
+Compra, Venda em Pé/Abate, Transferência, Mortes ×4, Consumo/Doação ×2, Mudança de Categoria ×4,
+Desmame ×2) cobrindo 01/07/2025 a 30/06/2026 nas 4 fazendas — ~948 eventos no total, carregados via
+o mesmo padrão de script service-role já estabelecido (bypassa clique-por-clique da UI, nunca
+bypassa trigger nenhuma de negócio). Decisões de processo confirmadas antes de rodar: excluir por
+completo as linhas de Transferência com destino "Santa Sofia" (fazenda fora do grupo rastreado, ~128
+cabeças, preço simbólico); cadastrar `pessoas` (fornecedor/cliente) automaticamente ao encontrar um
+nome novo; carregar tudo de uma vez, com verificação ao final contra os 4 relatórios de "Estoque
+Final Mensal" já recebidos.
+
+**Mapeamento de categorias**: `"Garrote 24 a 36 Meses"` (como aparece em Compra/Venda/Mudança/Morte)
+→ `"Boi 24 a 36 Meses"` (categoria já existente); nomes com grafia/capitalização diferente resolvidos
+case-insensitive contra o catálogo (`SINUELO`→`Sinuelo`, `VACA LEITEIRA`→`Vaca Leiteira`, etc.).
+**"Novilha" sem era especificada** (nunca detalhada nos relatórios-fonte) resolvida **por fazenda**,
+não por peso (a primeira tentativa, por peso do animal, falhou — só era válida pro Saldo Inicial):
+Esmeralda/Betânia/Arrendamento Atílio só têm "Novilha 12 a 24 Meses"; Confinamento tem **dois pools
+distintos da mesma categoria bare "Novilha"** — o nativo "24 a 36 Meses" (120 cab. do Saldo Inicial)
+e um importado "12 a 24 Meses" (1.760 cab. via 7 Transferências de Esmeralda, cuja `categoria_id`
+só pode refletir o que a fazenda de origem realmente tem). Como um único evento de venda só pode
+carregar UM `categoria_id`, vendas de Novilha em Confinamento que excedem o pool nativo são
+**divididas em até 2 linhas de INSERT** (uma por pool, `valor_total` rateado proporcionalmente) —
+`dividirVendaNovilhaConfinamento` no script rastreia o saldo dos dois pools e decide a divisão.
+
+**Ordenação cronológica + por fase, dentro do mesmo dia**: todos os eventos são mesclados numa lista
+só e ordenados por `(data, fase, ordem original)` — `FASE_POR_TIPO`: Nascimento/Compra=0,
+Desmame=1, Transferência=2, Mudança de Categoria=3, Venda/Morte/Consumo=4. Confirmado por evidência
+real (não suposição): Confinamento em 08/08/25 precisa de Transferência antes de Mudança de
+Categoria no mesmo dia (240 cabeças batendo exato); Esmeralda em 27/05/26 precisa de Desmame antes
+de Mudança de Categoria no mesmo dia.
+
+**Mudança de Categoria vs. Desmame — mesmo evento contado duas vezes na fonte**: os relatórios de
+Mudança de Categoria incluem linhas com origem bezerro (ex.: "Bezerro 00 a 08 Meses → Garrote 08 a
+12 Meses") que são os **mesmos eventos** já capturados com mais detalhe (safra) nos relatórios de
+Desmame — confirmado pela batida exata de quantidade/data e pelo subtotal de linhas-bezerro dentro
+de cada Mudança de Categoria bater exatamente com o total de Desmame daquela fazenda (Esmeralda
+1.137=1.137, Betânia 4=4). Essas linhas foram excluídas do carregamento de Mudança de Categoria
+(carregadas só via Desmame) — também exigido por regra de banco (`fn_validar_lote_nascimento_bezerro`:
+bezerro nunca pode ser origem/destino de `MUDANCA_CATEGORIA`).
+
+### Bug 1 — saldo por proprietário não contava Mudança de Categoria/Desmame (migração 065)
+
+A carga falhou duas vezes com "Saldo insuficiente para esse proprietário" em vendas cuja fazenda
+tinha saldo real de sobra. Causa raiz, confirmada lendo o código da função: `fn_saldo_categoria_
+proprietario`/`fn_saldo_categoria_pasto_proprietario` (migração 044/051) nunca contavam `MUDANCA_
+CATEGORIA`/`DESMAME` como entrada (na categoria destino) nem saída (na categoria origem) — diferente
+de `fn_saldo_categoria`/`fn_saldo_categoria_pasto` (saldo da fazenda inteira, sem corte por
+proprietário), que já tratavam isso corretamente desde sempre. Isso quebra **mesmo com um único
+proprietário cadastrado**: assim que uma categoria passa a receber a maior parte do estoque via
+reclassificação (ex.: Confinamento's Garrote 12-24 → Boi 24-36, 14.742 cabeças no ano, contra só
+3.713 de entrada direta via Saldo Inicial), o saldo "visto" pelo proprietário fica sistematicamente
+menor que o saldo real da fazenda, e uma venda dentro do saldo real é bloqueada indevidamente.
+
+Migração 065 corrige as duas funções de saldo pra tratar Mudança de Categoria/Desmame exatamente como
+`fn_saldo_categoria`/`fn_saldo_categoria_pasto` já tratam (só que com o filtro adicional de
+`proprietario_id`), e estende as funções de trajetória de edição/exclusão
+(`fn_delta_para_par_proprietario`/`fn_checar_saldo_proprietario_futuro` e as variantes cruzadas com
+pasto) com um parâmetro novo, `p_categoria_destino_id`, pra considerar o lado "destino" dessas
+movimentações — mudança de assinatura, por isso `drop function` antes de recriar (mesmo princípio já
+usado em migrações anteriores). `MUDANCA_CATEGORIA` também passou a ser validada no saldo por
+proprietário (e na checagem cruzada pasto×proprietário) no momento do INSERT, não só na trajetória —
+antes só a checagem por fazenda inteira cobria esse tipo.
+
+### Bug 2 — Saldo Inicial de bezerro não suporta duas safras de nascimento na mesma categoria (migração 066)
+
+Corrigido o bug 1, a carga voltou a falhar — agora com "Saldo insuficiente no lote de nascimento" num
+Desmame de Esmeralda, mesmo a fazenda tendo bezerros de sobra na categoria. Diagnóstico exato (via
+script que recalcula a conservação de Nascimento−Morte−Desmame por safra, não estimativa manual):
+o rebanho inicial de "Bezerro"/"Bezerra 00 a 08 Meses" da Esmeralda genuinamente contém animais de
+**duas safras de nascimento diferentes** — confirmado pelo usuário: bezerros nascidos um pouco antes
+de 01/07/2025 (fim da safra 24/25) podem, por convenção da estação de monta, já pertencer à safra
+25/26, e desmame precoce (~5 meses) é uma prática real da fazenda, explicando por que Desmames de
+"safra 25/26" já aparecem em dezembro/2025. Mas o Saldo Inicial tinha lançado o total inteiro
+(Bezerro 245, Bezerra 277) como uma única safra (2024), e a constraint `uq_saldo_inicial_por_
+categoria` só permite **uma linha de Saldo Inicial por fazenda+categoria** — não dava pra simplesmente
+inserir uma segunda linha com safra diferente.
+
+Confirmado explicitamente com o usuário (discutido antes de implementar, com mockup aprovado — ver
+`components/fazendas/AreaInicialForm.tsx`-like precedente): a linha de Saldo Inicial continua sendo
+**uma só por categoria, nunca duplicada** — o detalhamento por safra vive numa **tabela filha nova**,
+`saldo_inicial_safras` (`movimentacao_id`, `safra_nascimento_ano_inicio`, `quantidade`), mesmo
+princípio já usado em `lancamento_baixas`/`movimentacao_ajustes` (detalha uma linha-mãe sem
+duplicá-la). A soma das safras precisa ser **exatamente igual** à quantidade total da linha-mãe —
+checado por uma trigger de constraint **adiável** (`deferrable initially deferred`, só valida no fim
+da transação, permitindo apagar-e-reinserir todo o detalhamento de uma vez sem falhar no meio) tanto
+ao mexer em `saldo_inicial_safras` quanto ao editar a `quantidade` da própria linha-mãe depois de já
+ter detalhamento. `fn_saldo_categoria_safra` passa a ler a entrada de `SALDO_INICIAL` do
+detalhamento quando ele existir, em vez da coluna `safra_nascimento_ano_inicio` da própria linha
+(que continua preenchida, com a safra "representativa", só pra satisfazer `fn_validar_lote_
+nascimento_bezerro`, que exige safra não-nula em toda categoria bezerro). **Limitação aceita
+conscientemente**: a trajetória de edição/exclusão (`fn_checar_saldo_lote_futuro`/`fn_delta_para_
+par_lote`) ainda lê só a safra/quantidade da linha-mãe, não o detalhamento — editar/excluir uma
+linha de Saldo Inicial já dividida por safra não tem, por enquanto, a mesma proteção fina de
+trajetória que o resto do sistema tem (Saldo Inicial normalmente não é reeditado depois de
+confirmado; extensão futura se fizer falta na prática).
+
+Split calculado por conservação (nascimento−morte−desmame por safra, minimizando o estoque inicial
+necessário pra nunca ficar negativo em nenhuma data do ano): Bezerro 245 = 226 (safra 25/26) + 19
+(safra 24/25); Bezerra 277 = 260 (safra 25/26) + 17 (safra 24/25).
+
+**UI planejada, ainda não implementada**: mockup aprovado (iterado com o usuário) mostra a coluna de
+safra do Saldo Inicial de categoria bezerro fechada por padrão — a quantidade total digitada cai
+inteira na safra atual automaticamente, sem exigir nenhuma ação; um ícone de lápis (✎) abre um painel
+inline com uma linha só (safra atual = total), que só vira uma divisão de fato quando o usuário edita
+essa linha ou clica "+ Adicionar safra" (a partir daí o acompanhamento automático com o campo
+Quantidade para, e o usuário assume o controle). Cada ano de safra é sempre digitável livremente
+(nunca travado num dropdown fixo), cobrindo o caso raro de bezerro já nascido na safra seguinte perto
+da virada. Implementação em `SaldoInicialPanel.tsx` fica pra uma rodada futura — o detalhamento da
+Esmeralda desta carga foi inserido direto via script, usando a tabela/triggers já prontas.
+
+### Validação final — estoque computado pelo app vs. relatórios de Estoque Final Mensal
+
+Com os dois bugs corrigidos, as ~948 movimentações (949 linhas inseridas, uma a mais pela divisão de
+linha de Novilha em Confinamento) carregaram do zero sem nenhuma falha. Saldo em 30/06/2026 (`fn_
+saldo_categoria` por fazenda+categoria) comparado contra os 4 relatórios "Estoque Final Mensal":
+**Arrendamento Atílio (5.024 cab.) e Confinamento (9.153 cab.) bateram exatos, categoria por
+categoria.** Estância Betânia (3.222 no app vs. 3.175 no relatório, +47) e Estância Esmeralda (8.536
+vs. 8.455, +81) tiveram diferença só em "Garrote 12 a 24 Meses" e na família "Novilha" — todas as
+outras categorias bateram exatas nas duas fazendas. Investigado e confirmado com precisão total: as
+diferenças são **exatamente** as 4 linhas de Transferência pra Santa Sofia excluídas por decisão do
+usuário no início do carregamento (Betânia→Santa Sofia 47 Garrote 12-24; Esmeralda→Santa Sofia 64
+Garrote 12-24 + 12 Novilha 08-12 + 5 Novilha bare = 81) — soma 128 cabeças, o mesmo total de Santa
+Sofia já contabilizado como excluído desde a decisão original. Carga validada como 100% consistente
+com a fonte, sem nenhum erro de transcrição real.
+
+Próximo passo: relatórios financeiros (plano de contas / lançamentos), fase separada ainda não
+iniciada.
+
+## Saldo Inicial por Pasto (migração 067) + wizard de fazenda com etapa de Pastos
+
+Depois de usar o carregamento por pasto "guarda-tudo" (ver seção anterior — todo o rebanho inicial
+de uma fazenda foi lançado num único pasto por falta dessa opção), o usuário perguntou se fazia
+sentido oferecer, no Saldo Inicial, uma opção de declarar categoria+quantidade+peso já por pasto,
+pra quem contratou Controle por Pasto. Confirmado como uma boa ideia — tecnicamente mais simples que
+o caso do bezerro/safra, já que pasto já é uma coluna normal e sempre obrigatória em
+`movimentacoes_rebanho` (não precisa de tabela filha, só relaxar a constraint que limitava a 1 linha
+por categoria).
+
+**Ordem do cadastro de fazenda nova reorganizada primeiro** (pré-requisito pro pasto já existir
+quando o Saldo Inicial abrir): o passo-a-passo guiado de fazenda nova ganhou uma etapa no meio —
+**Área Inicial → Gestão de Áreas (só se o grupo usa Controle por Pasto) → Saldo Inicial** — antes
+ia direto de Área Inicial pro Saldo Inicial, deixando a criação de pasto solta sem ordem garantida.
+`app/fazendas/page.tsx` ganha `wizardEtapa: 'area' | 'pastos'` (ao lado do `fazendaRecemCriadaId` já
+existente): `handleAreaInicialConcluida` avança pra `'pastos'` quando `controlaPasto` está ligado
+(senão finaliza direto, como sempre); a etapa nova reaproveita o `GestaoAreasPanel` já existente
+(nenhuma tela nova), com "Continuar para o Saldo Inicial"/"Pular por enquanto" — mesmo espírito
+opcional já usado no passo de Área Inicial.
+
+**Migração 067**: `uq_saldo_inicial_por_categoria` (só 1 SALDO_INICIAL por fazenda+categoria) passa a
+considerar `pasto_id` também — `unique (fazenda_id, categoria_id, pasto_id) where tipo =
+'SALDO_INICIAL'` — permitindo N linhas legítimas da mesma categoria, uma por pasto.
+`fn_saldo_categoria`/`fn_saldo_categoria_pasto` já somam "total da fazenda = soma dos pastos"
+nativamente, sem precisar de nenhuma outra mudança de função.
+
+**`SaldoInicialPanel.tsx` ganha a aba "Saldo por Pasto`** (ao lado de "Saldo por Categorias", só
+aparece com `controlaPasto` ligado e 2+ pastos na fazenda — com 0/1 pasto não há o que dividir,
+comportamento de sempre) — mockup aprovado antes de implementar (2 rodadas: layout inicial, depois
+"a soma por pasto tem que bater com o total da categoria" reforçado pelo usuário, e um resumo
+colapsável por categoria). Fluxo: primeiro o **pasto** (um `<select>` com `<optgroup>` por módulo,
+igual o mockup), depois **categoria → quantidade → peso (+ safra, se bezerro)** em cards dentro do
+bloco — "+ Adicionar categoria" dentro do bloco, "+ Adicionar pasto" pra declarar outro. Um rodapé
+soma o "Total geral (todos os pastos)" e tem "▸ Ver quantidade e peso médio por categoria"
+(colapsável, fechado por padrão) agregando por nome de categoria com **peso médio ponderado pela
+quantidade** (mesma regra de sempre — nunca a média simples entre pastos).
+
+**A mesma categoria pode legitimamente aparecer em blocos de pasto diferentes** (parte do rebanho
+num pasto, parte noutro) — a aba "Saldo por Categorias" precisou de um ajuste pra não colapsar essa
+divisão sem querer: `carregarLinhas` agora agrupa as linhas existentes por categoria primeiro; se uma
+categoria tem 2+ linhas (uma por pasto), a linha correspondente na tabela "por Categorias" vira um
+**somatório somente-leitura** (`multiPasto: true`, `existingId: null`, sem input nenhum — só texto +
+nota "Dividido entre pastos — edite na aba 'Saldo por Pasto'"), e `executarSalvar` (o save da aba
+"por Categorias") **pula essas linhas por completo** — sem esse pulo, salvar despretensiosamente pela
+aba tradicional criaria uma linha nova fundindo tudo no pasto único selecionado ali em cima,
+duplicando o que já existe por pasto (bug evitado antes de existir, não corrigido depois).
+
+Salvar em "Saldo por Pasto" segue o mesmo princípio de "apaga e reinsere" já usado noutras listas
+filhas do sistema, só que via update-in-place + delete explícito das linhas que saíram (em vez de
+apagar tudo e reinserir): `idsOriginaisPastoRef` guarda os ids que existiam no banco ao carregar; ao
+salvar, cada linha com `existingId` é atualizada, cada linha nova é inserida, e qualquer id antigo que
+não sobrou na lista final (categoria removida do bloco, ou bloco de pasto inteiro removido) é
+apagado explicitamente ao final.
+
+**Fora do escopo desta rodada**: o detalhamento por safra do bezerro (o ✎ que abre um painel pra
+dividir a quantidade entre safras, mockup já aprovado numa rodada anterior) continua **não
+implementado** em nenhuma das duas abas — o campo de safra aqui é o mesmo input simples de sempre
+(um valor só). Fica pra uma extensão futura, combinável com "Saldo por Pasto" (a mesma categoria bezerro
+poderia, em teoria, ter divisão por pasto E por safra ao mesmo tempo — não coberto ainda).
+
+Verificação: `npx tsc --noEmit` limpo depois de cada mudança. Não foi possível testar no navegador
+local nesta rodada (mesma limitação já registrada — o servidor de preview exige login, e a senha não
+deve ser digitada por mim); o usuário confirmou ter rodado a migração 067 com sucesso.
+
+### Ajustes de UX em Gestão de Áreas, encontrados usando dados reais da Esmeralda
+
+Três coisas relatadas pelo usuário depois de abrir a aba com o rebanho e pastos reais carregados:
+
+**"1 pasto sem contorno no mapa" mostrando "Talhão 1"** — não é bug: toda fazenda nova ganha
+automaticamente um par "Geral (Agricultura)"/"Talhão 1" além do módulo/pasto de Pecuária (mesmo
+mecanismo que cria "Módulo 1"/"Pasto 1", desde a Fase 5 do redesign de Fazendas). Como a Estância
+Esmeralda tem 0,00 ha declarados em Agricultura (só a Pecuária foi importada via KML), esse
+"Talhão 1" nunca teve contorno desenhado nem precisa — é o placeholder de Agricultura que a fazenda
+não usa. `pastosSemContorno` (`pastos.filter(p => p.ativo && !p.geometria)`) não distingue por tipo
+de utilização do módulo — comportamento correto, só precisou de explicação.
+
+**Lista de módulos/pastos ganha scroll próprio** — antes, uma lista longa (161-275 pastos reais)
+empurrava o mapa pra fora da tela ao rolar a página inteira. A coluna da lista (`GestaoAreasPanel.tsx`)
+virou `max-h-[560px] overflow-y-auto` (mesma altura do mapa, 560px), com o cabeçalho da tabela
+`sticky top-0` — o mapa fica sempre visível enquanto a lista rola independentemente.
+
+**Clicar num pasto no mapa já destacava a linha correspondente na lista** (mesmo estado
+`pastoSelecionadoMapaId` compartilhado nos dois sentidos desde a Fase D), mas a linha podia estar
+fora da área visível numa lista longa, sem rolar até lá sozinha. Um `useEffect` novo, disparado
+sempre que `pastoSelecionadoMapaId` muda, localiza a linha via `data-pasto-row={p.id}` dentro do
+container de scroll da lista (`listaScrollRef`) e chama `scrollIntoView({ block: 'nearest', behavior:
+'smooth' })` — funciona nos dois sentidos (clicar no mapa rola a lista; clicar na lista, que já
+estava visível por definição, não precisa rolar nada).

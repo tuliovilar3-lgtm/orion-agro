@@ -65,6 +65,13 @@ export default function FazendasPage() {
   const [fazendaSelecionadaId, setFazendaSelecionadaId] = useState<string | null>(null)
   const [abaSelecionada, setAbaSelecionada] = useState<Aba>('saldo')
   const [fazendaRecemCriadaId, setFazendaRecemCriadaId] = useState<string | null>(null)
+  // Ordem do passo-a-passo pra fazenda recém-criada: Área Inicial sempre
+  // primeiro; Pastos só entra no meio se o grupo usa controle por pasto
+  // (senão o único pasto é o "Geral" auto-criado, sem nada pra configurar)
+  // — daí Saldo Inicial. Existe pra garantir que, ao chegar em Saldo
+  // Inicial, os pastos já estejam cadastrados pra quem for usar "Saldo
+  // por Pasto".
+  const [wizardEtapa, setWizardEtapa] = useState<'area' | 'pastos'>('area')
 
   const [tipoPecuariaId, setTipoPecuariaId] = useState<string | null>(null)
   const [tipoAgriculturaId, setTipoAgriculturaId] = useState<string | null>(null)
@@ -184,11 +191,23 @@ export default function FazendasPage() {
       if (eraNova) {
         setFazendaRecemCriadaId(novaId)
         setFazendaSelecionadaId(novaId)
+        setWizardEtapa('area')
       }
     })
   }
 
   function handleAreaInicialConcluida() {
+    // Grupo com controle por pasto ganha o passo de Pastos antes do Saldo
+    // Inicial; sem isso, vai direto pro Saldo Inicial como sempre.
+    if (controlaPasto) {
+      setWizardEtapa('pastos')
+    } else {
+      setFazendaRecemCriadaId(null)
+      setAbaSelecionada('saldo')
+    }
+  }
+
+  function handlePastosConcluido() {
     setFazendaRecemCriadaId(null)
     setAbaSelecionada('saldo')
   }
@@ -298,7 +317,7 @@ export default function FazendasPage() {
         />
       )}
 
-      {fazendaSelecionadaId && fazendaSelecionada && fazendaRecemCriadaId === fazendaSelecionadaId && (
+      {fazendaSelecionadaId && fazendaSelecionada && fazendaRecemCriadaId === fazendaSelecionadaId && wizardEtapa === 'area' && (
         <div className="mt-8 rounded-card border border-border bg-surface p-6">
           <h2 className="text-sm font-semibold text-text-primary">{fazendaSelecionada.nome} cadastrada com sucesso</h2>
           <p className="mt-1 text-sm text-text-secondary">
@@ -315,6 +334,35 @@ export default function FazendasPage() {
           >
             Pular por enquanto
           </button>
+        </div>
+      )}
+
+      {fazendaSelecionadaId && fazendaSelecionada && fazendaRecemCriadaId === fazendaSelecionadaId && wizardEtapa === 'pastos' && controlaPasto && (
+        <div className="mt-8 rounded-card border border-border bg-surface p-6">
+          <h2 className="text-sm font-semibold text-text-primary">Módulos e pastos de {fazendaSelecionada.nome}</h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            Cadastre os pastos dessa fazenda agora — assim, ao declarar o Saldo Inicial do rebanho por pasto, eles já
+            aparecem prontos pra escolher. Pode ser ajustado depois em "Gestão de Áreas".
+          </p>
+          <div className="mt-4">
+            <GestaoAreasPanel fazendaId={fazendaSelecionadaId} />
+          </div>
+          <div className="mt-4 flex items-center gap-4">
+            <button
+              type="button"
+              onClick={handlePastosConcluido}
+              className="rounded-control bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-500-hover"
+            >
+              Continuar para o Saldo Inicial
+            </button>
+            <button
+              type="button"
+              className="text-xs text-text-secondary underline"
+              onClick={handlePastosConcluido}
+            >
+              Pular por enquanto
+            </button>
+          </div>
         </div>
       )}
 
