@@ -4142,3 +4142,47 @@ que `fn_relatorio_lotacao_mensal` (função pré-existente do Relatório de Lota
 entrega) tem custo alto pra períodos muito largos (itera dia a dia); não é bug desta entrega — um
 período realista (1 ano) funcionou normalmente. Dados de teste revertidos ao final (lançamento
 excluído, filtro de período global restaurado pra "Safra atual").
+
+## Sidebar: grupos viram acordeão + Controle de Pasto fundido em Rebanho
+
+Pedido do usuário: a lista de itens da Sidebar cresceu demais com os módulos novos (Financeiro
+sozinho já soma 4 itens) e não cabe mais numa tela sem rolar. Duas mudanças, discutidas como opinião
+técnica antes de implementar (o usuário perguntou "o que acha", confirmou depois de cada resposta):
+
+**Grupo "Controle de Pasto" fundido dentro de "Rebanho"** — os 2 itens (Mudança de Pasto, Rebanho
+por pasto) viraram parte do array de itens de `Rebanho` em `GROUPS` (`components/Sidebar.tsx`), logo
+depois de "Relatório de Lotação". Puramente reorganização visual: os `ModuloId` (`mudanca_pasto`/
+`rebanho_por_pasto`) continuam entradas próprias e independentes do catálogo — a separação por
+módulo que sustenta o modelo de permissão por perfil (documentado em "Controle de Pasto (módulo
+separado)" acima, pensada pra liberar só esse módulo pra um perfil tipo "peão de campo") não muda em
+nada, só o agrupamento visual na Sidebar. `GROUPS` cai de 4 pra 3 grupos (Gerenciamento, Rebanho,
+Financeiro).
+
+**Cada grupo vira um acordeão recolhível** — cabeçalho do grupo (antes só um `<div>` de rótulo) virou
+um `<button>` com um chevron (`ChevronGrupo`, gira 180° via `rotate-180` quando aberto) que alterna
+`gruposAbertos[group.label]` (`Record<string, boolean>`, estado local de `NavLinks`). Estado
+persistido em `localStorage` (`orion.sidebarGruposAbertos`), mesmo princípio já usado pro collapse
+geral da sidebar (`orion.sidebarColapsada`) — carregado só depois de montar, pra evitar mismatch de
+hidratação. **Grupo da página ativa sempre aberto**: um `useEffect` separado (dependências
+`[pathname, carregado]`) garante que o grupo contendo `pathname` esteja marcado `true` sempre que a
+rota muda, sem sobrescrever outros grupos que o usuário já tenha aberto manualmente — só nunca força
+um grupo a *fechar*. Isso significa que fechar manualmente o grupo da página em que você já está
+persiste (a rota não mudou, o efeito não dispara de novo), mas navegar para outra página desse mesmo
+grupo (ou um F5, que remonta o componente e reaplica a regra de "abre o grupo ativo" no mount) volta
+a mostrá-lo aberto — decisão aceita conscientemente: a página em que você está sempre precisa
+aparecer visível no menu.
+
+**Modo colapsado (sidebar em ícones, `w-16`) ignora o acordeão por completo** — `aberto = collapsed
+|| !!gruposAbertos[group.label]`, e o cabeçalho clicável nem renderiza quando `collapsed` (não há
+espaço pra rótulo nem cabeçalho ali, e a lista de ícones já é compacta o bastante sozinha). Duas
+instâncias de `NavLinks` existem hoje (drawer mobile + aside desktop, mesmo padrão de sempre) — cada
+uma mantém seu próprio estado de acordeão, ambas lendo/escrevendo a mesma chave de `localStorage`
+(nunca fica ao vivo sincronizado entre as duas ao mesmo tempo, mas isso não importa na prática já que
+só uma delas fica visível por vez, conforme o breakpoint).
+
+Verificado no navegador: os 3 grupos aparecem recolhidos por padrão ao abrir o Painel (nenhuma rota
+ativa em nenhum grupo); clicar em "Rebanho" expande os 7 itens (incluindo os 2 que vieram de Controle
+de Pasto); navegar direto pra `/controle-pasto` mostra "Rebanho" já aberto sozinho (auto-abertura da
+página ativa, sobrevivendo a um reload); recolher o menu geral (ícone-only) continua mostrando todos
+os itens de todos os grupos normalmente, sem nenhum acordeão; o mesmo comportamento (grupo ativo
+aberto, chevron correto) se repete no drawer mobile. `npx tsc --noEmit` limpo.

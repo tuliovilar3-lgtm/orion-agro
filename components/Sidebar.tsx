@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
@@ -66,11 +66,6 @@ const GROUPS: NavGroup[] = [
         icon: ICONS.lotacao,
         modulo: 'relatorio_lotacao',
       },
-    ],
-  },
-  {
-    label: 'Controle de Pasto',
-    items: [
       { label: 'Mudança de Pasto', href: '/controle-pasto', icon: ICONS.controlePasto, modulo: 'mudanca_pasto' },
       {
         label: 'Rebanho por pasto',
@@ -117,6 +112,31 @@ const MODULOS_LINK: NavItem = { label: 'Módulos', href: '/modulos', icon: ICONS
 
 const PLACEHOLDERS: NavItem[] = [{ label: 'Configurações', href: '#', icon: ICONS.configuracoes }]
 
+const GRUPOS_ABERTOS_STORAGE_KEY = 'orion.sidebarGruposAbertos'
+
+function grupoDoPathname(pathname: string): string | null {
+  const grupo = GROUPS.find((g) => g.items.some((item) => item.href === pathname))
+  return grupo?.label ?? null
+}
+
+function ChevronGrupo({ aberto }: { aberto: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.25}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`shrink-0 transition-transform duration-150 ${aberto ? 'rotate-180' : ''}`}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
 function NavLinks({
   pathname,
   onNavigate,
@@ -128,6 +148,47 @@ function NavLinks({
 }) {
   const { usuarioApp, isDono, podeAcessar, signOut } = useAuth()
   const [alterarSenhaAberto, setAlterarSenhaAberto] = useState(false)
+
+  // acordeão por grupo — recolhido por padrão, exceto o grupo da página
+  // ativa; estado persistido em localStorage (mesmo padrão já usado pro
+  // collapse geral da sidebar). Carregado só depois de montar (evita
+  // mismatch de hidratação) e sempre garante que o grupo ativo esteja
+  // aberto, mesmo se o usuário chegou nessa página por um link fora da
+  // sidebar (sem sobrescrever grupos que o usuário já abriu à mão).
+  const [gruposAbertos, setGruposAbertos] = useState<Record<string, boolean>>({})
+  const [carregado, setCarregado] = useState(false)
+
+  useEffect(() => {
+    let salvo: Record<string, boolean> = {}
+    try {
+      const raw = localStorage.getItem(GRUPOS_ABERTOS_STORAGE_KEY)
+      if (raw) salvo = JSON.parse(raw)
+    } catch {}
+    const grupoAtivo = grupoDoPathname(pathname)
+    if (grupoAtivo && !salvo[grupoAtivo]) salvo = { ...salvo, [grupoAtivo]: true }
+    setGruposAbertos(salvo)
+    setCarregado(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!carregado) return
+    const grupoAtivo = grupoDoPathname(pathname)
+    if (grupoAtivo) {
+      setGruposAbertos((prev) => (prev[grupoAtivo] ? prev : { ...prev, [grupoAtivo]: true }))
+    }
+  }, [pathname, carregado])
+
+  useEffect(() => {
+    if (!carregado) return
+    try {
+      localStorage.setItem(GRUPOS_ABERTOS_STORAGE_KEY, JSON.stringify(gruposAbertos))
+    } catch {}
+  }, [gruposAbertos, carregado])
+
+  function alternarGrupo(label: string) {
+    setGruposAbertos((prev) => ({ ...prev, [label]: !prev[label] }))
+  }
 
   // grupos filtrados pelos módulos liberados pro usuário logado — dono
   // vê tudo (podeAcessar sempre true pra ele); grupo some inteiro se
@@ -155,36 +216,47 @@ function NavLinks({
         </Link>
       </div>
 
-      {gruposVisiveis.map((group) => (
-        <div key={group.label}>
-          {!collapsed && (
-            <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">
-              {group.label}
-            </div>
-          )}
-          <div className="flex flex-col gap-0.5">
-            {group.items.map((item) => {
-              const active = pathname === item.href
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={onNavigate}
-                  title={collapsed ? item.label : undefined}
-                  className={`flex items-center gap-2.5 rounded-r-control border-l-[3px] px-2.5 py-2 text-[13px] font-medium transition-colors ${
-                    active
-                      ? 'border-brand-500 bg-white/8 text-white font-semibold'
-                      : 'border-transparent text-white/70 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  {item.icon}
-                  {!collapsed && item.label}
-                </Link>
-              )
-            })}
+      {gruposVisiveis.map((group) => {
+        const aberto = collapsed || !!gruposAbertos[group.label]
+        return (
+          <div key={group.label}>
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={() => alternarGrupo(group.label)}
+                className="flex w-full items-center justify-between px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40 hover:text-white/70"
+                aria-expanded={aberto}
+              >
+                {group.label}
+                <ChevronGrupo aberto={aberto} />
+              </button>
+            )}
+            {aberto && (
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((item) => {
+                  const active = pathname === item.href
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={onNavigate}
+                      title={collapsed ? item.label : undefined}
+                      className={`flex items-center gap-2.5 rounded-r-control border-l-[3px] px-2.5 py-2 text-[13px] font-medium transition-colors ${
+                        active
+                          ? 'border-brand-500 bg-white/8 text-white font-semibold'
+                          : 'border-transparent text-white/70 hover:bg-white/5 hover:text-white'
+                      }`}
+                    >
+                      {item.icon}
+                      {!collapsed && item.label}
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        )
+      })}
 
       {isDono && (
         <div>
