@@ -117,6 +117,13 @@ export default function DetalhePastoModal({
                   <div className="text-xs text-text-muted">
                     peso médio {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}
                   </div>
+                  {/* nome do dono discreto, só quando a conta tem 2+ proprietários — ver
+                      "Selos do Rebanho: nome do proprietário junto ao lote" no CLAUDE.md */}
+                  {c.porProprietario && c.porProprietario.length > 0 && (
+                    <div className="truncate text-[11px] text-text-secondary">
+                      {c.porProprietario.map((pp) => `${pp.nome} (${formatQuantidade(pp.quantidade)})`).join(' · ')}
+                    </div>
+                  )}
                 </div>
                 <div className="shrink-0 text-sm font-semibold tabular-nums text-text-primary">
                   {formatQuantidade(c.quantidade)} cab.

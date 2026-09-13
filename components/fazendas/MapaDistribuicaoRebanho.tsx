@@ -8,7 +8,7 @@ import 'leaflet/dist/leaflet.css'
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon'
 import type { Geometry, Polygon, MultiPolygon } from 'geojson'
 import { ICONE_SRC, type CodigoIconeCategoria } from '@/lib/categoria-icones'
-import { agruparMarcadoresPasto, type MarcadorMapa } from '@/lib/distribuicao-pasto'
+import type { ProprietarioQuantidade } from '@/lib/distribuicao-pasto'
 import { formatQuantidade, formatPeso, formatArea, formatLotacao } from '@/lib/format'
 import { useTelaCheia, ControleTelaCheia, InvalidarTamanho } from '@/components/fazendas/MapaTelaCheia'
 
@@ -21,6 +21,9 @@ export type CategoriaDistribuicao = {
   nome: string
   quantidade: number
   pesoMedio: number | null
+  // só presente quando a conta tem 2+ proprietários cadastrados — decomposição do lote por dono
+  // (inclui "Sem proprietário" quando sobra quantidade não atribuída a nenhum deles)
+  porProprietario?: ProprietarioQuantidade[]
 }
 
 export type PastoDistribuicao = {
@@ -80,27 +83,25 @@ function posicoesIcones(geometria: Geometry, quantidade: number): [number, numbe
   return posicoes
 }
 
-// selo = pino + foto da categoria numa bola branca + contagem total no
-// canto — mesmo desenho aprovado no mockup "Selos do Rebanho" (ver
-// CLAUDE.md). Quando o marcador é combinado (vaca + bezerro/a), a cria
-// entra na MESMA bola, em proporção realista e na frente da mãe, com um
-// contorno branco estreito (drop-shadow seguindo a transparência do PNG)
-// pra não se misturar com a cor da mãe atrás.
+// selo = pino + foto da categoria numa bola branca + contagem no canto —
+// mesmo desenho aprovado no mockup "Selos do Rebanho" (ver CLAUDE.md). Cada
+// categoria (já deduplicada por ícone em montarDistribuicaoPorPasto) ganha
+// seu próprio selo — vaca e bezerro/a aparecem em selos separados (decisão
+// revista depois de usar o combo na prática: menos poluição visual do que
+// parecia, e fica muito mais simples de casar com a decomposição por
+// proprietário, que agora pode aparecer por categoria sem precisar somar
+// mãe+cria primeiro).
 const SELO_LARGURA = 56
 const SELO_ALTURA = 70
 
-function seloIcone(marcador: MarcadorMapa) {
-  const criaHtml = marcador.criaCodigo
-    ? `<img src="${ICONE_SRC[marcador.criaCodigo]}" style="position:absolute;top:36%;left:-6%;width:64%;height:64%;object-fit:contain;z-index:3;filter:drop-shadow(0.6px 0 0 #fff) drop-shadow(-0.6px 0 0 #fff) drop-shadow(0 0.6px 0 #fff) drop-shadow(0 -0.6px 0 #fff);" />`
-    : ''
+function seloIcone(categoria: CategoriaDistribuicao) {
   const html = `
     <div style="position:relative;width:${SELO_LARGURA}px;height:${SELO_ALTURA}px;">
       <div style="position:absolute;top:0;left:0;width:${SELO_LARGURA}px;height:${SELO_LARGURA}px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:var(--color-brand-900);box-shadow:0 3px 8px rgba(0,0,0,.4);"></div>
       <div style="position:absolute;top:6px;left:6px;width:44px;height:44px;border-radius:50%;overflow:hidden;background:#fff;border:2px solid rgba(255,255,255,.9);">
-        <img src="${ICONE_SRC[marcador.codigo]}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2;" />
-        ${criaHtml}
+        <img src="${ICONE_SRC[categoria.codigo]}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2;" />
       </div>
-      <div style="position:absolute;top:-5px;right:-5px;min-width:23px;height:23px;padding:0 5px;border-radius:999px;background:var(--color-brand-500);color:#fff;font-weight:800;font-size:11.5px;line-height:1;font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3);">${marcador.quantidade}</div>
+      <div style="position:absolute;top:-5px;right:-5px;min-width:23px;height:23px;padding:0 5px;border-radius:999px;background:var(--color-brand-500);color:#fff;font-weight:800;font-size:11.5px;line-height:1;font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3);">${categoria.quantidade}</div>
     </div>
   `
   return L.divIcon({
@@ -229,13 +230,12 @@ export default function MapaDistribuicaoRebanho({
           )
         })}
         {pastosComGeometria.flatMap((p) => {
-          const marcadores = agruparMarcadoresPasto(p.categorias)
-          const posicoes = posicoesIcones(p.geometria as Geometry, marcadores.length)
-          return marcadores.map((m, i) => (
+          const posicoes = posicoesIcones(p.geometria as Geometry, p.categorias.length)
+          return p.categorias.map((c, i) => (
             <Marker
-              key={`${p.id}-${m.codigo}-${i}`}
+              key={`${p.id}-${c.codigo}-${i}`}
               position={posicoes[i] ?? posicoes[0]}
-              icon={seloIcone(m)}
+              icon={seloIcone(c)}
               draggable={permitirArrastar}
               eventHandlers={{
                 click: () => {
@@ -247,10 +247,17 @@ export default function MapaDistribuicaoRebanho({
             >
               <Tooltip direction="top">
                 <div>
-                  <div className="font-semibold">{m.nome}</div>
+                  <div className="font-semibold">{c.nome}</div>
                   <div>
-                    {formatQuantidade(m.quantidade)} cab. · peso médio {formatPeso(m.pesoMedio)} kg
+                    {formatQuantidade(c.quantidade)} cab. · peso médio {formatPeso(c.pesoMedio)} kg
                   </div>
+                  {/* nome do dono discreto, só quando a conta tem 2+ proprietários — ver
+                      "Selos do Rebanho: nome do proprietário junto ao lote" no CLAUDE.md */}
+                  {c.porProprietario && c.porProprietario.length > 0 && (
+                    <div className="mt-0.5 text-[11px] text-text-secondary">
+                      {c.porProprietario.map((pp) => `${pp.nome} (${formatQuantidade(pp.quantidade)})`).join(' · ')}
+                    </div>
+                  )}
                 </div>
               </Tooltip>
             </Marker>

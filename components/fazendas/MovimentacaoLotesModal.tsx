@@ -18,6 +18,7 @@ type Pasto = { id: string; modulo_id: string; nome: string; ativo: boolean; modu
 type Proprietario = { id: string; nome: string }
 
 type LinhaLote = {
+  chave: string // categoriaId + proprietarioId — categoria sozinha não é mais única quando dividida
   categoriaId: string
   categoriaNome: string
   quantidadeDisponivel: number
@@ -26,6 +27,14 @@ type LinhaLote = {
   pesoNovo: string
   pesoEditavel: boolean
   proprietarioId: string
+  // nome pra exibir na linha quando a categoria está de fato dividida entre 2+ donos nesse
+  // pasto (null = não dividida, não precisa rotular) — "Sem proprietário" quando é o resto não
+  // atribuído a nenhum dono conhecido
+  proprietarioNome: string | null
+  // true só pro "resto sem proprietário" de uma categoria dividida, quando a conta já tem 2+
+  // proprietários cadastrados — precisa de escolha explícita antes de mover (mesmo princípio já
+  // usado nas outras telas pra lote sem dono atribuído)
+  precisaEscolherProprietario: boolean
 }
 
 function IconEditar() {
@@ -81,20 +90,17 @@ export default function MovimentacaoLotesModal({
   const pastosDaFazenda = pastos.filter((p) => p.modulo?.fazenda_id === fazendaId && p.id !== pastoOrigemId)
 
   // mesma regra já usada em Movimentações/Mudança de Pasto/Saldo Inicial: 0 cadastrados bloqueia
-  // o lançamento, 1 é atribuído sozinho sem seletor, 2+ exige escolha por linha
-  const mostrarSeletorProprietario = proprietarios.length > 1
+  // o lançamento, 1 é atribuído sozinho sem seletor. Diferente das outras telas, com 2+
+  // proprietários o dono de cada linha já vem resolvido pelo saldo real do pasto (ver
+  // montarLinhas abaixo) — só precisa de escolha explícita quando sobra um resto sem dono
+  // conhecido (linha.precisaEscolherProprietario).
   const bloqueadoPorSemProprietario = proprietarios.length === 0
-
-  function resolverProprietarioId(escolhidoId: string) {
-    if (proprietarios.length === 1) return proprietarios[0].id
-    return escolhidoId || null
-  }
 
   useEffect(() => {
     let cancelado = false
     async function carregar() {
       setCarregando(true)
-      const [{ data: mods }, { data: pst }, { data: prop }, { data: linhasRaw }] = await Promise.all([
+      const [{ data: mods }, { data: pst }, { data: prop }] = await Promise.all([
         supabase.from('modulos').select('id, fazenda_id, nome, ativo, ordem').eq('ativo', true).order('ordem'),
         supabase
           .from('pastos')
@@ -102,30 +108,77 @@ export default function MovimentacaoLotesModal({
           .eq('ativo', true)
           .order('nome'),
         supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
-        supabase.rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fazendaId, p_data: hoje }),
       ])
       if (cancelado) return
+      const proprietariosCarregados: Proprietario[] = ((prop || []) as any[])
+        .map((r) => r.pessoa)
+        .filter(Boolean)
+        .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
       setModulos(mods || [])
       setPastos((pst as unknown as Pasto[]) || [])
-      setProprietarios(
-        ((prop || []) as any[])
-          .map((r) => r.pessoa)
-          .filter(Boolean)
-          .sort((a: Proprietario, b: Proprietario) => a.nome.localeCompare(b.nome))
+      setProprietarios(proprietariosCarregados)
+
+      // saldo total (sem filtro) + saldo de cada proprietário conhecido, pra descobrir se
+      // alguma categoria desse pasto está de fato dividida entre donos diferentes — ver
+      // "Selos do Rebanho — Fase 3: divisão por proprietário" no CLAUDE.md
+      const [totalResp, ...porProprietarioResps] = await Promise.all([
+        supabase.rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fazendaId, p_data: hoje }),
+        ...proprietariosCarregados.map((p) =>
+          supabase.rpc('fn_relatorio_rebanho_por_pasto', {
+            p_fazenda_id: fazendaId,
+            p_data: hoje,
+            p_proprietario_ids: [p.id],
+          })
+        ),
+      ])
+      if (cancelado) return
+
+      const linhasTotais = ((totalResp.data || []) as any[]).filter((l) => l.pasto_id === pastoOrigemId)
+      const porProprietario = porProprietarioResps.map((r) =>
+        ((r.data || []) as any[]).filter((l) => l.pasto_id === pastoOrigemId)
       )
-      const linhasPasto = ((linhasRaw || []) as any[]).filter((l) => l.pasto_id === pastoOrigemId)
-      setLinhas(
-        linhasPasto.map((l) => ({
-          categoriaId: l.categoria_id,
-          categoriaNome: l.categoria_nome,
-          quantidadeDisponivel: l.quantidade,
-          quantidade: String(l.quantidade),
-          pesoAtual: l.peso_medio_kg,
-          pesoNovo: '',
-          pesoEditavel: false,
-          proprietarioId: '',
-        }))
-      )
+
+      const linhasMontadas: LinhaLote[] = []
+      for (const l of linhasTotais) {
+        type Bucket = { proprietarioId: string; proprietarioNome: string | null; quantidade: number }
+        const buckets: Bucket[] = []
+
+        if (proprietariosCarregados.length <= 1) {
+          // 0 ou 1 proprietário cadastrado — nunca há o que dividir, mesmo comportamento de
+          // sempre (0 bloqueia o avançar via bloqueadoPorSemProprietario, 1 é atribuído sozinho)
+          buckets.push({ proprietarioId: proprietariosCarregados[0]?.id ?? '', proprietarioNome: null, quantidade: l.quantidade })
+        } else {
+          let restante = l.quantidade
+          proprietariosCarregados.forEach((p, i) => {
+            const qtd = porProprietario[i].find((x) => x.categoria_id === l.categoria_id)?.quantidade ?? 0
+            if (qtd > 0) {
+              buckets.push({ proprietarioId: p.id, proprietarioNome: p.nome, quantidade: qtd })
+              restante -= qtd
+            }
+          })
+          if (restante > 0) {
+            buckets.push({ proprietarioId: '', proprietarioNome: 'Sem proprietário', quantidade: restante })
+          }
+        }
+
+        const dividida = buckets.length > 1
+        for (const b of buckets) {
+          linhasMontadas.push({
+            chave: `${l.categoria_id}::${b.proprietarioId || 'sem'}`,
+            categoriaId: l.categoria_id,
+            categoriaNome: l.categoria_nome,
+            quantidadeDisponivel: b.quantidade,
+            quantidade: String(b.quantidade),
+            pesoAtual: l.peso_medio_kg,
+            pesoNovo: '',
+            pesoEditavel: false,
+            proprietarioId: b.proprietarioId,
+            proprietarioNome: dividida ? b.proprietarioNome : null,
+            precisaEscolherProprietario: dividida && b.proprietarioId === '',
+          })
+        }
+      }
+      setLinhas(linhasMontadas)
       setCarregando(false)
     }
     carregar()
@@ -135,12 +188,12 @@ export default function MovimentacaoLotesModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId, pastoOrigemId])
 
-  function atualizarLinha(categoriaId: string, patch: Partial<LinhaLote>) {
-    setLinhas((prev) => prev.map((l) => (l.categoriaId === categoriaId ? { ...l, ...patch } : l)))
+  function atualizarLinha(chave: string, patch: Partial<LinhaLote>) {
+    setLinhas((prev) => prev.map((l) => (l.chave === chave ? { ...l, ...patch } : l)))
   }
 
-  function removerLinha(categoriaId: string) {
-    setLinhas((prev) => prev.filter((l) => l.categoriaId !== categoriaId))
+  function removerLinha(chave: string) {
+    setLinhas((prev) => prev.filter((l) => l.chave !== chave))
   }
 
   async function handleAvancar() {
@@ -170,8 +223,8 @@ export default function MovimentacaoLotesModal({
         }
       }
     }
-    if (mostrarSeletorProprietario && linhas.some((l) => !l.proprietarioId)) {
-      setErro('Selecione o proprietário em todas as categorias.')
+    if (linhas.some((l) => l.precisaEscolherProprietario && !l.proprietarioId)) {
+      setErro('Selecione o proprietário nas categorias marcadas com "Sem proprietário".')
       return
     }
 
@@ -201,7 +254,7 @@ export default function MovimentacaoLotesModal({
       subtipo_consumo_doacao: null,
       pasto_id: pastoOrigemId,
       pasto_destino_id: pastoDestinoId,
-      proprietario_id: resolverProprietarioId(l.proprietarioId),
+      proprietario_id: l.proprietarioId || null,
       observacao: null,
       grupo_lancamento_id: grupoId,
     }))
@@ -347,13 +400,20 @@ export default function MovimentacaoLotesModal({
               ) : (
                 <div className="space-y-2">
                   {linhas.map((l) => (
-                    <div key={l.categoriaId} className="rounded-control border border-border p-3">
+                    <div key={l.chave} className="rounded-control border border-border p-3">
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <span className="font-medium text-text-primary">{l.categoriaNome}</span>
+                        <span className="font-medium text-text-primary">
+                          {l.categoriaNome}
+                          {/* só rotula com o dono quando a categoria está de fato dividida nesse
+                              pasto — no caso comum (1 dono só) fica idêntico a antes */}
+                          {l.proprietarioNome && (
+                            <span className="font-normal text-text-secondary"> — {l.proprietarioNome}</span>
+                          )}
+                        </span>
                         <button
                           type="button"
                           className="shrink-0 text-xs text-error underline"
-                          onClick={() => removerLinha(l.categoriaId)}
+                          onClick={() => removerLinha(l.chave)}
                         >
                           Remover
                         </button>
@@ -374,7 +434,7 @@ export default function MovimentacaoLotesModal({
                                 step="1"
                                 className="w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500"
                                 value={l.quantidade}
-                                onChange={(e) => atualizarLinha(l.categoriaId, { quantidade: e.target.value })}
+                                onChange={(e) => atualizarLinha(l.chave, { quantidade: e.target.value })}
                               />
                               <p className="mt-1 text-xs text-text-secondary">
                                 Disponível: {formatQuantidade(l.quantidadeDisponivel)}
@@ -393,9 +453,9 @@ export default function MovimentacaoLotesModal({
                               autoFocus
                               className="w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500"
                               value={l.pesoNovo}
-                              onChange={(e) => atualizarLinha(l.categoriaId, { pesoNovo: e.target.value })}
+                              onChange={(e) => atualizarLinha(l.chave, { pesoNovo: e.target.value })}
                               onBlur={() => {
-                                if (!l.pesoNovo) atualizarLinha(l.categoriaId, { pesoEditavel: false })
+                                if (!l.pesoNovo) atualizarLinha(l.chave, { pesoEditavel: false })
                               }}
                             />
                           ) : (
@@ -405,7 +465,7 @@ export default function MovimentacaoLotesModal({
                               </span>
                               <button
                                 type="button"
-                                onClick={() => atualizarLinha(l.categoriaId, { pesoEditavel: true })}
+                                onClick={() => atualizarLinha(l.chave, { pesoEditavel: true })}
                                 className="shrink-0 text-text-secondary hover:text-brand-500"
                                 title="Editar peso"
                               >
@@ -415,7 +475,7 @@ export default function MovimentacaoLotesModal({
                           )}
                         </div>
 
-                        {mostrarSeletorProprietario && (
+                        {l.precisaEscolherProprietario && (
                           <div>
                             <label className="mb-1 block text-xs text-text-secondary">
                               Proprietário
@@ -424,7 +484,7 @@ export default function MovimentacaoLotesModal({
                             <select
                               className="w-full rounded-control border border-border bg-surface px-2 py-1.5 text-sm text-text-primary outline-none focus:border-brand-500"
                               value={l.proprietarioId}
-                              onChange={(e) => atualizarLinha(l.categoriaId, { proprietarioId: e.target.value })}
+                              onChange={(e) => atualizarLinha(l.chave, { proprietarioId: e.target.value })}
                             >
                               <option value="">Selecione...</option>
                               {proprietarios.map((p) => (

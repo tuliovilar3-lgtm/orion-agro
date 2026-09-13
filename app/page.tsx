@@ -25,6 +25,7 @@ import {
   type CategoriaAnimalInfo,
   type LinhaPastoRaw,
   type PastoBaseInfo,
+  type ProprietarioLinhas,
 } from '@/lib/distribuicao-pasto'
 
 // leaflet acessa `window` na importação — precisa ficar fora do SSR
@@ -225,22 +226,43 @@ function PainelDashboard() {
     }
     setLoadingMapa(true)
 
-    const [pastosResp, modulosResp, fazendasResp, categoriasResp, resultadosPorFazenda] = await Promise.all([
-      supabase
-        .from('pastos')
-        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id, nome)')
-        .eq('ativo', true),
-      supabase.from('modulos').select('id, fazenda_id, ordem'),
-      supabase.from('fazendas').select('id, nome, geometria').in('id', fazendaIds),
-      supabase.from('categorias_animal').select('id, sexo, era, papel:grupos_categoria_papel(nome)'),
-      Promise.all(
-        fazendaIds.map((fId) =>
-          supabase
-            .rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fId, p_data: hoje })
-            .then((r) => (r.data as LinhaPastoRaw[]) || [])
-        )
-      ),
-    ])
+    const [pastosResp, modulosResp, fazendasResp, categoriasResp, resultadosPorFazenda, resultadosPorProprietario] =
+      await Promise.all([
+        supabase
+          .from('pastos')
+          .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id, nome)')
+          .eq('ativo', true),
+        supabase.from('modulos').select('id, fazenda_id, ordem'),
+        supabase.from('fazendas').select('id, nome, geometria').in('id', fazendaIds),
+        supabase.from('categorias_animal').select('id, sexo, era, papel:grupos_categoria_papel(nome)'),
+        Promise.all(
+          fazendaIds.map((fId) =>
+            supabase
+              .rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fId, p_data: hoje })
+              .then((r) => (r.data as LinhaPastoRaw[]) || [])
+          )
+        ),
+        // só busca a decomposição por dono quando há de fato 2+ proprietários — com 0 ou 1
+        // nunca há o que distinguir, e evita multiplicar as chamadas à toa (ver "Selos do
+        // Rebanho: nome do proprietário junto ao lote" no CLAUDE.md)
+        proprietarios.length > 1
+          ? Promise.all(
+              proprietarios.map((prop) =>
+                Promise.all(
+                  fazendaIds.map((fId) =>
+                    supabase
+                      .rpc('fn_relatorio_rebanho_por_pasto', {
+                        p_fazenda_id: fId,
+                        p_data: hoje,
+                        p_proprietario_ids: [prop.id],
+                      })
+                      .then((r) => (r.data as LinhaPastoRaw[]) || [])
+                  )
+                ).then((porFazenda) => ({ id: prop.id, nome: prop.nome, linhas: porFazenda.flat() }) as ProprietarioLinhas)
+              )
+            )
+          : Promise.resolve([] as ProprietarioLinhas[]),
+      ])
 
     const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
     // mesma regra de cor automática de GestaoAreasPanel — pasto sem cor
@@ -271,7 +293,14 @@ function PainelDashboard() {
     }
 
     const linhas = resultadosPorFazenda.flat()
-    setPastosDistribuicao(montarDistribuicaoPorPasto(linhas, pastosBase, categoriasInfo))
+    setPastosDistribuicao(
+      montarDistribuicaoPorPasto(
+        linhas,
+        pastosBase,
+        categoriasInfo,
+        resultadosPorProprietario.length > 1 ? resultadosPorProprietario : undefined
+      )
+    )
     setFazendasGeometriaMapa(
       (fazendasResp.data || []).map((f: any) => f.geometria).filter((g: Geometry | null): g is Geometry => !!g)
     )
@@ -288,7 +317,7 @@ function PainelDashboard() {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlaPasto, fazendaIds])
+  }, [controlaPasto, fazendaIds, proprietarios])
 
   const totalCabecas = resumo.reduce((s, r) => s + r.quantidade, 0)
   const pesoMedioGeral = mediaPonderada(resumo.map((r) => ({ valor: r.peso_medio_kg, peso: r.quantidade })))
@@ -754,6 +783,12 @@ function DetalhePastoDistribuicao({ pasto }: { pasto: PastoDistribuicao | null }
               <div className="min-w-0 flex-1">
                 <div className="truncate text-text-primary">{c.nome}</div>
                 <div className="text-xs text-text-muted">peso médio {c.pesoMedio != null ? `${formatPeso(c.pesoMedio)} kg` : '—'}</div>
+                {/* nome do dono discreto, só quando a conta tem 2+ proprietários */}
+                {c.porProprietario && c.porProprietario.length > 0 && (
+                  <div className="truncate text-[11px] text-text-secondary">
+                    {c.porProprietario.map((pp) => `${pp.nome} (${formatQuantidade(pp.quantidade)})`).join(' · ')}
+                  </div>
+                )}
               </div>
               <div className="shrink-0 font-semibold tabular-nums text-text-primary">
                 {formatQuantidade(c.quantidade)} cab.

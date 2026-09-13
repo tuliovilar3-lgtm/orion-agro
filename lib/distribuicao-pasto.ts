@@ -8,63 +8,6 @@ import { iconeParaCategoria, type CodigoIconeCategoria } from '@/lib/categoria-i
 import { corCategorica } from '@/lib/relatorio-cores'
 import type { CategoriaDistribuicao, PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
 
-// um marcador é o que de fato vira um selo no mapa — normalmente 1:1 com
-// uma categoria (`CategoriaDistribuicao`), mas quando o pasto tem fêmea em
-// reprodução ("VACA") e bezerro/a em lactação juntos, os dois se combinam
-// num selo só (ver "Selos do Rebanho" no CLAUDE.md): o selo mostra a foto
-// da mãe com a cria por cima, e a contagem soma mãe + cria. `criaCodigo`
-// escolhe BEZERRO ou BEZERRA pela maior quantidade quando o pasto tem os
-// dois sexos de bezerro ao mesmo tempo — o total já soma os dois, só o
-// ícone de exibição precisa escolher um.
-export type MarcadorMapa = {
-  codigo: CodigoIconeCategoria
-  criaCodigo?: 'BEZERRO' | 'BEZERRA'
-  nome: string
-  quantidade: number
-  pesoMedio: number | null
-}
-
-export function agruparMarcadoresPasto(categorias: CategoriaDistribuicao[]): MarcadorMapa[] {
-  const porCodigo = new Map(categorias.map((c) => [c.codigo, c]))
-  const vaca = porCodigo.get('VACA')
-  const bezerro = porCodigo.get('BEZERRO')
-  const bezerra = porCodigo.get('BEZERRA')
-
-  const marcadores: MarcadorMapa[] = []
-  const usados = new Set<CodigoIconeCategoria>()
-
-  if (vaca && (bezerro || bezerra)) {
-    const criaCodigo: 'BEZERRO' | 'BEZERRA' = !bezerro
-      ? 'BEZERRA'
-      : !bezerra
-        ? 'BEZERRO'
-        : bezerro.quantidade >= bezerra.quantidade
-          ? 'BEZERRO'
-          : 'BEZERRA'
-    const partes = [vaca, bezerro, bezerra].filter((c): c is CategoriaDistribuicao => !!c)
-    const quantidade = partes.reduce((s, c) => s + c.quantidade, 0)
-    const pesoTotal = partes.reduce((s, c) => s + (c.pesoMedio ?? 0) * c.quantidade, 0)
-    const criaNome = (criaCodigo === 'BEZERRO' ? bezerro : bezerra)?.nome ?? ''
-    marcadores.push({
-      codigo: 'VACA',
-      criaCodigo,
-      nome: criaNome ? `${vaca.nome} + ${criaNome}` : vaca.nome,
-      quantidade,
-      pesoMedio: quantidade > 0 ? pesoTotal / quantidade : null,
-    })
-    usados.add('VACA')
-    usados.add('BEZERRO')
-    usados.add('BEZERRA')
-  }
-
-  for (const c of categorias) {
-    if (usados.has(c.codigo)) continue
-    marcadores.push({ codigo: c.codigo, nome: c.nome, quantidade: c.quantidade, pesoMedio: c.pesoMedio })
-  }
-
-  return marcadores
-}
-
 export type LinhaPastoRaw = {
   pasto_id: string
   pasto_nome: string
@@ -85,6 +28,13 @@ export type PastoBaseInfo = {
 }
 
 export type CategoriaAnimalInfo = { papel: string; sexo: 'MACHO' | 'FEMEA'; era: Era }
+
+// saldo de um proprietário específico pro mesmo (pasto, categoria) das linhas "totais" acima —
+// mesma forma de LinhaPastoRaw, um array por proprietário cadastrado (na mesma ordem de
+// `proprietarios`), pra decompor cada lote por dono. Só faz sentido buscar/passar quando a conta
+// tem 2+ proprietários — ver "Selos do Rebanho: nome do proprietário junto ao lote" no CLAUDE.md
+export type ProprietarioLinhas = { id: string; nome: string; linhas: LinhaPastoRaw[] }
+export type ProprietarioQuantidade = { nome: string; quantidade: number }
 
 // mesma regra de cor automática já usada em GestaoAreasPanel (pasto sem
 // cor customizada usa a cor categórica do módulo, pela posição do módulo
@@ -107,10 +57,48 @@ export function corPorModuloId(modulos: { id: string; fazendaId: string; ordem: 
   return resultado
 }
 
+// decompõe a linha (pasto+categoria) por proprietário — array vazio de partes com "Sem
+// proprietário" cobrindo o resto quando nenhum dono conhecido explica a quantidade toda. Só
+// calcula de fato com 2+ proprietários cadastrados (com 0 ou 1 nunca há o que distinguir).
+function decomporProprietarios(
+  l: LinhaPastoRaw,
+  porProprietario: ProprietarioLinhas[] | undefined
+): ProprietarioQuantidade[] | undefined {
+  if (!porProprietario || porProprietario.length < 2) return undefined
+  const partes: ProprietarioQuantidade[] = []
+  let restante = l.quantidade
+  for (const p of porProprietario) {
+    const qtd =
+      p.linhas.find((x) => x.pasto_id === l.pasto_id && x.categoria_id === l.categoria_id)?.quantidade ?? 0
+    if (qtd > 0) {
+      partes.push({ nome: p.nome, quantidade: qtd })
+      restante -= qtd
+    }
+  }
+  if (restante > 0) partes.push({ nome: 'Sem proprietário', quantidade: restante })
+  return partes
+}
+
+// soma duas decomposições por nome — necessário porque 2+ categorias reais (ex.: Garrote 08-12
+// e 12-24 meses) podem cair no mesmo ícone/marcador, cada uma com sua própria decomposição
+function mesclarProprietarios(
+  a: ProprietarioQuantidade[] | undefined,
+  b: ProprietarioQuantidade[] | undefined
+): ProprietarioQuantidade[] | undefined {
+  if (!a) return b
+  if (!b) return a
+  const porNome = new Map(a.map((p) => [p.nome, p.quantidade]))
+  for (const p of b) porNome.set(p.nome, (porNome.get(p.nome) ?? 0) + p.quantidade)
+  return [...porNome.entries()].map(([nome, quantidade]) => ({ nome, quantidade }))
+}
+
 export function montarDistribuicaoPorPasto(
   linhas: LinhaPastoRaw[],
   pastosBase: Map<string, PastoBaseInfo>,
-  categoriasInfo: Map<string, CategoriaAnimalInfo>
+  categoriasInfo: Map<string, CategoriaAnimalInfo>,
+  // só passado quando a conta tem 2+ proprietários — decompõe cada linha (pasto+categoria) por
+  // dono, mesclando no mesmo marcador quando 2+ categorias reais caem no mesmo ícone
+  porProprietario?: ProprietarioLinhas[]
 ): PastoDistribuicao[] {
   const porPasto = new Map<string, PastoDistribuicao>()
 
@@ -154,6 +142,8 @@ export function montarDistribuicaoPorPasto(
       ? iconeParaCategoria(info.papel, info.sexo, info.era)
       : 'BOI' // fallback improvável — categoria sem info carregada ainda
 
+    const decomposicao = decomporProprietarios(l, porProprietario)
+
     const existente = pasto.categorias.find((c) => c.codigo === codigo)
     if (existente) {
       // duas categorias do sistema podem cair no mesmo ícone (ex.: Garrote
@@ -162,12 +152,14 @@ export function montarDistribuicaoPorPasto(
       const pesoTotalNovo = (l.peso_medio_kg ?? 0) * l.quantidade
       existente.quantidade += l.quantidade
       existente.pesoMedio = existente.quantidade ? (pesoTotalAntigo + pesoTotalNovo) / existente.quantidade : null
+      existente.porProprietario = mesclarProprietarios(existente.porProprietario, decomposicao)
     } else {
       const cat: CategoriaDistribuicao = {
         codigo,
         nome: l.categoria_nome,
         quantidade: l.quantidade,
         pesoMedio: l.peso_medio_kg,
+        porProprietario: decomposicao,
       }
       pasto.categorias.push(cat)
     }

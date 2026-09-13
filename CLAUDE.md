@@ -4803,3 +4803,111 @@ do contêiner esperado), então a correção definitiva foi subir o z-index dos 
 independente da causa exata do vazamento residual. Verificado no navegador: os dois modais
 reabertos várias vezes (inclusive após remount completo do mapa) sem nenhum elemento do mapa
 vazando por cima em nenhum teste. `npx tsc --noEmit` limpo.
+
+### Divisão automática por proprietário no `MovimentacaoLotesModal`
+
+Pergunta do usuário depois de ver a Fase 3: "e se uma categoria tiver animais de mais de um
+proprietário no mesmo pasto?" — problema real, específico deste modal novo (a tela cheia de
+Mudança de Pasto já sofre da mesma limitação, mas contorna manualmente adicionando uma segunda
+linha da mesma categoria; o modal do mapa só criava uma linha por categoria, com um único seletor
+de proprietário). Sem correção, mover "todo o lote" de uma categoria dividida atribuindo a um só
+dono seria **rejeitado pela trigger** `fn_validar_saldo_categoria` (via `fn_saldo_categoria_pasto_
+proprietario`, migração 051) — sem risco de dado errado, mas com um erro de saldo confuso e
+nenhuma forma de corrigir dentro do próprio modal.
+
+**Resolvido buscando o saldo real por dono, não só o total** — ao carregar as categorias do pasto
+de origem, o modal agora chama `fn_relatorio_rebanho_por_pasto` uma vez **sem filtro** (total) e
+mais uma vez **por proprietário cadastrado** (`p_proprietario_ids: [id]`), e decompõe cada
+categoria em "baldes" por dono: um balde por proprietário com saldo > 0 naquela categoria+pasto,
+mais um balde "Sem proprietário" com o resto (`total − soma dos baldes conhecidos`), só quando
+esse resto for positivo. Com 0 ou 1 proprietário cadastrado, esse cruzamento é pulado (nunca há o
+que dividir) — comportamento idêntico ao de antes, sem nenhuma chamada extra.
+
+**Cada balde vira sua própria linha no formulário** — quando uma categoria só tem um balde (o caso
+comum, confirmado no navegador sem regressão nenhuma), a linha é idêntica à de antes (sem rótulo de
+dono, já que não há ambiguidade). Quando tem 2+ baldes, cada um vira uma linha rotulada
+("Categoria — Nome do Proprietário" ou "Categoria — Sem proprietário"), com sua própria quantidade/
+peso/remoção independentes — o usuário não precisa saber ou calcular a divisão, ela já vem pronta.
+O balde "Sem proprietário" (quando existe e há 2+ proprietários cadastrados) é o único que ainda
+pede uma escolha explícita antes de avançar — mesmo princípio de "obrigatório quando ambíguo" já
+usado no resto do sistema; os baldes com dono conhecido nunca mostram seletor, porque não haveria
+o que escolher.
+
+`LinhaLote` ganhou uma `chave` própria (`categoriaId::proprietarioId`, já que `categoriaId` sozinho
+deixou de ser único quando uma categoria vira 2+ linhas) — `atualizarLinha`/`removerLinha` passaram
+a operar por essa chave. O payload de gravação não muda: cada linha (balde) já sai com seu
+`proprietario_id` resolvido, sem precisar mais do antigo `resolverProprietarioId` genérico.
+
+Verificado no navegador (Estância Esmeralda, pasto "1C2", único proprietário cadastrado na conta):
+as 7 categorias do pasto renderizaram uma linha cada, sem nenhum rótulo de proprietário — confirma
+que o caminho "sem divisão" (0 ou 1 dono) funciona exatamente como antes desta mudança. **O caminho
+"2+ donos, categoria dividida" não foi exercitado contra dado real** nesta rodada — a conta de
+teste só tem um proprietário cadastrado hoje, e criar um segundo proprietário fictício só para
+testar essa combinação mexeria em cadastro de uma conta real sem necessidade — a lógica foi
+conferida por leitura cuidadosa do código (mesmas funções/regras já usadas e testadas em outras
+partes do sistema, como `fn_saldo_categoria_pasto_proprietario`), mas vale uma conferência quando
+existir uma fazenda com esse cenário de verdade. `npx tsc --noEmit` limpo.
+
+## Selos do Rebanho: combo vaca+bezerro desfeito + nome do proprietário junto ao lote
+
+Duas mudanças relacionadas, pedidas juntas depois de usar a Fase 3 na prática.
+
+**Combo vaca+bezerro/a desfeito, cada categoria volta a ter seu próprio selo** — revisão da
+decisão original da Fase 1 ("Selos do Rebanho... agrupamento vaca+bezerro/a"). O usuário
+reconsiderou depois de ver o mapa em uso: a preocupação original com poluição visual não se
+confirmou tanto quanto esperado, e o combo tinha um custo real — escondia se o total do selo era
+majoritariamente vaca ou cria, e complicava (por exigir somar mãe+cria antes) a decomposição por
+proprietário que motivou a segunda mudança desta rodada. `agruparMarcadoresPasto`/`MarcadorMapa`
+(inteira a lógica de combo — escolha de `criaCodigo` por maioria, overlay da cria com drop-shadow,
+soma de quantidade/peso) foram **removidos** de `lib/distribuicao-pasto.ts`; `MapaDistribuicaoRebanho.tsx`
+volta a desenhar **um selo por categoria** direto de `pasto.categorias` (a mesma lista que
+`DetalhePastoModal`/`DetalhePastoDistribuicao` já usavam sem nunca ter passado pelo combo — só os
+ÍCONES do mapa usavam a versão agrupada). `seloIcone()` simplificou de volta pra só a foto da
+categoria + badge, sem overlay de cria.
+
+**Nome do proprietário aparece discreto junto a cada lote, quando a conta tem 2+ proprietários
+ativos** — pedido do usuário: "fica fácil de identificar qual lote é de quem ou quantos animais do
+lote são de um ou do outro". Como `fn_relatorio_rebanho_por_pasto` (a fonte de todo o mapa) não
+tem esse cruzamento por padrão, a técnica já usada no `MovimentacaoLotesModal` (Fase 3) foi
+generalizada pro mapa inteiro: `montarDistribuicaoPorPasto` (`lib/distribuicao-pasto.ts`) ganha um
+4º parâmetro opcional, `porProprietario?: ProprietarioLinhas[]` — um array paralelo à lista de
+proprietários cadastrados, cada um com seu próprio resultado de `fn_relatorio_rebanho_por_pasto`
+filtrado (`p_proprietario_ids: [id]`). Pra cada linha (pasto+categoria), a nova função
+`decomporProprietarios` calcula quanto pertence a cada dono conhecido e o resto vira "Sem
+proprietário"; `mesclarProprietarios` soma essas decomposições quando 2+ categorias reais caem no
+mesmo ícone (ex.: Garrote 08-12 e 12-24 meses) — o mesmo cuidado que já existia pra
+quantidade/peso, estendido pra essa dimensão nova. `CategoriaDistribuicao` ganha
+`porProprietario?: ProprietarioQuantidade[]`, só presente quando há de fato 2+ proprietários
+cadastrados (com 0 ou 1 nunca há o que decompor, e nada muda — sem custo extra de rede nem visual).
+
+**Onde aparece**: uma linha discreta (`text-[11px] text-text-secondary`) logo abaixo do peso
+médio — no tooltip do selo no mapa, no `DetalhePastoModal` (Fase 2) e no painel lateral
+`DetalhePastoDistribuicao` do Painel — formato `"Nome (N) · Outro Nome (M)"`, sem rótulo extra
+("Proprietário:") pra caber numa linha só. `app/page.tsx` e `app/relatorio-rebanho-por-pasto/
+page.tsx` (os dois lugares que já buscam a distribuição pro mapa) buscam a decomposição só quando
+`proprietarios.length > 1` (lista já disponível via `useFiltroGlobal()` nos dois, sem query nova) —
+uma chamada de `fn_relatorio_rebanho_por_pasto` a mais **por proprietário cadastrado**, em paralelo
+com a chamada "total" já existente. Com 2 proprietários isso triplica as chamadas de saldo por
+pasto pro carregamento do mapa (1 total + 2 por dono) — aceito conscientemente, já que só acontece
+quando a conta realmente tem múltiplos donos, e a UX ganhada (nunca precisar adivinhar de quem é
+o lote) vale o custo.
+
+**Cuidado específico em `app/relatorio-rebanho-por-pasto/page.tsx`**: essa página já filtra o
+próprio mapa pelo checkbox de proprietário da tabela (`linhas` vem de uma chamada de
+`fn_relatorio_rebanho_por_pasto` já filtrada quando o usuário desmarca algum dono). Misturar esse
+total **já filtrado** com uma decomposição **sempre sem filtro** (buscada numa página separada,
+`porProprietarioBreakdown`) produziria uma conta errada — a soma dos baldes por dono passaria do
+total mostrado no próprio selo. Por isso a decomposição só é passada pra `montarDistribuicaoPorPasto`
+quando `todosProprietariosSelecionados` é `true` (nenhum filtro parcial ativo) — com um filtro
+parcial, o selo continua mostrando só o total filtrado, sem o rótulo de dono (que seria redundante
+nesse caso, já que o próprio filtro já reduziu a visão a quem interessa).
+
+Verificado no navegador (Estância Betânia, pasto "01-A1", conta com 1 proprietário cadastrado
+hoje): "Vaca Leiteira" (6 cab.) e "Bezerra 00 a 08 Meses" (5 cab.) aparecem como entradas
+**separadas** no `DetalhePastoModal` e no painel lateral do Painel — confirma que o combo foi
+desfeito. Nenhuma linha de proprietário apareceu em lugar nenhum (esperado — só há um dono
+cadastrado hoje, `porProprietario` fica `undefined` nesse caso, sem custo nem UI extra). O caminho
+"2+ donos, decomposição de fato visível" segue com a mesma limitação já registrada na seção
+anterior — não pôde ser testado contra dado real nesta conta, só por leitura do código
+(`decomporProprietarios`/`mesclarProprietarios` reaproveitam a mesma matemática já usada e
+verificada no `MovimentacaoLotesModal`). `npx tsc --noEmit` limpo.

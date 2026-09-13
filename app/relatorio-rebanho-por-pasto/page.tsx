@@ -16,6 +16,7 @@ import {
   type CategoriaAnimalInfo,
   type LinhaPastoRaw,
   type PastoBaseInfo,
+  type ProprietarioLinhas,
 } from '@/lib/distribuicao-pasto'
 
 // leaflet acessa `window` na importação — precisa ficar fora do SSR
@@ -79,6 +80,9 @@ export default function RelatorioRebanhoPorPastoPage() {
 
   const [pastosBase, setPastosBase] = useState<Map<string, PastoBaseInfo>>(new Map())
   const [categoriasInfo, setCategoriasInfo] = useState<Map<string, CategoriaAnimalInfo>>(new Map())
+  // decomposição por dono pro mapa/detalhe — sempre a fotografia inteira da fazenda (nunca
+  // respeitando o filtro de proprietário da tabela abaixo), só buscada com 2+ proprietários
+  const [porProprietarioBreakdown, setPorProprietarioBreakdown] = useState<ProprietarioLinhas[]>([])
   const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
   const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
@@ -188,6 +192,29 @@ export default function RelatorioRebanhoPorPastoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId, data, proprietarioIds, todosProprietariosSelecionados])
 
+  // decomposição por dono, independente do filtro da tabela — mesmo princípio já usado no
+  // Painel (ver "Selos do Rebanho: nome do proprietário junto ao lote" no CLAUDE.md)
+  useEffect(() => {
+    let cancelado = false
+    if (!fazendaId || !data || proprietarios.length <= 1) {
+      setPorProprietarioBreakdown([])
+      return
+    }
+    Promise.all(
+      proprietarios.map((prop) =>
+        supabase
+          .rpc('fn_relatorio_rebanho_por_pasto', { p_fazenda_id: fazendaId, p_data: data, p_proprietario_ids: [prop.id] })
+          .then((r) => ({ id: prop.id, nome: prop.nome, linhas: (r.data as LinhaPastoRaw[]) || [] }) as ProprietarioLinhas)
+      )
+    ).then((resultado) => {
+      if (!cancelado) setPorProprietarioBreakdown(resultado)
+    })
+    return () => {
+      cancelado = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fazendaId, data, proprietarios])
+
   const pastos: PastoAgrupado[] = []
   linhas.forEach((l) => {
     let grupo = pastos.find((p) => p.pasto_id === l.pasto_id)
@@ -221,10 +248,15 @@ export default function RelatorioRebanhoPorPastoPage() {
   const quantidadeComPeso = linhas.reduce((s, l) => s + (l.peso_medio_kg != null ? l.quantidade : 0), 0)
   const pesoMedioGeral = quantidadeComPeso > 0 ? totalGeralPeso / quantidadeComPeso : null
 
+  // a decomposição por dono só é matematicamente consistente quando `linhas` reflete o total
+  // sem filtro (proprietarioIdsFiltro null) — com um filtro parcial ativo na tabela, `linhas` já
+  // vem cortada pra só quem está marcado, e comparar contra o balde de cada dono (sempre
+  // calculado sem filtro) somaria mais do que o próprio marcador mostra
   const distribuicaoMapa: PastoDistribuicao[] = montarDistribuicaoPorPasto(
     linhas as LinhaPastoRaw[],
     pastosBase,
-    categoriasInfo
+    categoriasInfo,
+    todosProprietariosSelecionados && porProprietarioBreakdown.length > 1 ? porProprietarioBreakdown : undefined
   )
   const temPastoComContorno = distribuicaoMapa.some((p) => p.geometria)
 
