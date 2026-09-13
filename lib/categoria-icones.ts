@@ -6,8 +6,6 @@ import type { Era } from '@/lib/faixa-etaria'
 
 export type CodigoIconeCategoria = 'TOURO' | 'VACA' | 'BOI' | 'GARROTE' | 'NOVILHA' | 'BEZERRO' | 'BEZERRA'
 
-export type TierIcone = 'adulto' | 'jovem' | 'bezerro'
-
 export const ICONE_SRC: Record<CodigoIconeCategoria, string> = {
   TOURO: '/icones-categoria/touro.png',
   VACA: '/icones-categoria/vaca.png',
@@ -17,22 +15,6 @@ export const ICONE_SRC: Record<CodigoIconeCategoria, string> = {
   BEZERRO: '/icones-categoria/bezerro.png',
   BEZERRA: '/icones-categoria/bezerra.png',
 }
-
-export const ICONE_TIER: Record<CodigoIconeCategoria, TierIcone> = {
-  TOURO: 'adulto',
-  VACA: 'adulto',
-  BOI: 'adulto',
-  GARROTE: 'jovem',
-  NOVILHA: 'jovem',
-  BEZERRO: 'bezerro',
-  BEZERRA: 'bezerro',
-}
-
-// tamanho em pixels do ícone no mapa — jovem/bezerro deliberadamente mais
-// perto do adulto do que uma proporção anatômica estrita sugeriria, pra
-// não virarem uma mancha ilegível num marcador pequeno (ajustado com o
-// usuário a partir do mockup, não é a proporção real de altura/peso)
-export const TIER_SIZE_PX: Record<TierIcone, number> = { adulto: 40, jovem: 37, bezerro: 33 }
 
 // papéis com ícone fixo, independente de sexo/era — cobre a maioria das
 // categorias. "Garrotes e Bois" é o único papel que muda de ícone dentro

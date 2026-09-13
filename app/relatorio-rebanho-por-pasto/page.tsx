@@ -6,6 +6,7 @@ import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { useFiltroGlobal } from '@/contexts/FiltroGlobalContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { formatQuantidade, formatPeso as formatPesoValor, formatArea, formatLotacao } from '@/lib/format'
 import ModuloGate from '@/components/ModuloGate'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
@@ -21,6 +22,8 @@ import {
 const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/MapaDistribuicaoRebanho'), {
   ssr: false,
 })
+const DetalhePastoModal = dynamic(() => import('@/components/fazendas/DetalhePastoModal'), { ssr: false })
+const MovimentacaoLotesModal = dynamic(() => import('@/components/fazendas/MovimentacaoLotesModal'), { ssr: false })
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção usada no
 // Painel e no Relatório de Lotação
@@ -65,6 +68,8 @@ function TableSkeleton() {
 export default function RelatorioRebanhoPorPastoPage() {
   const { proprietarios, proprietarioIds, alternarProprietario, alternarTodosProprietarios, todosProprietariosSelecionados } =
     useFiltroGlobal()
+  const { podeAcessar } = useAuth()
+  const permitirArrastarSelo = podeAcessar('mudanca_pasto')
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [fazendaId, setFazendaId] = useState('')
   const [data, setData] = useState(() => new Date().toISOString().slice(0, 10))
@@ -76,6 +81,8 @@ export default function RelatorioRebanhoPorPastoPage() {
   const [categoriasInfo, setCategoriasInfo] = useState<Map<string, CategoriaAnimalInfo>>(new Map())
   const [fazendaGeometria, setFazendaGeometria] = useState<Geometry | null>(null)
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
+  const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
+  const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
 
   const supabase = createClient()
 
@@ -123,7 +130,7 @@ export default function RelatorioRebanhoPorPastoPage() {
     Promise.all([
       supabase
         .from('pastos')
-        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id)')
+        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id, nome)')
         .eq('ativo', true),
       supabase.from('modulos').select('id, fazenda_id, ordem').eq('fazenda_id', fazendaId),
     ]).then(([pastosResp, modulosResp]) => {
@@ -140,7 +147,9 @@ export default function RelatorioRebanhoPorPastoPage() {
           areaHa: p.area_ha,
           cor: p.cor || corPorModulo.get(p.modulo_id) || '#1C8C7C',
           geometria: p.geometria ?? null,
+          fazendaId,
           fazendaNome: '',
+          moduloNome: p.modulo?.nome ?? '',
         })
       }
       setPastosBase(mapa)
@@ -148,7 +157,10 @@ export default function RelatorioRebanhoPorPastoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId])
 
-  useEffect(() => {
+  // extraída pra também poder ser rechamada depois de salvar uma Movimentação de Lotes
+  // (drag-and-drop de selo no mapa, ver MovimentacaoLotesModal) — sem isso a tabela/mapa
+  // continuariam mostrando a distribuição antiga até um F5
+  async function carregarLinhas() {
     if (!fazendaId || !data) {
       setLinhas([])
       return
@@ -158,20 +170,21 @@ export default function RelatorioRebanhoPorPastoPage() {
     // todos marcados = sem filtro (mesmo princípio já usado nos outros
     // relatórios) — só manda a lista quando é uma seleção parcial
     const proprietarioIdsFiltro = todosProprietariosSelecionados ? null : proprietarioIds
-    supabase
-      .rpc('fn_relatorio_rebanho_por_pasto', {
-        p_fazenda_id: fazendaId,
-        p_data: data,
-        p_proprietario_ids: proprietarioIdsFiltro,
-      })
-      .then(({ data: rows, error }) => {
-        if (error) {
-          setErro(error.message)
-        } else {
-          setLinhas(rows || [])
-        }
-        setLoading(false)
-      })
+    const { data: rows, error } = await supabase.rpc('fn_relatorio_rebanho_por_pasto', {
+      p_fazenda_id: fazendaId,
+      p_data: data,
+      p_proprietario_ids: proprietarioIdsFiltro,
+    })
+    if (error) {
+      setErro(error.message)
+    } else {
+      setLinhas(rows || [])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    carregarLinhas()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId, data, proprietarioIds, todosProprietariosSelecionados])
 
@@ -311,6 +324,9 @@ export default function RelatorioRebanhoPorPastoPage() {
                   pastos={distribuicaoMapa}
                   pastoSelecionadoId={pastoSelecionadoMapaId}
                   onSelecionarPasto={setPastoSelecionadoMapaId}
+                  onAbrirDetalhe={setPastoDetalheId}
+                  permitirArrastar={permitirArrastarSelo}
+                  onArrastarPasto={(origemId, destinoId) => setArrastarInfo({ origemId, destinoId })}
                   altura={420}
                 />
               </div>
@@ -445,6 +461,31 @@ export default function RelatorioRebanhoPorPastoPage() {
           </>
         )}
       </div>
+
+      {pastoDetalheId &&
+        (() => {
+          const pasto = distribuicaoMapa.find((p) => p.id === pastoDetalheId)
+          return pasto ? <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} /> : null
+        })()}
+
+      {arrastarInfo &&
+        (() => {
+          const pastoOrigem = distribuicaoMapa.find((p) => p.id === arrastarInfo.origemId)
+          if (!pastoOrigem) return null
+          return (
+            <MovimentacaoLotesModal
+              fazendaId={pastoOrigem.fazendaId}
+              pastoOrigemId={pastoOrigem.id}
+              pastoOrigemNome={pastoOrigem.nome}
+              pastoDestinoSugeridoId={arrastarInfo.destinoId}
+              onClose={() => setArrastarInfo(null)}
+              onSalvo={() => {
+                setArrastarInfo(null)
+                carregarLinhas()
+              }}
+            />
+          )
+        })()}
     </div>
     </ModuloGate>
   )

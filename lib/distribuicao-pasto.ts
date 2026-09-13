@@ -8,6 +8,63 @@ import { iconeParaCategoria, type CodigoIconeCategoria } from '@/lib/categoria-i
 import { corCategorica } from '@/lib/relatorio-cores'
 import type { CategoriaDistribuicao, PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
 
+// um marcador é o que de fato vira um selo no mapa — normalmente 1:1 com
+// uma categoria (`CategoriaDistribuicao`), mas quando o pasto tem fêmea em
+// reprodução ("VACA") e bezerro/a em lactação juntos, os dois se combinam
+// num selo só (ver "Selos do Rebanho" no CLAUDE.md): o selo mostra a foto
+// da mãe com a cria por cima, e a contagem soma mãe + cria. `criaCodigo`
+// escolhe BEZERRO ou BEZERRA pela maior quantidade quando o pasto tem os
+// dois sexos de bezerro ao mesmo tempo — o total já soma os dois, só o
+// ícone de exibição precisa escolher um.
+export type MarcadorMapa = {
+  codigo: CodigoIconeCategoria
+  criaCodigo?: 'BEZERRO' | 'BEZERRA'
+  nome: string
+  quantidade: number
+  pesoMedio: number | null
+}
+
+export function agruparMarcadoresPasto(categorias: CategoriaDistribuicao[]): MarcadorMapa[] {
+  const porCodigo = new Map(categorias.map((c) => [c.codigo, c]))
+  const vaca = porCodigo.get('VACA')
+  const bezerro = porCodigo.get('BEZERRO')
+  const bezerra = porCodigo.get('BEZERRA')
+
+  const marcadores: MarcadorMapa[] = []
+  const usados = new Set<CodigoIconeCategoria>()
+
+  if (vaca && (bezerro || bezerra)) {
+    const criaCodigo: 'BEZERRO' | 'BEZERRA' = !bezerro
+      ? 'BEZERRA'
+      : !bezerra
+        ? 'BEZERRO'
+        : bezerro.quantidade >= bezerra.quantidade
+          ? 'BEZERRO'
+          : 'BEZERRA'
+    const partes = [vaca, bezerro, bezerra].filter((c): c is CategoriaDistribuicao => !!c)
+    const quantidade = partes.reduce((s, c) => s + c.quantidade, 0)
+    const pesoTotal = partes.reduce((s, c) => s + (c.pesoMedio ?? 0) * c.quantidade, 0)
+    const criaNome = (criaCodigo === 'BEZERRO' ? bezerro : bezerra)?.nome ?? ''
+    marcadores.push({
+      codigo: 'VACA',
+      criaCodigo,
+      nome: criaNome ? `${vaca.nome} + ${criaNome}` : vaca.nome,
+      quantidade,
+      pesoMedio: quantidade > 0 ? pesoTotal / quantidade : null,
+    })
+    usados.add('VACA')
+    usados.add('BEZERRO')
+    usados.add('BEZERRA')
+  }
+
+  for (const c of categorias) {
+    if (usados.has(c.codigo)) continue
+    marcadores.push({ codigo: c.codigo, nome: c.nome, quantidade: c.quantidade, pesoMedio: c.pesoMedio })
+  }
+
+  return marcadores
+}
+
 export type LinhaPastoRaw = {
   pasto_id: string
   pasto_nome: string
@@ -22,7 +79,9 @@ export type PastoBaseInfo = {
   areaHa: number | null
   cor: string
   geometria: Geometry | null
+  fazendaId: string
   fazendaNome: string
+  moduloNome: string
 }
 
 export type CategoriaAnimalInfo = { papel: string; sexo: 'MACHO' | 'FEMEA'; era: Era }
@@ -62,7 +121,9 @@ export function montarDistribuicaoPorPasto(
     porPasto.set(id, {
       id,
       nome: base.nome,
+      fazendaId: base.fazendaId,
       fazendaNome: base.fazendaNome,
+      moduloNome: base.moduloNome,
       areaHa: base.areaHa,
       geometria: base.geometria,
       cor: base.cor,
@@ -77,7 +138,9 @@ export function montarDistribuicaoPorPasto(
       pasto = {
         id: l.pasto_id,
         nome: l.pasto_nome,
+        fazendaId: base?.fazendaId ?? '',
         fazendaNome: base?.fazendaNome ?? '',
+        moduloNome: base?.moduloNome ?? '',
         areaHa: base?.areaHa ?? null,
         geometria: base?.geometria ?? null,
         cor: base?.cor ?? '#1C8C7C',

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
@@ -58,6 +58,8 @@ function CardSkeleton() {
 }
 
 export default function ControlePastoPage() {
+  const prefillAplicadoRef = useRef(false)
+  const prefillFazendaIdRef = useRef<string | null>(null)
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
@@ -179,8 +181,12 @@ export default function ControlePastoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // trocar de fazenda invalida módulo/pasto de origem e destino escolhidos
+  // trocar de fazenda invalida módulo/pasto de origem e destino escolhidos — pulado enquanto a
+  // fazenda atual é o alvo de um pré-preenchimento (mapa de distribuição do rebanho → "Mudança
+  // de Pasto"), senão essa troca (disparada pelo próprio pré-preenchimento) apagaria o
+  // módulo/pasto de origem já preenchidos juntos na mesma chamada
   useEffect(() => {
+    if (prefillFazendaIdRef.current === fazendaId) return
     setModuloId('')
     setPastoId('')
     setModuloDestinoId('')
@@ -202,8 +208,10 @@ export default function ControlePastoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fazendaId, mostrarSeletorModulo, modulos])
 
-  // trocar de módulo de origem invalida o pasto de origem escolhido
+  // trocar de módulo de origem invalida o pasto de origem escolhido — mesmo pulo do efeito
+  // acima enquanto a fazenda atual é alvo de um pré-preenchimento
   useEffect(() => {
+    if (prefillFazendaIdRef.current === fazendaId) return
     setPastoId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduloId])
@@ -232,6 +240,37 @@ export default function ControlePastoPage() {
     if (pastoDestinoId === pastoId) setPastoDestinoId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pastoId])
+
+  // pré-preenchimento vindo do mapa de distribuição do rebanho (selo do pasto → "Mudança de
+  // Pasto") — só o pasto de ORIGEM é preenchido (o de destino é o próprio propósito da tela,
+  // continua exigindo escolha explícita). Lido direto de window.location.search (não
+  // useSearchParams) pra não exigir um Suspense boundary, mesmo padrão já usado em /login.
+  // fazendaId + moduloId + pastoId são setados juntos, na mesma chamada síncrona (mesmo padrão
+  // já usado por iniciarEdicao) — os efeitos de reset acima leem prefillFazendaIdRef (setado
+  // aqui antes de qualquer setState) e se calam enquanto a fazenda atual for esse alvo.
+  useEffect(() => {
+    if (prefillAplicadoRef.current) return
+    if (pastos.length === 0) return
+    const params = new URLSearchParams(window.location.search)
+    const fazendaParam = params.get('fazenda')
+    const pastoParam = params.get('pasto')
+    if (!fazendaParam && !pastoParam) return
+    prefillAplicadoRef.current = true
+
+    if (fazendaParam) {
+      prefillFazendaIdRef.current = fazendaParam
+      setFazendaId(fazendaParam)
+    }
+    if (pastoParam) {
+      const pasto = pastos.find((p) => p.id === pastoParam)
+      if (pasto) {
+        setModuloId(pasto.modulo_id)
+        setPastoId(pasto.id)
+      }
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastos])
 
   // saldo por linha é sempre checado no pasto de origem, já que é de lá
   // que os animais estão saindo — best-effort aqui (preview), quem

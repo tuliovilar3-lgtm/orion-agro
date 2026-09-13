@@ -146,7 +146,10 @@ const MapaPastos = forwardRef<
   return (
     <div
       ref={wrapperRef}
-      className="overflow-hidden rounded-control border border-border bg-surface"
+      // isolate: contém o z-index alto das camadas internas do Leaflet (até 1000, ver
+      // leaflet.css) dentro do próprio mapa — sem isso ele vaza por cima de qualquer modal com
+      // z-index mais baixo renderizado depois (mesmo ajuste feito em MapaDistribuicaoRebanho.tsx)
+      className="isolate overflow-hidden rounded-control border border-border bg-surface"
       style={{ height: telaCheia ? '100vh' : 560 }}
     >
       <MapContainer center={centroInicial} zoom={4} style={{ height: '100%', width: '100%' }}>

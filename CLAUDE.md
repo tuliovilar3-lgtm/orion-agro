@@ -4574,3 +4574,232 @@ Verificado: `npx tsc --noEmit` limpo; a RPC testada de ponta a ponta contra dado
 via script service-role, incluindo o cenário exato que motivou a migração 068; dado de produção
 restaurado ao estado original bit a bit ao final. Teste de UI no navegador não foi possível nesta
 rodada (mesma limitação de login do servidor de preview já registrada nas rodadas anteriores).
+
+## Selos do Rebanho — Fase 2 (modal de detalhe do pasto + 6 ações rápidas pré-preenchidas)
+
+Continuação da Fase 1 (redesign dos ícones do mapa em selos com agrupamento vaca+bezerro/a — ver
+"Mapa de distribuição do rebanho por pasto" acima) — mockup aprovado em várias rodadas antes de
+implementar (arquivo descartável no scratchpad, "Selos do Rebanho"). Clicar no ÍCONE de um selo (não
+no polígono do pasto, que continua só selecionando/destacando como já fazia) abre um modal com o
+detalhe do pasto e 6 botões de ação que já abrem a tela de lançamento certa com fazenda+pasto (e
+tipo, quando aplicável) pré-preenchidos — elimina o vai-e-volta de abrir Movimentações, escolher
+fazenda, módulo e pasto manualmente pra cada lançamento originado do mapa.
+
+**`PastoDistribuicao`/`PastoBaseInfo` ganham `fazendaId`/`moduloNome`** (`components/fazendas/
+MapaDistribuicaoRebanho.tsx`, `lib/distribuicao-pasto.ts`) — precisos pra montar as URLs de
+pré-preenchimento e pro cabeçalho do modal. `app/page.tsx` e `app/relatorio-rebanho-por-pasto/
+page.tsx` (as duas telas que montam `pastosBase`) passam a selecionar `modulo:modulos!modulo_id
+(fazenda_id, nome)` em vez de só `fazenda_id`, e populam os dois campos novos ao montar o mapa.
+
+**`components/fazendas/DetalhePastoModal.tsx`** (novo) — recebe `pasto: PastoDistribuicao` (as
+categorias reais do pasto, não os marcadores agrupados do mapa) + `onClose`. Mostra nome do
+pasto/fazenda/módulo, um resumo de 4 KPIs (Área útil, Rebanho, Peso médio, Lotação — mesmas contas já
+usadas em `DetalhePastoDistribuicao`), a lista de categorias (ícone real + nome + peso médio +
+quantidade) e uma grade de 6 botões — Venda, Morte, Mudança de Pasto, Mudança de Categoria,
+Nascimento, Pesagem — cada um navegando (`useRouter().push`) pra:
+- `/movimentacoes?fazenda=<id>&pasto=<id>&tipo=<TIPO>` (Venda→`VENDA_PE`, Morte→`MORTE`, Mudança de
+  Categoria→`MUDANCA_CATEGORIA`, Nascimento→`NASCIMENTO`)
+- `/controle-pasto?fazenda=<id>&pasto=<id>` (Mudança de Pasto)
+- `/pesagens?fazenda=<id>&pasto=<id>` (Pesagem)
+
+Ícones reaproveitados sem duplicar SVG: `IconeMovimentacao` (`lib/movimentacao-icones.tsx`) pros 4
+tipos de Movimentações, `ICONS.controlePasto`/`ICONS.pesagens` (`lib/nav-icons.tsx`) pros outros 2.
+
+**`MapaDistribuicaoRebanho.tsx`** ganha um prop novo, `onAbrirDetalhe?: (pastoId: string) => void`,
+chamado só no `eventHandlers.click` do `<Marker>` (o ícone do selo) — o `click` do `<GeoJSON>` do
+polígono continua chamando só `onSelecionarPasto` como sempre, decisão deliberada de não duplicar/
+substituir esse comportamento já existente (design aditivo: o polígono seleciona/destaca, o ícone
+abre o modal). `app/page.tsx` e `app/relatorio-rebanho-por-pasto/page.tsx` ganham um estado
+`pastoDetalheId` e renderizam `DetalhePastoModal` (via `next/dynamic({ssr:false})`, mesmo motivo do
+`MapaDistribuicaoRebanho` — leaflet não pode rodar no servidor) quando setado.
+
+**Pré-preenchimento lido de `window.location.search`, não `useSearchParams`** — mesmo motivo já
+documentado em `/login`/`/relatorios` (evita exigir um Suspense boundary só por causa de um
+pré-preenchimento pontual). Em `app/movimentacoes/page.tsx`, um novo `useEffect` (guardado por
+`useRef` one-shot, disparado só depois que `pastos` carrega) lê `fazenda`/`pasto`/`tipo` da URL e
+seta `fazendaId`+`moduloId` (resolvido via `pastos.find(...)`)+`pastoId`+`tipo` todos juntos, na
+mesma chamada síncrona, e força `setTipoConfirmado(true)`+`setFormularioAberto(true)` — mesmo padrão
+exato já usado por `iniciarEdicao`, que funciona sem luta nenhuma contra os efeitos de cascata
+módulo→pasto porque esses efeitos ali são **condicionais** (só limpam a seleção se ela não for mais
+válida pro novo contexto — ver "cascade-reset" já documentado).
+
+**`app/pesagens/page.tsx` e `app/controle-pasto/page.tsx` precisaram de um ajuste a mais nos próprios
+efeitos de reset, que Movimentações não precisou**: os efeitos de cascata dessas duas telas (`reseta
+modo/módulo/pasto ao trocar de fazenda`, `trocar de módulo invalida o pasto`) são **incondicionais**
+— sempre zeram módulo/pasto ao trocar de fazenda/módulo, mesmo que o valor já setado seja válido —
+diferente do padrão condicional de Movimentações. Isso apagava o pré-preenchimento por trás dele
+mesmo setando fazendaId+moduloId+pastoId juntos na mesma chamada (o próprio `setFazendaId` já
+dispara esses resets incondicionais no próximo efeito-flush). Corrigido com um `useRef`
+(`prefillFazendaIdRef`, guarda só a fazenda-alvo do pré-preenchimento) checado no topo dos dois
+efeitos de reset (`if (prefillFazendaIdRef.current === fazendaId) return`) — pulam o reset só
+enquanto a fazenda atual for exatamente aquela que o pré-preenchimento acabou de setar; qualquer
+troca manual de fazenda depois (pro valor real escolhido pelo usuário, diferente do alvo salvo no
+ref) já não bate mais nessa checagem, e o reset volta a funcionar exatamente como antes — nenhuma
+mudança de comportamento pra navegação manual, só destrava a janela exata do pré-preenchimento.
+Diagnosticado por tentativa e erro no navegador: uma primeira tentativa (reaplicar os valores em um
+segundo efeito, na esperança de que a ordem de execução dentro do mesmo lote de efeitos fizesse a
+última chamada "vencer") não funcionou de forma confiável e foi descartada em favor desse padrão
+mais simples e direto (impedir o reset em vez de tentar competir com ele).
+
+Verificado no navegador (`FAZENDA TESTE 1`, pasto "01-A1" de Estância Betânia, via Suporte): clicar
+no selo do pasto abriu o modal com KPIs e categorias corretos; "Pesagem" abriu `/pesagens` com
+Fazenda="Estância Betânia" e, após o fix, também Módulo="Módulo 01"/Pasto="01-A1" no modo "Por
+pasto" já pré-selecionados (antes do fix ficavam em branco); "Mudança de Pasto" abriu
+`/controle-pasto` com Módulo/Pasto de **origem** pré-preenchidos (destino continua exigindo escolha,
+por design) — Módulo destino/Pasto destino corretamente vazios; "Venda" abriu Movimentações já
+colapsado em "Venda em Pé", com Fazenda/Módulo/Pasto certos e "Efetivo atual: 3.222 cabeças".
+`npx tsc --noEmit` limpo.
+
+## Pesagens: coluna "Último peso (kg)" ao lado de "Peso atual (kg)"
+
+Pedido do usuário depois de usar a tela: antes de digitar o novo peso, não havia nenhuma referência
+visível do último peso já registrado pra aquela categoria — só a pesagem "recente" aparecia na lista
+solta abaixo do formulário, sem relação visual direta com a linha da tabela sendo preenchida.
+
+`app/pesagens/page.tsx`: `LinhaDistribuicao` (o tipo das linhas de `fn_relatorio_rebanho_por_pasto`,
+já buscado pra alimentar a tabela) ganha `peso_medio_kg: number | null` — o campo já vinha na
+resposta da RPC, só não estava tipado/lido até agora. `categoriasExibidas` ganha um campo
+`ultimoPeso` nos dois modos:
+- **Por pasto**: direto de `d.peso_medio_kg` (já é a pesagem mais recente resolvida por
+  fazenda+categoria+pasto exatos, mesma regra "sem fallback cruzado" documentada em "Pesagens e peso
+  médio nos relatórios").
+- **Por categoria**: como esse modo grava o mesmo peso digitado em **todos** os pastos onde a
+  categoria tem saldo, o "último peso" de referência é a **média ponderada pela quantidade** entre
+  esses pastos — nunca a média simples, mesmo princípio já documentado em "Peso e valor médio em
+  totais" — só pra dar uma referência única antes de digitar o valor novo, não é usado em nenhum
+  cálculo de saldo.
+
+A tabela ganha a coluna "Último peso (kg)" (somente leitura, `formatPeso`, "—" quando nunca pesado)
+entre "Quantidade" e o input, que teve o cabeçalho renomeado de "Peso médio (kg)" pra "Peso atual
+(kg)" — deixa explícito que aquele campo é o valor **novo**, não o que já está registrado. O input
+continua vazio por padrão (não pré-preenchido com o último peso) — evita que uma linha esquecida em
+branco vire silenciosamente uma pesagem duplicada com o mesmo valor; só o que for de fato digitado é
+salvo, comportamento inalterado.
+
+Verificado no navegador (Estância Betânia, modo "Por categoria" e "Por pasto"): coluna "Último peso"
+mostrando os valores corretos (ex.: "Coché Macho" 300,00 kg, batendo com a pesagem mais recente de
+25/06 já visível na lista "Pesagens recentes" abaixo) nos dois modos, com o input "Peso atual"
+permanecendo vazio. `npx tsc --noEmit` limpo.
+
+## Selos do Rebanho — Fase 3 (arrastar selo entre pastos → Movimentação de Lotes)
+
+Última fase do recurso "Selos do Rebanho" (Fases 1 e 2 acima) — arrastar o selo de um pasto e
+soltar sobre outro abre um modal de lançamento em lote, reaproveitando a mesma lógica de gravação
+já usada em Mudança de Pasto (`app/controle-pasto/page.tsx`), sem precisar abrir a tela cheia e
+escolher fazenda/módulo/pasto manualmente.
+
+**Gate por módulo, decisão já confirmada com o usuário na etapa de mockup**: o arraste só fica
+habilitado (`draggable` nos `<Marker>`) quando `useAuth().podeAcessar('mudanca_pasto')` — mesmo
+princípio de acesso por módulo já usado no resto do sistema; quem não tem "Mudança de Pasto"
+liberado (ou é Suporte "em casa", fora de qualquer conta) simplesmente não consegue arrastar os
+selos, sem nenhuma UI de aviso — os ícones continuam clicáveis normalmente (Fase 2) pra essas
+pessoas.
+
+**`MapaDistribuicaoRebanho.tsx`** ganha 2 props novas — `permitirArrastar?: boolean` e
+`onArrastarPasto?: (pastoOrigemId, pastoDestinoId) => void`. Cada `<Marker>` recebe `draggable=
+{permitirArrastar}` e um handler `dragend`: pega a posição onde o usuário soltou
+(`marker.getLatLng()`) e testa contra os pastos com contorno da **mesma fazenda** (comparando
+`fazendaId`, já disponível desde a Fase 2) usando `@turf/boolean-point-in-polygon` (dependência
+nova — `@turf/area` já existia, este é o primeiro uso de point-in-polygon no projeto) — o primeiro
+pasto cujo polígono contém o ponto solto vira o destino sugerido. Sem destino encontrado (soltou
+fora de qualquer pasto, ou de volta no próprio pasto de origem), nada acontece. Um `useReducer`
+local (`forcarRender`) força um re-render a cada `dragend` (sucesso ou não) — como `position` do
+`<Marker>` é recalculado a cada render a partir da geometria do pasto (não do estado do drag em
+si), isso garante que o ícone sempre volte visualmente pro seu lugar calculado assim que o usuário
+solta, já que a posição real do rebanho só muda de fato quando o modal é salvo (não quando o ícone
+é arrastado).
+
+**`components/fazendas/MovimentacaoLotesModal.tsx`** (novo) — mesmo mockup aprovado na etapa de
+design ("Movimentação de Lotes"): Data (texto + ícone de editar, mesmo padrão de pencil-icon já
+usado em "Editar contorno" de `GestaoAreasPanel.tsx`), toggle "Mover todo o lote? Sim/Não" (Sim =
+quantidade travada no disponível; Não = quantidade digitável, validada contra o disponível), Pasto
+de saída (texto travado — é o que foi arrastado) e Pasto de entrada (`<select>` com `<optgroup>`
+por módulo, pré-selecionado com o pasto onde o selo foi solto, mas livre pra trocar), um card por
+categoria (peso médio com o mesmo padrão de pencil-icon — sem tocar, mantém o último peso conhecido,
+mesmo princípio já documentado em Mudança de Pasto: "se não informado, o lote continua com o
+último peso conhecido"; e um botão "Remover" por linha, tirando aquela categoria do lote), e
+Cancelar/Avançar.
+
+**Dados carregados no mount do modal, self-contained** (mesmo princípio de duplicação deliberada já
+usado em outras telas — cada componente busca o que precisa, sem hook/contexto compartilhado):
+`modulos`+`pastos` da fazenda (pro seletor de destino), `pessoa_papeis` com papel PROPRIETARIO (pro
+mesmo `resolverProprietarioId`/`mostrarSeletorProprietario`/`bloqueadoPorSemProprietario` já
+documentado em Mudança de Pasto), e `fn_relatorio_rebanho_por_pasto(fazenda, hoje)` **filtrado pro
+pasto de origem** — é essa chamada que resolve as categorias reais (com `categoria_id` de verdade,
+não o código de ícone agrupado do mapa — `pasto.categorias` do mapa não serve aqui porque duas
+categorias do sistema podem cair no mesmo ícone e já vêm somadas, perdendo o `categoria_id`
+original que o insert precisa) e o peso médio mais recente de cada uma.
+
+**Gravação idêntica ao `handleSubmit` de Mudança de Pasto pro caminho de lançamento novo** — mesmo
+formato de payload (`tipo: 'MUDANCA_PASTO'`, `grupo_lancamento_id` quando 2+ categorias,
+`proprietario_id` resolvido, `peso_medio_kg` null quando não editado), inserido direto via
+`supabase.from('movimentacoes_rebanho').insert(payloads)` — sem chamar `fn_checar_edicao_movimentacao`
+porque isso **nunca é uma edição** (é sempre um lançamento novo, o modal não tem conceito de reabrir
+um lote já existente); a validação de saldo insuficiente continua sendo a mesma trigger de sempre
+(`fn_validar_saldo_categoria`) no banco, sem nenhuma duplicação de regra no frontend. Ao salvar,
+`onSalvo()` fecha o modal e recarrega os dados do mapa (`carregarMapaDistribuicao()` em
+`app/page.tsx`, `carregarLinhas()` em `app/relatorio-rebanho-por-pasto/page.tsx` — as duas extraídas
+de dentro do `useEffect` de carregamento original só pra também poderem ser rechamadas aqui, sem
+duplicar a lógica de busca).
+
+**Peso editado no lote já vira uma pesagem automaticamente, de graça** — pedido do usuário
+("ao mudar o peso na mudança de pasto, deve automaticamente lançar uma pesagem") já era
+comportamento existente antes desta fase, não precisou de nenhum código novo: `fn_compilar_
+pesagem_movimentacao` (trigger `after insert or update on movimentacoes_rebanho`, ver "Peso médio
+obrigatório e compilação automática em Pesagens" acima) já compila **qualquer** movimentação salva
+com `peso_medio_kg` preenchido pra um registro em `pesagens` — pra `MUDANCA_PASTO` especificamente,
+usando sempre o **pasto de destino** (`coalesce(pasto_destino_id, pasto_id)`). Como o modal insere
+na mesma tabela `movimentacoes_rebanho` com o mesmo formato que a tela cheia de Mudança de Pasto já
+usa, editar o peso de uma categoria no lote (via o lápis) e confirmar já popula "Pesagens
+recentes" sozinho, com a nota "Peso compilado automaticamente da movimentação" — mesma trigger,
+zero linha de código nova. Categoria cujo peso não foi tocado no lote (`peso_medio_kg: null` no
+payload) simplesmente não gera pesagem nenhuma — o lote continua com o último peso conhecido, como
+já documentado.
+
+**Limitação de verificação nesta rodada — só o gesto físico de arrastar, não o modal em si**: não
+foi possível simular o gesto de arrastar-e-soltar através da automação de navegador deste ambiente
+de teste — `left_click_drag` não reproduz a sequência de eventos de mouse que o `Draggable` do
+Leaflet espera (o clique simples no mesmo selo, testado à parte, abre o modal de detalhe da Fase 2
+normalmente, confirmando que as coordenadas e o elemento estão corretos; só o gesto de arraste em
+si não registra nada — nem abre o modal novo nem move o mapa — consistente com a simulação de drag
+não chegar a disparar de fato os eventos nativos que o Leaflet escuta, não com um bug de código). A
+implementação segue exatamente a API padrão do `react-leaflet`/`Leaflet` pra marcador arrastável
+(`draggable` + evento `dragend`, conferida linha a linha contra o código-fonte da lib) e o
+`permitirArrastar` foi confirmado `true` na sessão de teste (Suporte "dentro" de uma conta sempre
+tem `podeAcessar(...) === true`).
+
+**O `MovimentacaoLotesModal` em si foi verificado de ponta a ponta**, contornando a limitação do
+gesto: um `eventHandlers.dblclick` temporário (adicionado só pra este teste, chamando
+`onArrastarPasto` direto com outro pasto da mesma fazenda — sem passar pelo point-in-polygon — e
+removido logo depois) abriu o modal de verdade sobre dado real (pasto "01-A1" de Estância Betânia,
+7 categorias reais carregadas com quantidade/peso corretos). Confirmado: "Mover todo o lote? Não"
+destrava as quantidades mostrando "Disponível: N" por linha; o lápis do peso abre um input numérico
+vazio (mantendo o peso não tocado como "—" enviado, mesma regra de "continua com o último peso
+conhecido"); "Pasto de entrada" veio pré-selecionado com o pasto passado e permite trocar; e
+"Cancelar" fecha sem chamar o banco. Não cheguei a clicar "Avançar" (evitaria gravar um lançamento
+real fora do fluxo genuíno de arrastar) — o caminho de gravação em si reaproveita textualmente o
+mesmo payload já testado em produção pela tela cheia de Mudança de Pasto, então o risco residual
+está concentrado só no gesto de arrastar, não na gravação. **Vale uma conferência manual** (arrastar
+de verdade um selo com o mouse, local ou no deploy, até abrir o modal e confirmar "Avançar") antes
+de considerar a Fase 3 encerrada — mesmo princípio já registrado antes nesta sessão pra interações
+que exigem gesto real do usuário (ex.: teste do botão de tela cheia do mapa).
+
+### Bug real encontrado pelo usuário: mapa vazando por cima do modal
+
+Reportado com print pelo usuário: abrir `DetalhePastoModal`/`MovimentacaoLotesModal` deixava os
+próprios selos e o botão de tela cheia do mapa visíveis **por cima** do modal, furando o overlay
+escuro. Causa: as camadas internas do Leaflet (`.leaflet-marker-pane`, `.leaflet-tooltip-pane`,
+`.leaflet-top`/controles) usam `z-index` de até **1000** (`leaflet.css`), acima do `z-50` que os
+dois modais usavam — sem um limite de empilhamento no próprio mapa, esses valores competem
+diretamente com o do modal na raiz do documento. Corrigido em duas camadas, deliberadamente
+redundantes: **1)** `isolate` no `<div>` que envolve o `<MapContainer>` (tanto em
+`MapaDistribuicaoRebanho.tsx` quanto em `MapaPastos.tsx`, mesmo bug latente lá) — contém o
+empilhamento interno do Leaflet dentro do próprio mapa, resolvendo o vazamento dos marcadores/
+tooltips; **2)** mesmo assim, o controle de tela cheia (`.leaflet-top`, z-index 1000) continuou
+vazando por cima mesmo com `isolate` — não investigado a fundo o motivo exato (suspeita: alguma
+interação específica do `L.Control` injetado imperativamente via `L.DomUtil`/`addTo(map)` que foge
+do contêiner esperado), então a correção definitiva foi subir o z-index dos dois modais pra
+`z-[1100]` — acima de qualquer camada do Leaflet com folga, garantindo a cobertura correta
+independente da causa exata do vazamento residual. Verificado no navegador: os dois modais
+reabertos várias vezes (inclusive após remount completo do mapa) sem nenhum elemento do mapa
+vazando por cima em nenhum teste. `npx tsc --noEmit` limpo.

@@ -31,6 +31,8 @@ import {
 const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/MapaDistribuicaoRebanho'), {
   ssr: false,
 })
+const DetalhePastoModal = dynamic(() => import('@/components/fazendas/DetalhePastoModal'), { ssr: false })
+const MovimentacaoLotesModal = dynamic(() => import('@/components/fazendas/MovimentacaoLotesModal'), { ssr: false })
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
@@ -100,6 +102,8 @@ function PainelDashboard() {
     dataFim,
     periodoInvalido,
   } = useFiltroGlobal()
+  const { podeAcessar } = useAuth()
+  const permitirArrastarSelo = podeAcessar('mudanca_pasto')
 
   const [tipoPecuariaId, setTipoPecuariaId] = useState<string | null>(null)
 
@@ -118,6 +122,8 @@ function PainelDashboard() {
   const [fazendasGeometriaMapa, setFazendasGeometriaMapa] = useState<Geometry[]>([])
   const [loadingMapa, setLoadingMapa] = useState(false)
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
+  const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
+  const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -208,20 +214,21 @@ function PainelDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
+  // extraída de dentro do useEffect abaixo pra também poder ser rechamada depois de salvar uma
+  // Movimentação de Lotes (drag-and-drop de selo no mapa, ver MovimentacaoLotesModal) — sem isso
+  // o mapa continuaria mostrando a distribuição antiga até um F5
+  async function carregarMapaDistribuicao() {
     if (!controlaPasto || fazendaIds.length === 0) {
       setPastosDistribuicao([])
       setFazendasGeometriaMapa([])
       return
     }
-    let cancelado = false
     setLoadingMapa(true)
-    setPastoSelecionadoMapaId(null)
 
-    Promise.all([
+    const [pastosResp, modulosResp, fazendasResp, categoriasResp, resultadosPorFazenda] = await Promise.all([
       supabase
         .from('pastos')
-        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id)')
+        .select('id, nome, area_ha, cor, geometria, ativo, modulo_id, modulo:modulos!modulo_id(fazenda_id, nome)')
         .eq('ativo', true),
       supabase.from('modulos').select('id, fazenda_id, ordem'),
       supabase.from('fazendas').select('id, nome, geometria').in('id', fazendaIds),
@@ -233,43 +240,50 @@ function PainelDashboard() {
             .then((r) => (r.data as LinhaPastoRaw[]) || [])
         )
       ),
-    ]).then(([pastosResp, modulosResp, fazendasResp, categoriasResp, resultadosPorFazenda]) => {
+    ])
+
+    const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
+    // mesma regra de cor automática de GestaoAreasPanel — pasto sem cor
+    // própria usa a cor categórica do módulo, não uma cor fixa pra todos
+    const corPorModulo = corPorModuloId(
+      ((modulosResp.data as any[]) || []).map((m) => ({ id: m.id, fazendaId: m.fazenda_id, ordem: m.ordem }))
+    )
+    const pastosBase = new Map<string, PastoBaseInfo>()
+    for (const p of (pastosResp.data as any[]) || []) {
+      // só pastos das fazendas selecionadas no filtro — a query não
+      // filtra isso no servidor (embutido em join não é trivial via
+      // supabase-js), então filtra aqui antes de semear o mapa
+      if (!fazendaIds.includes(p.modulo?.fazenda_id)) continue
+      pastosBase.set(p.id, {
+        nome: p.nome,
+        areaHa: p.area_ha,
+        cor: p.cor || corPorModulo.get(p.modulo_id) || '#1C8C7C',
+        geometria: p.geometria ?? null,
+        fazendaId: p.modulo?.fazenda_id ?? '',
+        fazendaNome: nomeFazendaPorId.get(p.modulo?.fazenda_id) ?? '',
+        moduloNome: p.modulo?.nome ?? '',
+      })
+    }
+
+    const categoriasInfo = new Map<string, CategoriaAnimalInfo>()
+    for (const c of (categoriasResp.data as any[]) || []) {
+      categoriasInfo.set(c.id, { papel: c.papel?.nome ?? '', sexo: c.sexo, era: c.era })
+    }
+
+    const linhas = resultadosPorFazenda.flat()
+    setPastosDistribuicao(montarDistribuicaoPorPasto(linhas, pastosBase, categoriasInfo))
+    setFazendasGeometriaMapa(
+      (fazendasResp.data || []).map((f: any) => f.geometria).filter((g: Geometry | null): g is Geometry => !!g)
+    )
+    setLoadingMapa(false)
+  }
+
+  useEffect(() => {
+    let cancelado = false
+    setPastoSelecionadoMapaId(null)
+    carregarMapaDistribuicao().then(() => {
       if (cancelado) return
-
-      const nomeFazendaPorId = new Map((fazendasResp.data || []).map((f: any) => [f.id, f.nome as string]))
-      // mesma regra de cor automática de GestaoAreasPanel — pasto sem cor
-      // própria usa a cor categórica do módulo, não uma cor fixa pra todos
-      const corPorModulo = corPorModuloId(
-        ((modulosResp.data as any[]) || []).map((m) => ({ id: m.id, fazendaId: m.fazenda_id, ordem: m.ordem }))
-      )
-      const pastosBase = new Map<string, PastoBaseInfo>()
-      for (const p of (pastosResp.data as any[]) || []) {
-        // só pastos das fazendas selecionadas no filtro — a query não
-        // filtra isso no servidor (embutido em join não é trivial via
-        // supabase-js), então filtra aqui antes de semear o mapa
-        if (!fazendaIds.includes(p.modulo?.fazenda_id)) continue
-        pastosBase.set(p.id, {
-          nome: p.nome,
-          areaHa: p.area_ha,
-          cor: p.cor || corPorModulo.get(p.modulo_id) || '#1C8C7C',
-          geometria: p.geometria ?? null,
-          fazendaNome: nomeFazendaPorId.get(p.modulo?.fazenda_id) ?? '',
-        })
-      }
-
-      const categoriasInfo = new Map<string, CategoriaAnimalInfo>()
-      for (const c of (categoriasResp.data as any[]) || []) {
-        categoriasInfo.set(c.id, { papel: c.papel?.nome ?? '', sexo: c.sexo, era: c.era })
-      }
-
-      const linhas = resultadosPorFazenda.flat()
-      setPastosDistribuicao(montarDistribuicaoPorPasto(linhas, pastosBase, categoriasInfo))
-      setFazendasGeometriaMapa(
-        (fazendasResp.data || []).map((f: any) => f.geometria).filter((g: Geometry | null): g is Geometry => !!g)
-      )
-      setLoadingMapa(false)
     })
-
     return () => {
       cancelado = true
     }
@@ -538,6 +552,9 @@ function PainelDashboard() {
                 pastos={pastosDistribuicao}
                 pastoSelecionadoId={pastoSelecionadoMapaId}
                 onSelecionarPasto={setPastoSelecionadoMapaId}
+                onAbrirDetalhe={setPastoDetalheId}
+                permitirArrastar={permitirArrastarSelo}
+                onArrastarPasto={(origemId, destinoId) => setArrastarInfo({ origemId, destinoId })}
               />
               <DetalhePastoDistribuicao
                 pasto={
@@ -550,6 +567,31 @@ function PainelDashboard() {
           )}
         </div>
       )}
+
+      {pastoDetalheId &&
+        (() => {
+          const pasto = pastosDistribuicao.find((p) => p.id === pastoDetalheId)
+          return pasto ? <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} /> : null
+        })()}
+
+      {arrastarInfo &&
+        (() => {
+          const pastoOrigem = pastosDistribuicao.find((p) => p.id === arrastarInfo.origemId)
+          if (!pastoOrigem) return null
+          return (
+            <MovimentacaoLotesModal
+              fazendaId={pastoOrigem.fazendaId}
+              pastoOrigemId={pastoOrigem.id}
+              pastoOrigemNome={pastoOrigem.nome}
+              pastoDestinoSugeridoId={arrastarInfo.destinoId}
+              onClose={() => setArrastarInfo(null)}
+              onSalvo={() => {
+                setArrastarInfo(null)
+                carregarMapaDistribuicao()
+              }}
+            />
+          )
+        })()}
 
       <div className="mt-8 rounded-card border border-border bg-surface p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -687,17 +729,17 @@ function DetalhePastoDistribuicao({ pasto }: { pasto: PastoDistribuicao | null }
         <div>
           <div className="text-[11px] text-text-secondary">Área útil</div>
           <div className="font-bold tabular-nums text-text-primary">
-            {pasto.areaHa != null ? formatArea(pasto.areaHa) : '—'}
+            {pasto.areaHa != null ? `${formatArea(pasto.areaHa)} ha` : '—'}
           </div>
         </div>
         <div>
           <div className="text-[11px] text-text-secondary">Rebanho</div>
-          <div className="font-bold tabular-nums text-text-primary">{formatQuantidade(totalQuantidade)}</div>
+          <div className="font-bold tabular-nums text-text-primary">{formatQuantidade(totalQuantidade)} cab.</div>
         </div>
         <div>
           <div className="text-[11px] text-text-secondary">Lotação</div>
           <div className="font-bold tabular-nums text-text-primary">
-            {lotacao != null ? formatLotacao(lotacao) : '—'}
+            {lotacao != null ? `${formatLotacao(lotacao)} UA/ha` : '—'}
           </div>
         </div>
       </div>

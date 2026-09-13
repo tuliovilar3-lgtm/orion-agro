@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { formatQuantidade, formatPeso } from '@/lib/format'
@@ -18,6 +18,7 @@ type LinhaDistribuicao = {
   categoria_id: string
   categoria_nome: string
   quantidade: number
+  peso_medio_kg: number | null
 }
 
 type Pesagem = {
@@ -46,6 +47,8 @@ function CardSkeleton() {
 }
 
 export default function PesagensPage() {
+  const prefillAplicadoRef = useRef(false)
+  const prefillFazendaIdRef = useRef<string | null>(null)
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
@@ -84,17 +87,30 @@ export default function PesagensPage() {
   const mostrarSeletorModulo = modulosDaFazenda.length > 1
   const pastosParaSelecionar = moduloId ? pastos.filter((p) => p.modulo_id === moduloId) : pastosDaFazenda
 
+  // último peso conhecido — mesma pesagem já resolvida por
+  // fn_relatorio_rebanho_por_pasto (fazenda+categoria+pasto exatos, cai pro peso de referência
+  // da categoria se o pasto nunca foi pesado). No modo "Por categoria" (que grava o mesmo peso
+  // em todos os pastos onde a categoria está), o último peso exibido é a média ponderada pela
+  // quantidade entre esses pastos — mesma regra de "nunca a média simples" já usada no resto do
+  // sistema — só pra dar uma referência única antes de digitar o novo valor.
   const categoriasExibidas =
     modoEfetivo === 'PASTO'
       ? distribuicao
           .filter((d) => d.pasto_id === pastoId)
-          .map((d) => ({ id: d.categoria_id, nome: d.categoria_nome, quantidade: d.quantidade }))
+          .map((d) => ({ id: d.categoria_id, nome: d.categoria_nome, quantidade: d.quantidade, ultimoPeso: d.peso_medio_kg }))
       : categorias
-          .map((c) => ({
-            id: c.id,
-            nome: c.nome,
-            quantidade: distribuicao.filter((d) => d.categoria_id === c.id).reduce((s, d) => s + d.quantidade, 0),
-          }))
+          .map((c) => {
+            const linhas = distribuicao.filter((d) => d.categoria_id === c.id)
+            const quantidade = linhas.reduce((s, d) => s + d.quantidade, 0)
+            const pesoTotal = linhas.reduce((s, d) => s + (d.peso_medio_kg != null ? d.peso_medio_kg * d.quantidade : 0), 0)
+            const quantidadeComPeso = linhas.reduce((s, d) => s + (d.peso_medio_kg != null ? d.quantidade : 0), 0)
+            return {
+              id: c.id,
+              nome: c.nome,
+              quantidade,
+              ultimoPeso: quantidadeComPeso > 0 ? pesoTotal / quantidadeComPeso : null,
+            }
+          })
           .filter((c) => c.quantidade > 0)
 
   async function carregarPesagens() {
@@ -150,8 +166,12 @@ export default function PesagensPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // reseta modo/módulo/pasto/pesos ao trocar de fazenda
+  // reseta modo/módulo/pasto/pesos ao trocar de fazenda — pulado enquanto a fazenda atual é o
+  // alvo de um pré-preenchimento (mapa de distribuição do rebanho → "Pesagem"), senão essa
+  // troca (disparada pelo próprio pré-preenchimento) apagaria modo/módulo/pasto já preenchidos
+  // juntos na mesma chamada
   useEffect(() => {
+    if (prefillFazendaIdRef.current === fazendaId) return
     setModo('CATEGORIA')
     setModuloId('')
     setPastoId('')
@@ -171,8 +191,10 @@ export default function PesagensPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modoEfetivo, fazendaId, mostrarSeletorModulo, modulos])
 
-  // trocar de módulo invalida o pasto escolhido
+  // trocar de módulo invalida o pasto escolhido — mesmo pulo do efeito acima enquanto a
+  // fazenda atual é alvo de um pré-preenchimento
   useEffect(() => {
+    if (prefillFazendaIdRef.current === fazendaId) return
     setPastoId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduloId])
@@ -180,6 +202,37 @@ export default function PesagensPage() {
   useEffect(() => {
     setPesoPorCategoria({})
   }, [modo, pastoId])
+
+  // pré-preenchimento vindo do mapa de distribuição do rebanho (selo do pasto → "Pesagem") —
+  // só faz sentido no modo "Por pasto" (controle por pasto ligado); sem isso, só a fazenda é
+  // preenchida. Lido direto de window.location.search, mesmo motivo já usado em /login.
+  // modo + fazendaId + moduloId + pastoId são setados juntos, na mesma chamada síncrona (mesmo
+  // padrão já usado por iniciarEdicao em Movimentações) — os efeitos de reset acima leem
+  // prefillFazendaIdRef (setado aqui antes de qualquer setState) e se calam enquanto a fazenda
+  // atual for esse alvo.
+  useEffect(() => {
+    if (prefillAplicadoRef.current) return
+    if (pastos.length === 0) return
+    const params = new URLSearchParams(window.location.search)
+    const fazendaParam = params.get('fazenda')
+    const pastoParam = params.get('pasto')
+    if (!fazendaParam && !pastoParam) return
+    prefillAplicadoRef.current = true
+
+    if (fazendaParam) {
+      prefillFazendaIdRef.current = fazendaParam
+      setFazendaId(fazendaParam)
+    }
+    if (pastoParam) {
+      const pasto = pastos.find((p) => p.id === pastoParam)
+      if (pasto) {
+        setModo('PASTO')
+        setModuloId(pasto.modulo_id)
+        setPastoId(pasto.id)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastos])
 
   // distribuição atual (fazenda × pasto × categoria) na data — usada tanto
   // pra filtrar as categorias do pasto escolhido (modo PASTO) quanto pra
@@ -417,7 +470,8 @@ export default function PesagensPage() {
                   <tr>
                     <th className="border-b border-border p-2 text-left font-medium text-text-secondary">Categoria</th>
                     <th className="border-b border-border p-2 text-right font-medium text-text-secondary">Quantidade</th>
-                    <th className="border-b border-border p-2 text-right font-medium text-text-secondary">Peso médio (kg)</th>
+                    <th className="border-b border-border p-2 text-right font-medium text-text-secondary">Último peso (kg)</th>
+                    <th className="border-b border-border p-2 text-right font-medium text-text-secondary">Peso atual (kg)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -429,6 +483,9 @@ export default function PesagensPage() {
                         <td className="border-b border-border p-2 text-text-primary">{c.nome}</td>
                         <td className="border-b border-border p-2 text-right tabular-nums text-text-secondary">
                           {c.quantidade ? formatQuantidade(c.quantidade) : '—'}
+                        </td>
+                        <td className="border-b border-border p-2 text-right tabular-nums text-text-secondary">
+                          {c.ultimoPeso != null ? formatPeso(c.ultimoPeso) : '—'}
                         </td>
                         <td className="border-b border-border p-2 text-right">
                           <input

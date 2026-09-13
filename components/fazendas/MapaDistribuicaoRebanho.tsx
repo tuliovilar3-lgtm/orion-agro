@@ -1,11 +1,14 @@
 'use client'
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useReducer } from 'react'
 import { MapContainer, TileLayer, GeoJSON, Marker, Tooltip, useMap } from 'react-leaflet'
+import type { LeafletEvent } from 'leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import type { Geometry } from 'geojson'
-import { ICONE_SRC, ICONE_TIER, TIER_SIZE_PX, type CodigoIconeCategoria } from '@/lib/categoria-icones'
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon'
+import type { Geometry, Polygon, MultiPolygon } from 'geojson'
+import { ICONE_SRC, type CodigoIconeCategoria } from '@/lib/categoria-icones'
+import { agruparMarcadoresPasto, type MarcadorMapa } from '@/lib/distribuicao-pasto'
 import { formatQuantidade, formatPeso, formatArea, formatLotacao } from '@/lib/format'
 import { useTelaCheia, ControleTelaCheia, InvalidarTamanho } from '@/components/fazendas/MapaTelaCheia'
 
@@ -23,7 +26,9 @@ export type CategoriaDistribuicao = {
 export type PastoDistribuicao = {
   id: string
   nome: string
+  fazendaId: string
   fazendaNome: string
+  moduloNome: string
   areaHa: number | null
   geometria: Geometry | null
   cor: string
@@ -75,13 +80,34 @@ function posicoesIcones(geometria: Geometry, quantidade: number): [number, numbe
   return posicoes
 }
 
-function iconeLeaflet(codigo: CodigoIconeCategoria) {
-  const tamanho = TIER_SIZE_PX[ICONE_TIER[codigo]]
-  return L.icon({
-    iconUrl: ICONE_SRC[codigo],
-    iconSize: [tamanho, tamanho],
-    iconAnchor: [tamanho / 2, tamanho / 2],
-    className: 'drop-shadow-[0_1px_3px_rgba(0,0,0,0.55)]',
+// selo = pino + foto da categoria numa bola branca + contagem total no
+// canto — mesmo desenho aprovado no mockup "Selos do Rebanho" (ver
+// CLAUDE.md). Quando o marcador é combinado (vaca + bezerro/a), a cria
+// entra na MESMA bola, em proporção realista e na frente da mãe, com um
+// contorno branco estreito (drop-shadow seguindo a transparência do PNG)
+// pra não se misturar com a cor da mãe atrás.
+const SELO_LARGURA = 56
+const SELO_ALTURA = 70
+
+function seloIcone(marcador: MarcadorMapa) {
+  const criaHtml = marcador.criaCodigo
+    ? `<img src="${ICONE_SRC[marcador.criaCodigo]}" style="position:absolute;top:36%;left:-6%;width:64%;height:64%;object-fit:contain;z-index:3;filter:drop-shadow(0.6px 0 0 #fff) drop-shadow(-0.6px 0 0 #fff) drop-shadow(0 0.6px 0 #fff) drop-shadow(0 -0.6px 0 #fff);" />`
+    : ''
+  const html = `
+    <div style="position:relative;width:${SELO_LARGURA}px;height:${SELO_ALTURA}px;">
+      <div style="position:absolute;top:0;left:0;width:${SELO_LARGURA}px;height:${SELO_LARGURA}px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:var(--color-brand-900);box-shadow:0 3px 8px rgba(0,0,0,.4);"></div>
+      <div style="position:absolute;top:6px;left:6px;width:44px;height:44px;border-radius:50%;overflow:hidden;background:#fff;border:2px solid rgba(255,255,255,.9);">
+        <img src="${ICONE_SRC[marcador.codigo]}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2;" />
+        ${criaHtml}
+      </div>
+      <div style="position:absolute;top:-5px;right:-5px;min-width:23px;height:23px;padding:0 5px;border-radius:999px;background:var(--color-brand-500);color:#fff;font-weight:800;font-size:11.5px;line-height:1;font-variant-numeric:tabular-nums;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3);">${marcador.quantidade}</div>
+    </div>
+  `
+  return L.divIcon({
+    html,
+    className: '',
+    iconSize: [SELO_LARGURA, SELO_ALTURA],
+    iconAnchor: [SELO_LARGURA / 2, SELO_ALTURA],
   })
 }
 
@@ -102,16 +128,44 @@ export default function MapaDistribuicaoRebanho({
   pastos,
   pastoSelecionadoId,
   onSelecionarPasto,
+  onAbrirDetalhe,
+  permitirArrastar = false,
+  onArrastarPasto,
   altura = 480,
 }: {
   fazendasGeometria: Geometry[]
   pastos: PastoDistribuicao[]
   pastoSelecionadoId?: string | null
   onSelecionarPasto?: (pastoId: string) => void
+  // disparado só ao clicar no ÍCONE do animal (não no polígono do pasto) — abre o modal de
+  // detalhe/ações rápidas, sem alterar o comportamento de clique já existente no polígono
+  onAbrirDetalhe?: (pastoId: string) => void
+  // habilita arrastar o selo de um pasto pra outro (gated por módulo "Mudança de Pasto" —
+  // decisão do usuário, ver CLAUDE.md "Selos do Rebanho — Fase 3") — só pastos com contorno
+  // entram (são os únicos que ganham marcador), e só dentro da mesma fazenda do selo arrastado
+  permitirArrastar?: boolean
+  onArrastarPasto?: (pastoOrigemId: string, pastoDestinoId: string) => void
   altura?: number
 }) {
   const pastosComGeometria = useMemo(() => pastos.filter((p) => p.geometria), [pastos])
   const { wrapperRef, telaCheia, alternarTelaCheia } = useTelaCheia()
+  // força um re-render depois de um drag (bem-sucedido ou não) — o marcador arrastado precisa
+  // voltar pra posição calculada (centróide/anel do pasto de origem) assim que o usuário solta,
+  // já que a posição real do rebanho não muda só por causa do arraste em si (só a confirmação no
+  // modal de Movimentação de Lotes altera o pasto de fato)
+  const [, forcarRender] = useReducer((n: number) => n + 1, 0)
+
+  function tratarSoltarSelo(pastoOrigem: PastoDistribuicao, evento: LeafletEvent) {
+    forcarRender()
+    const marker = evento.target as L.Marker
+    const { lat, lng } = marker.getLatLng()
+    const destino = pastosComGeometria.find((p) => {
+      if (p.id === pastoOrigem.id) return false
+      if (p.fazendaId !== pastoOrigem.fazendaId) return false
+      return booleanPointInPolygon([lng, lat], p.geometria as Polygon | MultiPolygon)
+    })
+    if (destino) onArrastarPasto?.(pastoOrigem.id, destino.id)
+  }
 
   const todasGeometrias = [
     ...fazendasGeometria,
@@ -122,7 +176,12 @@ export default function MapaDistribuicaoRebanho({
   return (
     <div
       ref={wrapperRef}
-      className="overflow-hidden rounded-control border border-border bg-surface"
+      // isolate: as camadas internas do Leaflet (marcadores, tooltips, controles) usam z-index
+      // bem altos (até 1000, ver leaflet.css) que, sem isso, vazam pra fora do mapa e aparecem
+      // por cima de qualquer modal com z-index mais baixo (ex.: MovimentacaoLotesModal/
+      // DetalhePastoModal, ambos z-50) — isolate contém esse empilhamento inteiro dentro do
+      // próprio mapa, sem precisar aumentar o z-index de cada modal que existir por cima dele
+      className="isolate overflow-hidden rounded-control border border-border bg-surface"
       style={{ height: telaCheia ? '100vh' : altura }}
     >
       <MapContainer center={centroInicial} zoom={4} style={{ height: '100%', width: '100%' }}>
@@ -170,19 +229,27 @@ export default function MapaDistribuicaoRebanho({
           )
         })}
         {pastosComGeometria.flatMap((p) => {
-          const posicoes = posicoesIcones(p.geometria as Geometry, p.categorias.length)
-          return p.categorias.map((c, i) => (
+          const marcadores = agruparMarcadoresPasto(p.categorias)
+          const posicoes = posicoesIcones(p.geometria as Geometry, marcadores.length)
+          return marcadores.map((m, i) => (
             <Marker
-              key={`${p.id}-${c.codigo}-${i}`}
+              key={`${p.id}-${m.codigo}-${i}`}
               position={posicoes[i] ?? posicoes[0]}
-              icon={iconeLeaflet(c.codigo)}
-              eventHandlers={{ click: () => onSelecionarPasto?.(p.id) }}
+              icon={seloIcone(m)}
+              draggable={permitirArrastar}
+              eventHandlers={{
+                click: () => {
+                  onSelecionarPasto?.(p.id)
+                  onAbrirDetalhe?.(p.id)
+                },
+                dragend: (e) => tratarSoltarSelo(p, e),
+              }}
             >
               <Tooltip direction="top">
                 <div>
-                  <div className="font-semibold">{c.nome}</div>
+                  <div className="font-semibold">{m.nome}</div>
                   <div>
-                    {formatQuantidade(c.quantidade)} cab. · peso médio {formatPeso(c.pesoMedio)} kg
+                    {formatQuantidade(m.quantidade)} cab. · peso médio {formatPeso(m.pesoMedio)} kg
                   </div>
                 </div>
               </Tooltip>

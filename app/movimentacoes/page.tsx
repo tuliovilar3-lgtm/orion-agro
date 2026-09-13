@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Required from '@/components/Required'
 import { bloquearEnvioPorEnter } from '@/lib/form-utils'
@@ -301,6 +301,7 @@ type ChecagemEdicao = {
 }
 
 export default function MovimentacoesPage() {
+  const prefillAplicadoRef = useRef(false)
   const [fazendas, setFazendas] = useState<Fazenda[]>([])
   const [categorias, setCategorias] = useState<Categoria[]>([])
   const [pastos, setPastos] = useState<Pasto[]>([])
@@ -1006,6 +1007,34 @@ export default function MovimentacoesPage() {
     carregarMovimentacoes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtroFazendaId, filtroTipo, filtroCategoriaId, filtroDataInicio, filtroDataFim])
+
+  // pré-preenchimento vindo do mapa de distribuição do rebanho (selo do pasto → ação rápida) —
+  // só depois de pastos/módulos carregados, pra o módulo derivado do pasto não ficar vazio. Lido
+  // direto de window.location.search (não useSearchParams) pra não exigir um Suspense boundary só
+  // por causa desse pré-preenchimento pontual — mesmo padrão já usado em /login e /relatorios.
+  useEffect(() => {
+    if (prefillAplicadoRef.current) return
+    if (pastos.length === 0) return
+    const params = new URLSearchParams(window.location.search)
+    const fazendaParam = params.get('fazenda')
+    const pastoParam = params.get('pasto')
+    const tipoParam = params.get('tipo') as TipoMovimentacao | null
+    if (!fazendaParam && !pastoParam && !tipoParam) return
+    prefillAplicadoRef.current = true
+
+    if (tipoParam && TIPOS.includes(tipoParam)) setTipo(tipoParam)
+    if (fazendaParam) setFazendaId(fazendaParam)
+    if (pastoParam) {
+      const pasto = pastos.find((p) => p.id === pastoParam)
+      if (pasto) {
+        setPastoId(pasto.id)
+        setModuloId(pasto.modulo_id)
+      }
+    }
+    setTipoConfirmado(true)
+    setFormularioAberto(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pastos])
 
   function limparFormulario() {
     setTipoConfirmado(false)
