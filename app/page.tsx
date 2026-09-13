@@ -19,6 +19,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import InicioCampo from '@/components/campo/InicioCampo'
 import SuporteHome from '@/components/suporte/SuporteHome'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
+import type { TipoLancamentoRapido } from '@/components/fazendas/LancamentoRapidoModal'
 import { ICONE_SRC } from '@/lib/categoria-icones'
 import {
   montarDistribuicaoPorPasto,
@@ -35,6 +36,8 @@ const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/Mapa
 })
 const DetalhePastoModal = dynamic(() => import('@/components/fazendas/DetalhePastoModal'), { ssr: false })
 const MovimentacaoLotesModal = dynamic(() => import('@/components/fazendas/MovimentacaoLotesModal'), { ssr: false })
+const LancamentoRapidoModal = dynamic(() => import('@/components/fazendas/LancamentoRapidoModal'), { ssr: false })
+const PesagemRapidaModal = dynamic(() => import('@/components/fazendas/PesagemRapidaModal'), { ssr: false })
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — convenção padrão da
 // pecuária brasileira. Lotação = UA totais / hectares em uso "Pecuária".
@@ -126,6 +129,8 @@ function PainelDashboard() {
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
   const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
   const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
+  const [lancamentoRapidoInfo, setLancamentoRapidoInfo] = useState<{ tipo: TipoLancamentoRapido; pastoId: string } | null>(null)
+  const [pesagemRapidaPastoId, setPesagemRapidaPastoId] = useState<string | null>(null)
   // ver "Modais escondidos atrás do mapa em tela cheia" no CLAUDE.md — a Fullscreen API só
   // exibe acima do elemento em tela cheia o que é seu próprio descendente, então os modais de
   // detalhe/movimentação (fora da árvore do mapa) precisam ser portados pra dentro dele
@@ -610,7 +615,24 @@ function PainelDashboard() {
         (() => {
           const pasto = pastosDistribuicao.find((p) => p.id === pastoDetalheId)
           if (!pasto) return null
-          const modal = <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} />
+          const modal = (
+            <DetalhePastoModal
+              pasto={pasto}
+              onClose={() => setPastoDetalheId(null)}
+              onAcaoRapida={(tipo) => {
+                setPastoDetalheId(null)
+                setLancamentoRapidoInfo({ tipo, pastoId: pasto.id })
+              }}
+              onAbrirMudancaPasto={() => {
+                setPastoDetalheId(null)
+                setArrastarInfo({ origemId: pasto.id, destinoId: '' })
+              }}
+              onAbrirPesagem={() => {
+                setPastoDetalheId(null)
+                setPesagemRapidaPastoId(pasto.id)
+              }}
+            />
+          )
           // com o mapa em tela cheia, o modal precisa ser portado pra dentro do próprio elemento
           // em tela cheia — senão fica escondido atrás dele (ver comentário no useRef acima)
           return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
@@ -631,6 +653,39 @@ function PainelDashboard() {
                 setArrastarInfo(null)
                 carregarMapaDistribuicao()
               }}
+            />
+          )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
+        })()}
+
+      {lancamentoRapidoInfo &&
+        (() => {
+          const pasto = pastosDistribuicao.find((p) => p.id === lancamentoRapidoInfo.pastoId)
+          if (!pasto) return null
+          const modal = (
+            <LancamentoRapidoModal
+              tipo={lancamentoRapidoInfo.tipo}
+              fazendaId={pasto.fazendaId}
+              pastoId={pasto.id}
+              pastoNome={pasto.nome}
+              onClose={() => setLancamentoRapidoInfo(null)}
+              onSalvo={carregarMapaDistribuicao}
+            />
+          )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
+        })()}
+
+      {pesagemRapidaPastoId &&
+        (() => {
+          const pasto = pastosDistribuicao.find((p) => p.id === pesagemRapidaPastoId)
+          if (!pasto) return null
+          const modal = (
+            <PesagemRapidaModal
+              fazendaId={pasto.fazendaId}
+              pastoId={pasto.id}
+              pastoNome={pasto.nome}
+              onClose={() => setPesagemRapidaPastoId(null)}
+              onSalvo={carregarMapaDistribuicao}
             />
           )
           return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal

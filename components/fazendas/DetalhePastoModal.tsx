@@ -2,24 +2,34 @@
 
 // modal de detalhe do pasto — abre ao clicar num selo do mapa de distribuição do rebanho
 // (Painel / Rebanho por pasto). Mostra as categorias reais do pasto (não os marcadores
-// agrupados do mapa) + um resumo de KPIs + 6 ações rápidas que pré-preenchem e abrem a tela de
-// lançamento correspondente (fazenda+pasto, e tipo quando aplicável) via query string — ver
-// "Mapa de distribuição do rebanho... Fase 2" no CLAUDE.md.
+// agrupados do mapa) + um resumo de KPIs + 6 ações rápidas. Nascimento/Morte/Mudança de
+// Pasto/Mudança de Categoria/Desmame/Pesagem abrem um modal de lançamento embutido, sem sair
+// da aba do mapa (ver LancamentoRapidoModal/PesagemRapidaModal/MovimentacaoLotesModal) — ver
+// "Selos do Rebanho — Fase 4 (lançamento embutido)" no CLAUDE.md. Um botão "Outras
+// movimentações" no rodapé continua abrindo a tela cheia (Venda, Transferência, Consumo/
+// Doação, ou qualquer lançamento em lote fora do escopo dos modais rápidos).
 import { useRouter } from 'next/navigation'
 import { ICONE_SRC } from '@/lib/categoria-icones'
 import { IconeMovimentacao } from '@/lib/movimentacao-icones'
 import { ICONS } from '@/lib/nav-icons'
 import { formatArea, formatQuantidade, formatPeso, formatLotacao } from '@/lib/format'
 import type { PastoDistribuicao } from './MapaDistribuicaoRebanho'
+import type { TipoLancamentoRapido } from './LancamentoRapidoModal'
 
 const KG_POR_UA = 450
 
 export default function DetalhePastoModal({
   pasto,
   onClose,
+  onAcaoRapida,
+  onAbrirMudancaPasto,
+  onAbrirPesagem,
 }: {
   pasto: PastoDistribuicao
   onClose: () => void
+  onAcaoRapida: (tipo: TipoLancamentoRapido) => void
+  onAbrirMudancaPasto: () => void
+  onAbrirPesagem: () => void
 }) {
   const router = useRouter()
 
@@ -30,23 +40,26 @@ export default function DetalhePastoModal({
     pasto.areaHa && pasto.areaHa > 0 && totalQuantidade > 0 ? pesoVivoTotal / KG_POR_UA / pasto.areaHa : null
   const categoriasOrdenadas = [...pasto.categorias].sort((a, b) => b.quantidade - a.quantidade)
 
-  function irPara(href: string) {
+  function irParaOutrasMovimentacoes() {
     onClose()
-    router.push(href)
+    router.push(`/movimentacoes?fazenda=${pasto.fazendaId}&pasto=${pasto.id}`)
   }
 
-  const base = `fazenda=${pasto.fazendaId}&pasto=${pasto.id}`
+  // "Venda" saiu daqui de propósito — venda em pé vs. abate é uma decisão que precisa de dados
+  // que o pessoal de campo normalmente não tem à mão (peso morto/rendimento, preço); decisão do
+  // usuário: manter aqui só movimentações simples de executar direto no campo, cada uma num
+  // modal embutido (ver import acima) em vez de navegar pra outra tela.
   const acoes = [
-    { label: 'Venda', icon: <IconeMovimentacao tipo="VENDA_PE" />, href: `/movimentacoes?${base}&tipo=VENDA_PE` },
-    { label: 'Morte', icon: <IconeMovimentacao tipo="MORTE" />, href: `/movimentacoes?${base}&tipo=MORTE` },
-    { label: 'Mudança de Pasto', icon: ICONS.controlePasto, href: `/controle-pasto?${base}` },
+    { label: 'Nascimento', icon: <IconeMovimentacao tipo="NASCIMENTO" />, onClick: () => onAcaoRapida('NASCIMENTO') },
+    { label: 'Morte', icon: <IconeMovimentacao tipo="MORTE" />, onClick: () => onAcaoRapida('MORTE') },
+    { label: 'Mudança de Pasto', icon: ICONS.controlePasto, onClick: onAbrirMudancaPasto },
     {
       label: 'Mudança de Categoria',
       icon: <IconeMovimentacao tipo="MUDANCA_CATEGORIA" />,
-      href: `/movimentacoes?${base}&tipo=MUDANCA_CATEGORIA`,
+      onClick: () => onAcaoRapida('MUDANCA_CATEGORIA'),
     },
-    { label: 'Nascimento', icon: <IconeMovimentacao tipo="NASCIMENTO" />, href: `/movimentacoes?${base}&tipo=NASCIMENTO` },
-    { label: 'Pesagem', icon: ICONS.pesagens, href: `/pesagens?${base}` },
+    { label: 'Desmame', icon: <IconeMovimentacao tipo="DESMAME" />, onClick: () => onAcaoRapida('DESMAME') },
+    { label: 'Pesagem', icon: ICONS.pesagens, onClick: onAbrirPesagem },
   ]
 
   return (
@@ -138,7 +151,7 @@ export default function DetalhePastoModal({
             <button
               key={a.label}
               type="button"
-              onClick={() => irPara(a.href)}
+              onClick={a.onClick}
               className="flex flex-col items-center gap-1.5 rounded-control border border-border p-2.5 text-center text-xs font-medium text-text-secondary transition-colors hover:border-brand-500 hover:bg-brand-100 hover:text-brand-700"
             >
               <span className="h-5 w-5">{a.icon}</span>
@@ -146,6 +159,14 @@ export default function DetalhePastoModal({
             </button>
           ))}
         </div>
+
+        <button
+          type="button"
+          onClick={irParaOutrasMovimentacoes}
+          className="mt-2 w-full rounded-control border border-dashed border-border py-2 text-center text-xs font-medium text-text-secondary transition-colors hover:border-brand-500 hover:text-brand-700"
+        >
+          Outras movimentações →
+        </button>
       </div>
     </div>
   )

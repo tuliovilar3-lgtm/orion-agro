@@ -1037,7 +1037,13 @@ export default function MovimentacoesPage() {
     if (!fazendaParam && !pastoParam && !tipoParam) return
     prefillAplicadoRef.current = true
 
-    if (tipoParam && TIPOS.includes(tipoParam)) setTipo(tipoParam)
+    // "Outras movimentações" (DetalhePastoModal) manda só fazenda+pasto, sem tipo — nesse caso o
+    // formulário abre com a grade de 9 tipos normal, sem nenhum já confirmado (os outros 6 tipos
+    // do card do mapa abrem modal embutido próprio agora, não passam mais por aqui)
+    if (tipoParam && TIPOS.includes(tipoParam)) {
+      setTipo(tipoParam)
+      setTipoConfirmado(true)
+    }
     if (fazendaParam) setFazendaId(fazendaParam)
     if (pastoParam) {
       const pasto = pastos.find((p) => p.id === pastoParam)
@@ -1046,8 +1052,11 @@ export default function MovimentacoesPage() {
         setModuloId(pasto.modulo_id)
       }
     }
-    setTipoConfirmado(true)
     setFormularioAberto(true)
+    // sem isso a tela abre rolada pro fim do formulário (o conteúdo dos passos 2-4, que só
+    // aparece depois que tipoConfirmado vira true, empurra a área visível pra baixo) — mesmo
+    // scrollTo já usado nos outros pontos que abrem o formulário (iniciarEdicao* abaixo)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pastos])
 

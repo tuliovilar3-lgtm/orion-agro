@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { formatQuantidade, formatPeso as formatPesoValor, formatArea, formatLotacao } from '@/lib/format'
 import ModuloGate from '@/components/ModuloGate'
 import type { PastoDistribuicao } from '@/components/fazendas/MapaDistribuicaoRebanho'
+import type { TipoLancamentoRapido } from '@/components/fazendas/LancamentoRapidoModal'
 import {
   montarDistribuicaoPorPasto,
   corPorModuloId,
@@ -26,6 +27,8 @@ const MapaDistribuicaoRebanho = dynamic(() => import('@/components/fazendas/Mapa
 })
 const DetalhePastoModal = dynamic(() => import('@/components/fazendas/DetalhePastoModal'), { ssr: false })
 const MovimentacaoLotesModal = dynamic(() => import('@/components/fazendas/MovimentacaoLotesModal'), { ssr: false })
+const LancamentoRapidoModal = dynamic(() => import('@/components/fazendas/LancamentoRapidoModal'), { ssr: false })
+const PesagemRapidaModal = dynamic(() => import('@/components/fazendas/PesagemRapidaModal'), { ssr: false })
 
 // 1 UA (Unidade Animal) = 450 kg de peso vivo — mesma convenção usada no
 // Painel e no Relatório de Lotação
@@ -88,6 +91,8 @@ export default function RelatorioRebanhoPorPastoPage() {
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
   const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
   const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
+  const [lancamentoRapidoInfo, setLancamentoRapidoInfo] = useState<{ tipo: TipoLancamentoRapido; pastoId: string } | null>(null)
+  const [pesagemRapidaPastoId, setPesagemRapidaPastoId] = useState<string | null>(null)
   // ver "Modais escondidos atrás do mapa em tela cheia" no CLAUDE.md — mesmo mecanismo de
   // portal já usado em app/page.tsx
   const mapaWrapperRef = useRef<HTMLDivElement>(null)
@@ -505,7 +510,24 @@ export default function RelatorioRebanhoPorPastoPage() {
         (() => {
           const pasto = distribuicaoMapa.find((p) => p.id === pastoDetalheId)
           if (!pasto) return null
-          const modal = <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} />
+          const modal = (
+            <DetalhePastoModal
+              pasto={pasto}
+              onClose={() => setPastoDetalheId(null)}
+              onAcaoRapida={(tipo) => {
+                setPastoDetalheId(null)
+                setLancamentoRapidoInfo({ tipo, pastoId: pasto.id })
+              }}
+              onAbrirMudancaPasto={() => {
+                setPastoDetalheId(null)
+                setArrastarInfo({ origemId: pasto.id, destinoId: '' })
+              }}
+              onAbrirPesagem={() => {
+                setPastoDetalheId(null)
+                setPesagemRapidaPastoId(pasto.id)
+              }}
+            />
+          )
           return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
         })()}
 
@@ -524,6 +546,39 @@ export default function RelatorioRebanhoPorPastoPage() {
                 setArrastarInfo(null)
                 carregarLinhas()
               }}
+            />
+          )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
+        })()}
+
+      {lancamentoRapidoInfo &&
+        (() => {
+          const pasto = distribuicaoMapa.find((p) => p.id === lancamentoRapidoInfo.pastoId)
+          if (!pasto) return null
+          const modal = (
+            <LancamentoRapidoModal
+              tipo={lancamentoRapidoInfo.tipo}
+              fazendaId={pasto.fazendaId}
+              pastoId={pasto.id}
+              pastoNome={pasto.nome}
+              onClose={() => setLancamentoRapidoInfo(null)}
+              onSalvo={carregarLinhas}
+            />
+          )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
+        })()}
+
+      {pesagemRapidaPastoId &&
+        (() => {
+          const pasto = distribuicaoMapa.find((p) => p.id === pesagemRapidaPastoId)
+          if (!pasto) return null
+          const modal = (
+            <PesagemRapidaModal
+              fazendaId={pasto.fazendaId}
+              pastoId={pasto.id}
+              pastoNome={pasto.nome}
+              onClose={() => setPesagemRapidaPastoId(null)}
+              onSalvo={carregarLinhas}
             />
           )
           return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal

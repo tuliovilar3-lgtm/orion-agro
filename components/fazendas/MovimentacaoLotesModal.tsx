@@ -1,8 +1,11 @@
 'use client'
 
-// modal "Movimentação de Lotes" — aberto ao arrastar um selo de um pasto pra outro no mapa de
-// distribuição do rebanho (ver MapaDistribuicaoRebanho, prop onArrastarPasto). Reaproveita a
-// mesma lógica de gravação já usada em app/controle-pasto/page.tsx (mesmo tipo MUDANCA_PASTO,
+// modal "Mudança de Pasto" (nome interno do arquivo/componente ficou como
+// MovimentacaoLotesModal por já estar em uso — só o título visível mudou) — aberto tanto ao
+// arrastar um selo de um pasto pra outro no mapa de distribuição do rebanho (ver
+// MapaDistribuicaoRebanho, prop onArrastarPasto) quanto pelo botão "Mudança de Pasto" do
+// DetalhePastoModal (nesse caso sem destino sugerido — o usuário escolhe no seletor). Reaproveita
+// a mesma lógica de gravação já usada em app/controle-pasto/page.tsx (mesmo tipo MUDANCA_PASTO,
 // mesmo formato de payload, mesma trigger de saldo no banco) — é só uma porta de entrada mais
 // rápida pro mesmo lançamento, sem abrir mão de nenhuma validação já existente. Só cobre
 // lançamento NOVO (nunca edição), então não precisa da checagem de trajetória que a tela cheia
@@ -278,7 +281,7 @@ export default function MovimentacaoLotesModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
-          <h2 className="text-lg font-bold text-text-primary">Movimentação de Lotes</h2>
+          <h2 className="text-lg font-bold text-text-primary">Mudança de Pasto</h2>
           <button
             type="button"
             onClick={onClose}
