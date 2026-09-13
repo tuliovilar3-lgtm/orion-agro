@@ -25,6 +25,7 @@ export const DOMINIOS: { id: DominioId; label: string }[] = [
 export type ModuloId =
   | 'fazendas'
   | 'categorias'
+  | 'causas_morte'
   | 'pessoas'
   | 'movimentacoes'
   | 'pesagens'
@@ -53,6 +54,13 @@ type Modulo = {
 export const MODULOS: Modulo[] = [
   { id: 'fazendas', dominio: 'pecuaria', label: 'Fazendas', href: '/fazendas', icon: ICONS.fazendas },
   { id: 'categorias', dominio: 'pecuaria', label: 'Categorias', href: '/categorias', icon: ICONS.categorias },
+  {
+    id: 'causas_morte',
+    dominio: 'pecuaria',
+    label: 'Causas de Morte',
+    href: '/causas-morte',
+    icon: ICONS.causasMorte,
+  },
   { id: 'pessoas', dominio: 'pecuaria', label: 'Pessoas e Empresas', href: '/pessoas', icon: ICONS.pessoas },
   {
     id: 'movimentacoes',

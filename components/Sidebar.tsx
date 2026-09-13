@@ -17,6 +17,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { label: 'Fazendas', href: '/fazendas', icon: ICONS.fazendas, modulo: 'fazendas' },
       { label: 'Categorias', href: '/categorias', icon: ICONS.categorias, modulo: 'categorias' },
+      { label: 'Causas de Morte', href: '/causas-morte', icon: ICONS.causasMorte, modulo: 'causas_morte' },
       { label: 'Pessoas e Empresas', href: '/pessoas', icon: ICONS.pessoas, modulo: 'pessoas' },
       {
         label: 'Produtos e Serviços',

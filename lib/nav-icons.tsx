@@ -150,6 +150,13 @@ export const ICONS = {
       <path d="M17 6.5c0-1.5-2-2-5-2s-5 .8-5 2.2S9 8.8 12 9s5 .6 5 2.3-2 2.2-5 2.2-5-.5-5-2" />
     </Icon>
   ),
+  causasMorte: (
+    <Icon>
+      <path d="M9 5V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" />
+      <rect x="5" y="5" width="14" height="16" rx="2" />
+      <path d="M9.5 13l5 5M14.5 13l-5 5" />
+    </Icon>
+  ),
   configuracoes: (
     <Icon>
       <path d="M4 6h16" />

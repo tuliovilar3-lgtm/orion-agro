@@ -19,7 +19,7 @@ import Required from '@/components/Required'
 import { formatQuantidade, formatPeso } from '@/lib/format'
 import { formatarDataBr } from '@/components/relatorios/tipos'
 import { PAPEIS_BEZERRO_MAMANDO } from '@/lib/faixa-etaria'
-import { safraSugeridaParaData } from '@/lib/periodo'
+import { safraSugeridaParaData, formatSafraInput, extrairAnoSafraDigitado } from '@/lib/periodo'
 
 export type TipoLancamentoRapido = 'NASCIMENTO' | 'MORTE' | 'MUDANCA_CATEGORIA' | 'DESMAME'
 
@@ -33,7 +33,10 @@ type CategoriaCatalogo = {
   papelNome: string | null
 }
 type Proprietario = { id: string; nome: string }
+type CausaMorte = { id: string; nome: string }
 type LoteDisponivel = { safra: number; saldo: number }
+
+const NOVA_CAUSA_MORTE = '__nova__'
 
 type CartaoCategoria = {
   chave: string // categoriaId + proprietarioId — categoria sozinha não é única quando dividida
@@ -110,22 +113,37 @@ export default function LancamentoRapidoModal({
   const [carregando, setCarregando] = useState(true)
   const [categoriasTodas, setCategoriasTodas] = useState<CategoriaCatalogo[]>([])
   const [proprietarios, setProprietarios] = useState<Proprietario[]>([])
+  const [causasMorte, setCausasMorte] = useState<CausaMorte[]>([])
   const [cartoes, setCartoes] = useState<CartaoCategoria[]>([])
   const [data, setData] = useState(hoje)
+
+  // criada aqui (não dentro de cada card) pra uma causa nova cadastrada num card já ficar
+  // disponível pros demais cards de Morte da mesma sessão do modal, sem precisar recarregar
+  async function criarCausaMorte(nome: string): Promise<CausaMorte | null> {
+    const { data: nova, error } = await supabase.from('causas_morte').insert({ nome }).select('id, nome').single()
+    if (error) {
+      alert('Erro ao cadastrar causa: ' + error.message)
+      return null
+    }
+    setCausasMorte((prev) => [...prev, nova].sort((a, b) => a.nome.localeCompare(b.nome)))
+    return nova
+  }
 
   useEffect(() => {
     let cancelado = false
     async function carregar() {
       setCarregando(true)
-      const [{ data: cats }, { data: prop }] = await Promise.all([
+      const [{ data: cats }, { data: prop }, { data: cm }] = await Promise.all([
         supabase
           .from('categorias_animal')
           .select('id, nome, sexo, era, grupo:grupos_categoria(nome), papel:grupos_categoria_papel(nome)')
           .eq('ativa', true)
           .order('nome'),
         supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
+        supabase.from('causas_morte').select('id, nome').eq('ativo', true).order('nome'),
       ])
       if (cancelado) return
+      setCausasMorte((cm || []) as CausaMorte[])
 
       const categoriasCarregadas: CategoriaCatalogo[] = ((cats || []) as any[]).map((c) => ({
         id: c.id,
@@ -321,6 +339,8 @@ export default function LancamentoRapidoModal({
                         pastoId={pastoId}
                         data={data}
                         proprietarios={proprietarios}
+                        causasMorte={causasMorte}
+                        onCriarCausaMorte={criarCausaMorte}
                         bloqueado={bloqueadoPorSemProprietario}
                         onSalvo={onSalvo}
                       />
@@ -331,7 +351,9 @@ export default function LancamentoRapidoModal({
                         fazendaId={fazendaId}
                         pastoId={pastoId}
                         data={data}
-                        categoriasDestino={categoriasTodas.filter((cat) => !categoriaEhBezerroPapel(cat) && cat.id !== c.categoriaId)}
+                        categoriasDestino={categoriasTodas.filter(
+                          (cat) => !categoriaEhBezerroPapel(cat) && cat.id !== c.categoriaId && cat.sexo === c.sexo
+                        )}
                         onSalvo={onSalvo}
                       />
                     ) : (
@@ -482,14 +504,17 @@ function FormularioNascimento({
           />
         </div>
         <div>
-          <label className={labelClass}>Safra de nascimento</label>
+          <label className={labelClass}>
+            Safra do bezerro
+            <Required />
+          </label>
           <input
             type="text"
             inputMode="numeric"
             className={inputClass}
-            placeholder={String(safraSugeridaParaData(data))}
-            value={safraInput}
-            onChange={(e) => setSafraInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            value={formatSafraInput(safraInput || String(safraSugeridaParaData(data)))}
+            onChange={(e) => setSafraInput(extrairAnoSafraDigitado(e.target.value))}
+            onFocus={(e) => e.target.select()}
           />
         </div>
       </div>
@@ -576,6 +601,8 @@ function CardMorte({
   pastoId,
   data,
   proprietarios,
+  causasMorte,
+  onCriarCausaMorte,
   bloqueado,
   onSalvo,
 }: {
@@ -584,6 +611,8 @@ function CardMorte({
   pastoId: string
   data: string
   proprietarios: Proprietario[]
+  causasMorte: CausaMorte[]
+  onCriarCausaMorte: (nome: string) => Promise<CausaMorte | null>
   bloqueado: boolean
   onSalvo: () => void
 }) {
@@ -591,7 +620,8 @@ function CardMorte({
   const lotes = useLotesDisponiveis(fazendaId, cartao.categoriaId, data, cartao.eraBezerro)
   const [quantidade, setQuantidade] = useState('')
   const [pesoMedio, setPesoMedio] = useState('')
-  const [causaMorte, setCausaMorte] = useState('')
+  const [causaMorteId, setCausaMorteId] = useState('')
+  const [novaCausaMorteNome, setNovaCausaMorteNome] = useState('')
   const [safraSelecionada, setSafraSelecionada] = useState('')
   const [proprietarioEscolhido, setProprietarioEscolhido] = useState('')
   const [observacao, setObservacao] = useState('')
@@ -607,11 +637,24 @@ function CardMorte({
       return setErro(`Quantidade inválida (disponível: ${cartao.quantidadeDisponivel}).`)
     }
     if (!Number.isFinite(peso) || peso <= 0) return setErro('Informe o peso médio.')
-    if (!causaMorte.trim()) return setErro('Informe a causa da morte.')
+    if (!causaMorteId) return setErro('Selecione a causa da morte.')
+    if (causaMorteId === NOVA_CAUSA_MORTE && !novaCausaMorteNome.trim()) return setErro('Informe o nome da nova causa.')
     if (cartao.eraBezerro && !safraSelecionada) return setErro('Selecione a safra de nascimento.')
     if (cartao.precisaEscolherProprietario && !proprietarioEscolhido) return setErro('Selecione o proprietário.')
 
     setSalvando(true)
+    let causaMorteNome: string | null
+    if (causaMorteId === NOVA_CAUSA_MORTE) {
+      const nova = await onCriarCausaMorte(novaCausaMorteNome.trim())
+      causaMorteNome = nova?.nome ?? null
+    } else {
+      causaMorteNome = causasMorte.find((c) => c.id === causaMorteId)?.nome ?? null
+    }
+    if (!causaMorteNome) {
+      setSalvando(false)
+      return setErro('Não foi possível salvar a causa da morte.')
+    }
+
     const proprietarioId = cartao.precisaEscolherProprietario ? proprietarioEscolhido : cartao.proprietarioIdFixo
     const { error } = await supabase.from('movimentacoes_rebanho').insert(
       payloadBase({
@@ -621,7 +664,7 @@ function CardMorte({
         categoria_id: cartao.categoriaId,
         quantidade: qtd,
         peso_medio_kg: peso,
-        causa_morte: causaMorte.trim(),
+        causa_morte: causaMorteNome,
         pasto_id: pastoId,
         proprietario_id: proprietarioId || null,
         safra_nascimento_ano_inicio: cartao.eraBezerro ? parseInt(safraSelecionada, 10) : null,
@@ -684,7 +727,24 @@ function CardMorte({
             Causa da morte
             <Required />
           </label>
-          <input type="text" className={inputSmClass} value={causaMorte} onChange={(e) => setCausaMorte(e.target.value)} />
+          <select className={inputSmClass} value={causaMorteId} onChange={(e) => setCausaMorteId(e.target.value)}>
+            <option value="">Selecione...</option>
+            {causasMorte.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nome}
+              </option>
+            ))}
+            <option value={NOVA_CAUSA_MORTE}>+ Nova causa...</option>
+          </select>
+          {causaMorteId === NOVA_CAUSA_MORTE && (
+            <input
+              type="text"
+              className={`mt-1 ${inputSmClass}`}
+              placeholder="Nome da causa"
+              value={novaCausaMorteNome}
+              onChange={(e) => setNovaCausaMorteNome(e.target.value)}
+            />
+          )}
         </div>
         {cartao.eraBezerro && (
           <div>
@@ -743,8 +803,8 @@ function CardMorte({
 // ---------------------------------------------------------------------------
 type LinhaDestino = { id: string; categoriaDestinoId: string; quantidade: string; pesoMedio: string }
 
-function novaLinhaDestino(): LinhaDestino {
-  return { id: crypto.randomUUID(), categoriaDestinoId: '', quantidade: '', pesoMedio: '' }
+function novaLinhaDestino(quantidade = ''): LinhaDestino {
+  return { id: crypto.randomUUID(), categoriaDestinoId: '', quantidade, pesoMedio: '' }
 }
 
 function CardMudancaCategoria({
@@ -763,7 +823,10 @@ function CardMudancaCategoria({
   onSalvo: () => void
 }) {
   const supabase = createClient()
-  const [linhas, setLinhas] = useState<LinhaDestino[]>([novaLinhaDestino()])
+  // quantidade da primeira linha já vem preenchida com o total disponível (caso mais comum é
+  // converter o lote inteiro) — editável livremente, inclusive pra abrir espaço e dividir em
+  // outro destino via "+"
+  const [linhas, setLinhas] = useState<LinhaDestino[]>([novaLinhaDestino(String(cartao.quantidadeDisponivel))])
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [salvo, setSalvo] = useState(false)

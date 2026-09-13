@@ -2064,13 +2064,10 @@ create table movimentacoes_rebanho (
     (tipo not in ('MUDANCA_PASTO', 'TRANSFERENCIA') and pasto_destino_id is null)
   ),
 
-  -- peso médio obrigatório em toda movimentação, exceto Mudança de
-  -- Pasto (peso opcional lá — se não informado, o lote continua com o
-  -- último peso conhecido). Adicionada NOT VALID na migração 028 pra
-  -- não quebrar lançamentos antigos sem peso já existentes.
-  constraint ck_peso_medio_obrigatorio check (
-    tipo = 'MUDANCA_PASTO' or peso_medio_kg is not null
-  ),
+  -- peso médio obrigatório em TODA movimentação, sem exceção (migração 073 — Fase 0 do ledger
+  -- de peso ponderado, ver fn_calcular_peso_total_movimentacao mais abaixo: Mudança de Pasto sem
+  -- peso informado resolve sozinha o peso já conhecido, nunca fica null de verdade).
+  constraint ck_peso_medio_obrigatorio check (peso_medio_kg is not null),
 
   -- ---------------------------------------------------------------
   -- RESTRIÇÕES DE PLAUSIBILIDADE BIOLÓGICA E FINANCEIRA
@@ -2154,11 +2151,37 @@ create unique index uq_saldo_inicial_por_categoria
 -- fn_calcular_valores_movimentacao (ordem alfabética do nome do
 -- trigger: "calcular_peso_total" < "calcular_valores"), já que esse
 -- último usa peso_total_kg como entrada pro cálculo de arroba/valor.
+-- Migração 073: também resolve sozinha o peso de uma Mudança de Pasto sem peso informado
+-- (mesmo princípio de "sem fallback cruzado" já usado em toda resolução de peso do sistema) —
+-- nenhuma movimentação sai desta função sem peso_medio_kg preenchido, pra o ledger de peso
+-- ponderado (fase futura) sempre ter um número real pra somar.
 -- ---------------------------------------------------------------------
 
 create or replace function fn_calcular_peso_total_movimentacao()
 returns trigger as $$
+declare
+  v_peso numeric;
 begin
+  if new.tipo = 'MUDANCA_PASTO' and new.peso_medio_kg is null then
+    -- created_at desc desempata quando há 2+ pesagens na mesma data mais recente pra esse trio —
+    -- sem isso, essa consulta e a de fn_compilar_pesagem_movimentacao (mais abaixo) podiam
+    -- discordar sobre qual é "a" pesagem mais recente (bug real, migração 073b)
+    select p.peso_medio_kg into v_peso
+    from pesagens p
+    where p.fazenda_id = new.fazenda_id
+      and p.categoria_id = new.categoria_id
+      and p.pasto_id = new.pasto_id
+      and p.data <= new.data
+    order by p.data desc, p.created_at desc
+    limit 1;
+
+    if v_peso is null then
+      select c.peso_referencia_kg into v_peso from categorias_animal c where c.id = new.categoria_id;
+    end if;
+
+    new.peso_medio_kg := v_peso;
+  end if;
+
   if new.peso_medio_kg is not null and new.quantidade is not null then
     new.peso_total_kg := round(new.peso_medio_kg * new.quantidade, 2);
   end if;
@@ -3796,27 +3819,55 @@ $$;
 -- (migração 063), agora também aqui (migração 064).
 -- ---------------------------------------------------------------------
 
+-- Migração 073: pra Mudança de Pasto especificamente, só compila uma pesagem de verdade quando
+-- o peso muda em relação ao mais recente já conhecido pra esse fazenda+categoria+pasto — como
+-- toda Mudança de Pasto passou a carregar peso sempre (mesmo sem intenção de atualizar), compilar
+-- incondicionalmente encheria "Pesagens recentes" de entradas redundantes. Os demais tipos sempre
+-- exigiram peso digitado ativamente pra aquele lançamento — continuam compilando sempre.
 create or replace function fn_compilar_pesagem_movimentacao()
 returns trigger as $$
 declare
-  v_fazenda_id   uuid;
-  v_categoria_id uuid;
-  v_pasto_id     uuid;
+  v_fazenda_id    uuid;
+  v_categoria_id  uuid;
+  v_pasto_id      uuid;
+  v_peso_anterior numeric;
 begin
   v_fazenda_id := coalesce(new.fazenda_destino_id, new.fazenda_id);
   v_categoria_id := coalesce(new.categoria_destino_id, new.categoria_id);
   v_pasto_id := coalesce(new.pasto_destino_id, new.pasto_id);
 
   if new.peso_medio_kg is not null and new.peso_medio_kg > 0 then
-    insert into pesagens (conta_id, fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
-    values (new.conta_id, v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
-            'Peso compilado automaticamente da movimentação')
-    on conflict (movimentacao_id) do update set
-      fazenda_id = excluded.fazenda_id,
-      categoria_id = excluded.categoria_id,
-      pasto_id = excluded.pasto_id,
-      data = excluded.data,
-      peso_medio_kg = excluded.peso_medio_kg;
+    v_peso_anterior := null;
+    if new.tipo = 'MUDANCA_PASTO' then
+      -- compara contra o peso já conhecido no PASTO DE ORIGEM (new.pasto_id, nunca v_pasto_id —
+      -- que pra MUDANCA_PASTO já é o destino) — é esse o valor que o frontend carrega adiante
+      -- quando o usuário não edita o peso (ver MovimentacaoLotesModal); comparar contra o
+      -- destino sempre pareceria "mudou" mesmo sem informação nova, já que a categoria pode
+      -- nunca ter sido pesada ali antes (bug real, migração 073c)
+      select p.peso_medio_kg into v_peso_anterior
+      from pesagens p
+      where p.fazenda_id = new.fazenda_id
+        and p.categoria_id = new.categoria_id
+        and p.pasto_id = new.pasto_id
+        and p.movimentacao_id is distinct from new.id
+        and p.data <= new.data
+      order by p.data desc, p.created_at desc
+      limit 1;
+    end if;
+
+    if new.tipo = 'MUDANCA_PASTO' and v_peso_anterior is not null and v_peso_anterior = new.peso_medio_kg then
+      delete from pesagens where movimentacao_id = new.id;
+    else
+      insert into pesagens (conta_id, fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
+      values (new.conta_id, v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
+              'Peso compilado automaticamente da movimentação')
+      on conflict (movimentacao_id) do update set
+        fazenda_id = excluded.fazenda_id,
+        categoria_id = excluded.categoria_id,
+        pasto_id = excluded.pasto_id,
+        data = excluded.data,
+        peso_medio_kg = excluded.peso_medio_kg;
+    end if;
   else
     delete from pesagens where movimentacao_id = new.id;
   end if;
@@ -4004,6 +4055,23 @@ $$ language plpgsql;
 create trigger trg_seed_atividades_economicas_conta
 after insert on contas
 for each row execute function fn_seed_atividades_economicas_conta_trigger();
+
+-- Causas de Morte (migração 072) — catálogo padronizado pro campo `causa_morte` de
+-- movimentacoes_rebanho (que continua sendo texto livre — este catálogo só alimenta o <select>
+-- de origem, com "+ Nova causa..." inline, mesmo princípio de itens_ajuste_financeiro). Sem
+-- coluna `sistema` — nenhuma linha protegida aqui, só ativar/inativar.
+create table causas_morte (
+  id         uuid primary key default gen_random_uuid(),
+  conta_id   uuid not null references contas(id) default fn_conta_atual(),
+  nome       text not null,
+  ativo      boolean not null default true,
+  ordem      int not null default 0,
+  created_at timestamptz not null default now(),
+  constraint uq_causa_morte_nome unique (conta_id, nome)
+);
+alter table causas_morte enable row level security;
+create policy causas_morte_por_conta on causas_morte for all
+  using (conta_id = fn_conta_atual()) with check (conta_id = fn_conta_atual());
 
 -- Produto/Serviço: 4º campo do plano de contas, fora da numeração
 -- Classe/Centro/Subcentro — catálogo próprio, sem seed nenhum (exceto

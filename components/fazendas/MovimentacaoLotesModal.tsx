@@ -242,9 +242,11 @@ export default function MovimentacaoLotesModal({
       categoria_id: l.categoriaId,
       categoria_destino_id: null,
       quantidade: moverTudo ? l.quantidadeDisponivel : parseInt(l.quantidade, 10),
-      // opcional — se não informado, o lote continua com o último peso conhecido, mesmo
-      // princípio já usado em Mudança de Pasto (peso_total_kg é sempre derivado no banco)
-      peso_medio_kg: l.pesoEditavel && l.pesoNovo ? parseFloat(l.pesoNovo) : null,
+      // peso é sempre obrigatório agora (migração 073 — Fase 0 do ledger de peso ponderado) —
+      // se o usuário não editou pelo lápis, manda o peso atual que a tela já exibe (l.pesoAtual)
+      // em vez de null; o banco resolveria sozinho de qualquer forma (defesa em profundidade),
+      // mas como o valor já está na tela, não faz sentido esconder ele do payload
+      peso_medio_kg: l.pesoEditavel && l.pesoNovo ? parseFloat(l.pesoNovo) : l.pesoAtual,
       peso_total_kg: null,
       peso_morto_kg: null,
       rendimento_carcaca_pct: null,

@@ -20,8 +20,10 @@ type SubtipoConsumoDoacao = 'CONSUMO_INTERNO' | 'DOACAO'
 type TipoClienteFornecedor = 'CLIENTE' | 'FORNECEDOR' | 'AMBOS'
 type PapelPessoa = 'CLIENTE' | 'FORNECEDOR'
 type TipoAjuste = 'DESCONTO' | 'ACRESCIMO'
+type CausaMorte = { id: string; nome: string }
 
 const NOVO_ITEM_AJUSTE = '__novo__'
+const NOVA_CAUSA_MORTE = '__nova__'
 
 const TIPOS: TipoMovimentacao[] = [
   'NASCIMENTO',
@@ -368,6 +370,15 @@ export default function MovimentacoesPage() {
   const [novoAcrescimoValor, setNovoAcrescimoValor] = useState('')
   const [criandoAjusteAcrescimo, setCriandoAjusteAcrescimo] = useState(false)
   const [causaMorte, setCausaMorte] = useState('')
+  // causaMorte (acima) continua sendo o texto final que de fato vai no payload — inalterado, pra
+  // não mexer em handleSubmit/handleSubmitLote/iniciarEdicao. O que muda é só a origem desse
+  // texto: em vez de digitar livre, escolhe de um catálogo (causas_morte) com "+ Nova causa..."
+  // inline (mesmo padrão de itens_ajuste_financeiro). causasMorte/causaMorteId só existem pra
+  // essa UI; causaMorteId é sempre derivado de causaMorte via o efeito logo abaixo do form.
+  const [causasMorte, setCausasMorte] = useState<CausaMorte[]>([])
+  const [causaMorteId, setCausaMorteId] = useState('')
+  const [novaCausaMorteNome, setNovaCausaMorteNome] = useState('')
+  const [criandoCausaMorte, setCriandoCausaMorte] = useState(false)
   const [subtipoConsumoDoacao, setSubtipoConsumoDoacao] = useState<SubtipoConsumoDoacao | ''>('')
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
@@ -516,6 +527,16 @@ export default function MovimentacoesPage() {
     ? categorias.filter((c) => c.era === '08-12' && c.sexo === categoriaOrigemSelecionada.sexo)
     : []
 
+  // mudança de categoria só pode ir pro mesmo sexo da origem (um garrote não vira novilha) —
+  // bug real encontrado pelo usuário: antes o destino listava qualquer categoria não-bezerro,
+  // inclusive do sexo oposto. Sem origem escolhida ainda, a lista fica vazia (mesmo princípio já
+  // usado em categoriasDestinoDesmame acima)
+  const categoriasDestinoMudancaCategoria = categoriaOrigemSelecionada
+    ? categorias.filter(
+        (c) => !categoriaEhBezerro(c) && c.id !== categoriaOrigemSelecionada.id && c.sexo === categoriaOrigemSelecionada.sexo
+      )
+    : []
+
   // lote de nascimento (safra): Nascimento sempre é bezerro; nos
   // demais tipos depende da categoria selecionada. Mudança de Categoria
   // fica de fora (bloqueada pro bezerro) e Desmame tem seu próprio bloco
@@ -619,6 +640,10 @@ export default function MovimentacoesPage() {
   useEffect(() => {
     if (isDesmame && categoriaDestinoId) {
       const aindaValida = categoriasDestinoDesmame.some((c) => c.id === categoriaDestinoId)
+      if (!aindaValida) setCategoriaDestinoId('')
+    }
+    if (isMudancaCategoria && categoriaDestinoId) {
+      const aindaValida = categoriasDestinoMudancaCategoria.some((c) => c.id === categoriaDestinoId)
       if (!aindaValida) setCategoriaDestinoId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -900,6 +925,7 @@ export default function MovimentacoesPage() {
       { data: fFiltro },
       { data: cFiltro },
       { data: prop },
+      { data: cm },
     ] = await Promise.all([
         supabase
           .from('fazendas')
@@ -929,6 +955,7 @@ export default function MovimentacoesPage() {
         // PROPRIETARIO) — não filtrada por fazenda, já que o gado pode
         // ser transferido entre fazendas
         supabase.from('pessoa_papeis').select('pessoa:pessoas!pessoa_id(id, nome)').eq('papel', 'PROPRIETARIO'),
+        supabase.from('causas_morte').select('id, nome').eq('ativo', true).order('nome'),
       ])
     setFazendas(f || [])
     setCategorias((c as unknown as Categoria[]) || [])
@@ -939,6 +966,7 @@ export default function MovimentacoesPage() {
     setItensAjuste((ia as unknown as ItemAjuste[]) || [])
     setFazendasFiltro(fFiltro || [])
     setCategoriasFiltro(cFiltro || [])
+    setCausasMorte((cm as unknown as CausaMorte[]) || [])
     setProprietarios(
       ((prop || []) as any[])
         .map((r) => r.pessoa)
@@ -1088,6 +1116,7 @@ export default function MovimentacoesPage() {
     setNovoAcrescimoNomeCriar('')
     setNovoAcrescimoValor('')
     setCausaMorte('')
+    setNovaCausaMorteNome('')
     setSubtipoConsumoDoacao('')
     setObservacao('')
     setConfirmarMudancaSexo(false)
@@ -2111,6 +2140,43 @@ export default function MovimentacoesPage() {
     else setAcrescimos((prev) => prev.filter((_, i) => i !== index))
   }
 
+  // deriva a seleção do <select> a partir do texto final (causaMorte) — cobre tanto reabrir uma
+  // edição existente (iniciarEdicao* já seta causaMorte a partir do registro salvo) quanto o
+  // catálogo ainda estar carregando quando isso roda (mesma corrida de carregamento já resolvida
+  // noutros pontos do sistema, ex.: SaldoInicialPanel)
+  useEffect(() => {
+    if (!causaMorte) {
+      setCausaMorteId('')
+      return
+    }
+    const match = causasMorte.find((c) => c.nome === causaMorte)
+    setCausaMorteId(match ? match.id : '')
+  }, [causaMorte, causasMorte])
+
+  function handleSelecionarCausaMorte(id: string) {
+    setCausaMorteId(id)
+    if (id === NOVA_CAUSA_MORTE) {
+      setCausaMorte('')
+      return
+    }
+    setCausaMorte(causasMorte.find((c) => c.id === id)?.nome ?? '')
+  }
+
+  async function handleCriarCausaMorte() {
+    const nome = novaCausaMorteNome.trim()
+    if (!nome) return
+    setCriandoCausaMorte(true)
+    const { data: novaCausa, error } = await supabase.from('causas_morte').insert({ nome }).select('id, nome').single()
+    setCriandoCausaMorte(false)
+    if (error) {
+      alert('Erro ao cadastrar causa: ' + error.message)
+      return
+    }
+    setCausasMorte((prev) => [...prev, novaCausa].sort((a, b) => a.nome.localeCompare(b.nome)))
+    setCausaMorte(novaCausa.nome)
+    setNovaCausaMorteNome('')
+  }
+
   function descreverMovimentacao(m: Movimentacao) {
     if (m.tipo === 'TRANSFERENCIA') {
       return `${m.fazenda_origem?.nome ?? '—'} → ${m.fazenda_destino?.nome ?? '—'} · ${m.categoria?.nome ?? '—'}`
@@ -2701,13 +2767,11 @@ export default function MovimentacoesPage() {
                         required
                       >
                         <option value="">Selecione...</option>
-                        {categorias
-                          .filter((c) => !categoriaEhBezerro(c))
-                          .map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.nome}
-                            </option>
-                          ))}
+                        {categoriasDestinoMudancaCategoria.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nome}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   )}
@@ -3138,7 +3202,40 @@ export default function MovimentacoesPage() {
                     Causa da morte
                     <Required />
                   </label>
-                  <input className={inputClass} value={causaMorte} onChange={(e) => setCausaMorte(e.target.value)} required />
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      className={`flex-1 ${inputClass}`}
+                      value={causaMorteId}
+                      onChange={(e) => handleSelecionarCausaMorte(e.target.value)}
+                      required
+                    >
+                      <option value="">Selecione ou cadastre uma causa...</option>
+                      {causasMorte.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nome}
+                        </option>
+                      ))}
+                      <option value={NOVA_CAUSA_MORTE}>+ Nova causa...</option>
+                    </select>
+                    {causaMorteId === NOVA_CAUSA_MORTE && (
+                      <>
+                        <input
+                          className={`flex-1 ${inputClass}`}
+                          placeholder="Nome da causa"
+                          value={novaCausaMorteNome}
+                          onChange={(e) => setNovaCausaMorteNome(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          disabled={criandoCausaMorte}
+                          className="whitespace-nowrap rounded-control border border-border px-3 py-2 text-sm text-text-primary disabled:opacity-50"
+                          onClick={handleCriarCausaMorte}
+                        >
+                          {criandoCausaMorte ? 'Salvando...' : '+ Adicionar'}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
 
