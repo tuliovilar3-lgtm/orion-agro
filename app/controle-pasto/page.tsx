@@ -87,6 +87,8 @@ export default function ControlePastoPage() {
     idsAntigos: string[]
     mensagem: string
   } | null>(null)
+  const [excluindo, setExcluindo] = useState(false)
+  const [confirmarExclusaoGrupoId, setConfirmarExclusaoGrupoId] = useState<string | null>(null)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -352,6 +354,24 @@ export default function ControlePastoPage() {
     setEditandoGrupoLinhasOriginais([])
     setAvisoEdicaoFutura(null)
     limparFormulario()
+  }
+
+  // exclusão respeita a mesma trava já existente no banco pra qualquer
+  // movimentação (fn_validar_delete_movimentacao — bloqueia se o saldo de
+  // pasto/proprietário ficaria negativo em alguma data futura); o frontend
+  // só tenta o delete e repassa o erro, mesmo padrão já usado em Movimentações
+  async function excluirGrupo(rows: Movimentacao[]) {
+    setExcluindo(true)
+    const ids = rows.map((r) => r.id)
+    const { error } = await supabase.from('movimentacoes_rebanho').delete().in('id', ids)
+    setExcluindo(false)
+    if (error) {
+      alert('Erro ao excluir: ' + error.message)
+      return
+    }
+    setConfirmarExclusaoGrupoId(null)
+    if (editandoGrupoLinhasOriginais.some((r) => ids.includes(r.id))) cancelarEdicao()
+    await carregarMovimentacoes()
   }
 
   // insere as novas linhas (e, se idsAntigos vier preenchido, apaga as
@@ -870,9 +890,10 @@ export default function ControlePastoPage() {
         <div className="space-y-3">
           {grupos.map((grupo) => {
             const primeira = grupo.movimentacoes[0]
+            const chaveGrupo = grupo.groupId ?? primeira.id
             const somaQuantidade = grupo.movimentacoes.reduce((s, m) => s + m.quantidade, 0)
             return (
-              <div key={grupo.groupId ?? primeira.id} className="rounded-card border border-border bg-surface p-4">
+              <div key={chaveGrupo} className="rounded-card border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold text-text-primary">
@@ -880,13 +901,47 @@ export default function ControlePastoPage() {
                     </div>
                     <div className="mt-0.5 text-sm text-text-secondary">{primeira.data}</div>
                   </div>
-                  <button
-                    type="button"
-                    className="shrink-0 text-xs text-brand-500 underline"
-                    onClick={() => iniciarEdicao(grupo.movimentacoes)}
-                  >
-                    Editar
-                  </button>
+                  {confirmarExclusaoGrupoId === chaveGrupo ? (
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <span className="text-xs font-medium text-error">
+                        Excluir {grupo.movimentacoes.length > 1 ? `as ${grupo.movimentacoes.length} linhas` : 'esse lançamento'}?
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={excluindo}
+                          className="text-xs font-semibold text-error underline disabled:opacity-50"
+                          onClick={() => excluirGrupo(grupo.movimentacoes)}
+                        >
+                          {excluindo ? 'Excluindo...' : 'Sim, excluir'}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs text-text-secondary underline"
+                          onClick={() => setConfirmarExclusaoGrupoId(null)}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-brand-500 underline"
+                        onClick={() => iniciarEdicao(grupo.movimentacoes)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-error underline"
+                        onClick={() => setConfirmarExclusaoGrupoId(chaveGrupo)}
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <ul className="mt-2 space-y-1">
                   {grupo.movimentacoes.map((m) => (
