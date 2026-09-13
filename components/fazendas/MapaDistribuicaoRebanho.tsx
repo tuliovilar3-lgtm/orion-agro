@@ -6,6 +6,7 @@ import type { LeafletEvent } from 'leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon'
+import pointOnFeature from '@turf/point-on-feature'
 import type { Geometry, Polygon, MultiPolygon } from 'geojson'
 import { ICONE_SRC, type CodigoIconeCategoria } from '@/lib/categoria-icones'
 import type { ProprietarioQuantidade } from '@/lib/distribuicao-pasto'
@@ -47,12 +48,27 @@ function anelExterno(geometria: Geometry): [number, number][] | null {
   return null
 }
 
-function centroide(geometria: Geometry): [number, number] | null {
+// média aritmética dos vértices — rápida, mas pode cair fora do polígono em pastos de formato
+// irregular (lago cortando ao meio, forma em L/U etc.); usada só como último recurso se
+// `pontoInterno` (abaixo) não conseguir calcular nada
+function centroideSimples(geometria: Geometry): [number, number] | null {
   const anel = anelExterno(geometria)
   if (!anel || anel.length === 0) return null
   const lng = anel.reduce((s, p) => s + p[0], 0) / anel.length
   const lat = anel.reduce((s, p) => s + p[1], 0) / anel.length
   return [lat, lng]
+}
+
+// ponto garantidamente dentro do polígono (`@turf/point-on-feature` — centróide, e se ele cair
+// fora usa o ponto do próprio contorno mais próximo dele) — corrige selos aparecendo fora do
+// pasto real em pastos de formato côncavo/irregular, onde a média simples de vértices falha
+function pontoInterno(geometria: Geometry): [number, number] | null {
+  try {
+    const [lng, lat] = pointOnFeature(geometria as any).geometry.coordinates
+    return [lat, lng]
+  } catch {
+    return centroideSimples(geometria)
+  }
 }
 
 function raioIcones(geometria: Geometry): number {
@@ -65,11 +81,31 @@ function raioIcones(geometria: Geometry): number {
   return Math.min(largura, altura) * 0.16
 }
 
-// posiciona N ícones num pequeno anel ao redor do centróide do pasto —
-// só um vira o próprio centróide, evita empilhar marcadores exatamente no
-// mesmo ponto quando há várias categorias no mesmo pasto
+function dentroDoPoligono(pos: [number, number], geometria: Geometry): boolean {
+  return booleanPointInPolygon([pos[1], pos[0]], geometria as Polygon | MultiPolygon)
+}
+
+// se o candidato (um ponto do anel ao redor do centro) cair fora do polígono — pasto de formato
+// irregular onde o raio "estoura" o contorno real (lago cortando, forma em L/U, reentrância) —
+// aproxima ele do centro (garantidamente interno, via pontoInterno) até achar um ponto que
+// esteja dentro; nunca deixa um selo aparecer fora do pasto que ele representa
+function pontoValido(candidato: [number, number], centro: [number, number], geometria: Geometry): [number, number] {
+  if (dentroDoPoligono(candidato, geometria)) return candidato
+  for (let fracao = 0.85; fracao >= 0.1; fracao -= 0.15) {
+    const intermediario: [number, number] = [
+      centro[0] + (candidato[0] - centro[0]) * fracao,
+      centro[1] + (candidato[1] - centro[1]) * fracao,
+    ]
+    if (dentroDoPoligono(intermediario, geometria)) return intermediario
+  }
+  return centro
+}
+
+// posiciona N ícones num pequeno anel ao redor de um ponto interno do pasto —
+// só um vira o próprio ponto central, evita empilhar marcadores exatamente no
+// mesmo lugar quando há várias categorias no mesmo pasto
 function posicoesIcones(geometria: Geometry, quantidade: number): [number, number][] {
-  const centro = centroide(geometria)
+  const centro = pontoInterno(geometria)
   if (!centro) return []
   if (quantidade <= 1) return [centro]
   const raio = raioIcones(geometria)
@@ -78,7 +114,11 @@ function posicoesIcones(geometria: Geometry, quantidade: number): [number, numbe
   const posicoes: [number, number][] = []
   for (let i = 0; i < quantidade; i++) {
     const angulo = (2 * Math.PI * i) / quantidade - Math.PI / 2
-    posicoes.push([latCentro + raio * Math.sin(angulo), lngCentro + (raio * Math.cos(angulo)) / correcaoLatitude])
+    const candidato: [number, number] = [
+      latCentro + raio * Math.sin(angulo),
+      lngCentro + (raio * Math.cos(angulo)) / correcaoLatitude,
+    ]
+    posicoes.push(pontoValido(candidato, centro, geometria))
   }
   return posicoes
 }
