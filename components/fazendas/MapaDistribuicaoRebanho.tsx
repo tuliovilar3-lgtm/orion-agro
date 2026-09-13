@@ -168,6 +168,29 @@ export default function MapaDistribuicaoRebanho({
     if (destino) onArrastarPasto?.(pastoOrigem.id, destino.id)
   }
 
+  // "auto-pan": enquanto o selo é arrastado perto da borda do mapa, empurra a
+  // tela na mesma direção — sem isso, chegar num pasto de destino fora da
+  // área visível exigiria soltar o arraste, rolar/dar zoom manualmente e
+  // arrastar de novo. `_map` não é API pública do Marker, mas é o único jeito
+  // de achar o mapa a partir do evento de drag em si (mesmo espírito
+  // pragmático já usado noutros pontos do arquivo, ex. EdicaoVerticesPasto).
+  function tratarArrastando(evento: LeafletEvent) {
+    const marker = evento.target as L.Marker
+    const map = (marker as unknown as { _map?: L.Map })._map
+    if (!map) return
+    const BORDA_PX = 60
+    const PASSO_PX = 18
+    const ponto = map.latLngToContainerPoint(marker.getLatLng())
+    const tamanho = map.getSize()
+    let dx = 0
+    let dy = 0
+    if (ponto.x < BORDA_PX) dx = -PASSO_PX
+    else if (ponto.x > tamanho.x - BORDA_PX) dx = PASSO_PX
+    if (ponto.y < BORDA_PX) dy = -PASSO_PX
+    else if (ponto.y > tamanho.y - BORDA_PX) dy = PASSO_PX
+    if (dx !== 0 || dy !== 0) map.panBy([dx, dy], { animate: false })
+  }
+
   const todasGeometrias = [
     ...fazendasGeometria,
     ...pastosComGeometria.map((p) => p.geometria as Geometry),
@@ -242,6 +265,7 @@ export default function MapaDistribuicaoRebanho({
                   onSelecionarPasto?.(p.id)
                   onAbrirDetalhe?.(p.id)
                 },
+                drag: tratarArrastando,
                 dragend: (e) => tratarSoltarSelo(p, e),
               }}
             >

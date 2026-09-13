@@ -1,13 +1,14 @@
 'use client'
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, GeoJSON, Tooltip, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw'
 import 'leaflet-draw/dist/leaflet.draw.css'
 import type { Geometry } from 'geojson'
 import { calcularAreaHa } from '@/lib/kml'
+import { formatArea } from '@/lib/format'
 import { useTelaCheia, ControleTelaCheia, InvalidarTamanho } from '@/components/fazendas/MapaTelaCheia'
 
 export type PastoMapa = {
@@ -109,6 +110,23 @@ function AjustarZoom({ geometrias }: { geometrias: Geometry[] }) {
   return null
 }
 
+// traz o pasto selecionado (clique na lista OU no próprio mapa) pro centro
+// da tela, com um leve zoom — mesmo princípio de "ir até" já esperado de
+// qualquer seleção numa lista pareada com um mapa; roda só quando a seleção
+// muda de fato (não a cada render), e não faz nada sem contorno desenhado
+function CentralizarPastoSelecionado({ pastos, pastoId }: { pastos: PastoMapa[]; pastoId: string | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!pastoId) return
+    const pasto = pastos.find((p) => p.id === pastoId)
+    if (!pasto?.geometria) return
+    const bounds = L.geoJSON(pasto.geometria as any).getBounds()
+    if (bounds.isValid()) map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 17, duration: 0.6 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, pastoId])
+  return null
+}
+
 const MapaPastos = forwardRef<
   MapaPastosHandle,
   {
@@ -174,7 +192,14 @@ const MapaPastos = forwardRef<
                 data={p.geometria as any}
                 style={{ color: p.cor, weight: destacado ? 4 : 2, fillColor: p.cor, fillOpacity: destacado ? 0.45 : 0.25 }}
                 eventHandlers={{ click: () => onClicarPasto(p.id) }}
-              />
+              >
+                <Tooltip direction="top" sticky>
+                  <div>
+                    <div className="font-semibold">{p.nome}</div>
+                    <div>Área: {p.areaHa != null ? `${formatArea(p.areaHa)} ha` : '—'}</div>
+                  </div>
+                </Tooltip>
+              </GeoJSON>
             )
           })}
         {pastoEmEdicaoId &&
@@ -185,6 +210,7 @@ const MapaPastos = forwardRef<
             ) : null
           })()}
         <AjustarZoom geometrias={todasGeometrias} />
+        <CentralizarPastoSelecionado pastos={pastos} pastoId={pastoDestacadoId ?? null} />
         {!pastoEmEdicaoId && <ControleDesenho onDesenhado={onDesenhado} />}
         <ControleTelaCheia ativo={telaCheia} onToggle={alternarTelaCheia} />
         <InvalidarTamanho gatilho={telaCheia} />

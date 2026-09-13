@@ -4911,3 +4911,92 @@ cadastrado hoje, `porProprietario` fica `undefined` nesse caso, sem custo nem UI
 anterior — não pôde ser testado contra dado real nesta conta, só por leitura do código
 (`decomporProprietarios`/`mesclarProprietarios` reaproveitam a mesma matemática já usada e
 verificada no `MovimentacaoLotesModal`). `npx tsc --noEmit` limpo.
+
+## Redistribuição do rebanho por pasto real via auditoria (Fazenda Teste 1)
+
+Tentativa anterior de carregar um histórico completo de "Mudança de Pasto" (relatório separado,
+8.316 linhas, jul/2025–set/2026) foi **abandonada** — a simulação mostrou que a categoria dominante
+("Machos de 13-24M"/Garrote 12-24) exigiria 5-19× mais cabeças do que existe no sistema pra fechar
+sem saldo negativo em nenhum pasto, indicando que aquele relatório não é um ledger estrito de
+transferências conservadas (provavelmente um registro de manejo/rotação com re-contagens, não
+compatível com a exigência de saldo-por-pasto do ORION). Nenhuma escrita foi feita no banco nessa
+tentativa (só simulações `--dry`).
+
+Em vez disso, o usuário enviou uma **auditoria de rebanho real** (`Auditoria Esmeralda -
+JUN-26.xlsx`, arquivo fora do repositório, no OneDrive do usuário) — um **retrato do rebanho por
+pasto num único momento** (não um histórico de movimentos), exatamente o formato que faltava pra
+sair do pasto "guarda-tudo" (ver "Carga de movimentações reais" acima — `01-A1`/Betânia e `1C2`/
+Esmeralda concentravam 100% do rebanho até aqui). Três abas relevantes, confirmadas pelo usuário:
+**Estância Esmeralda = "MAPA SEDE (2)" + "MAPA MARIANA"**; **Estância Betânia = "MAPA  BETANIA
+(3)"** — cada aba é uma matriz pasto × categoria (quantidade + peso médio), com uma linha "TOTAL"
+que bateu exato com a soma das células nas 3 abas antes de qualquer carga.
+
+**Data por aba, não uma data única** — pedido explícito do usuário depois de eu propor inicialmente
+30/06/2026 pra tudo: cada aba tem sua própria data de contagem na célula "DATA:" (linha 2), usada
+como `data` de cada `MUDANCA_PASTO` daquela aba — "MAPA SEDE (2)" → 2026-06-24, "MAPA MARIANA" →
+2026-06-23, "MAPA  BETANIA (3)" → 2026-06-26.
+
+**Mapeamento de categoria — 100% exato pelo nome**, as 15 categorias da auditoria (BEZERRO/BEZERRA
+00-08M, FÊMEA 08-12M, NOVILHA 12-24M/24-36M, VACA +36M, MACHO 08-12M, GARROTE 12-24M, BOI 24-36M/
++36M, VACA LEITEIRA, TOURO, SINUELO, COCHÉ MACHO/FÊMEA) batem 1:1 com o catálogo real já cadastrado
+nessa conta (`TOURO`→`Reprodutor +36 Meses`, `MACHO 08-12M`→`Garrote 08 a 12 Meses`, `FÊMEA 08-12M`
+→`Novilha 08 a 12 Meses`, o resto por nome quase idêntico) — nenhuma ambiguidade como a do
+relatório abandonado.
+
+**Mapeamento de pasto**: 55+35=90 dos 107 códigos distintos bateram por nome exato ou normalização
+(sem espaço/traço/ponto, zero à esquerda) contra os pastos já importados via KML. Os restantes,
+todos confirmados/decididos com o usuário antes de rodar:
+- Esmeralda "13"/"14"/"20" (só o número do módulo, sem quadrante — 1.424 cabeças juntas): usuário
+  confirmou usar o quadrante "A" de cada um (`13A`/`14A`/`20A`).
+- Esmeralda "11 GROTA" → "11 da Grota" (mesmo pasto, grafia diferente).
+- Esmeralda "PIQ. 1"/"PIQ. 2"/"PIQ. 5" → "PIQ-01"/"PIQ-02"/"PIQ-05" (a normalização genérica não
+  cobria zero à esquerda depois de um prefixo de letras, só no início da string — corrigido com
+  mapeamento manual em vez de generalizar a regra, já que só 3 casos).
+- Betânia "4B1"/"7A1" → "04-B01"/"07-A01" — descoberta ao investigar: os módulos 04 e 07 têm uma
+  inconsistência de nomenclatura própria (só a sub-posição "1" desses dois módulos específicos foi
+  cadastrada com o dígito extra "0" — `04-B01`/`07-A01` — enquanto os demais módulos usam `0N-X1`
+  sem esse zero a mais); não é um padrão geral, só esses dois pontos.
+- Betânia "Estrela"/"Retiro Mil"/"Caranday" (47+2+1 = 50 cabeças) — piquetes nomeados que nunca
+  foram importados do KML original. **Ignorados a pedido do usuário** (não criar pasto nenhum pra
+  eles) — as 3 linhas foram criadas + lançadas numa primeira passada e depois revertidas (apagadas
+  as 3 movimentações de `MUDANCA_PASTO` e os 3 pastos correspondentes) assim que o usuário pediu pra
+  não criar; as 50 cabeças voltaram automaticamente pro guarda-tudo (excluir a movimentação já
+  desfaz o efeito nos dois lados — origem e destino — sem precisar de nenhum ajuste manual de
+  saldo). Betânia ficou com 37 pastos com rebanho em vez de 40, total da fazenda inalterado (3.222).
+
+**Saldo insuficiente por drift de ±1**: comparando o total da auditoria por (fazenda, categoria)
+contra o saldo já existente no sistema, 3 categorias tinham a auditoria pedindo **1 cabeça a mais**
+do que o sistema tem hoje (Esmeralda "Coché Macho" 5 vs. 4; Betânia "Novilha 12-24 Meses" 6 vs. 5;
+Betânia "Reprodutor +36 Meses" 1 vs. 0) — diferença mínima, provavelmente drift natural entre a
+contagem física da auditoria e o histórico de movimentações já carregado. Resolvido subtraindo 1 da
+maior linha de cada uma (script, não trigger) e reportado nesta seção pra transparência — nenhuma
+outra categoria teve esse problema.
+
+**Sem reconciliação/fabricação de estoque** (diferente da tentativa abandonada): como esta
+auditoria é só um retrato parcial de onde o rebanho está agora (não implica que TODO o rebanho de
+uma categoria precisa estar em algum pasto listado), a diferença entre o total da auditoria e o
+saldo real da fazenda **simplesmente permanece no pasto guarda-tudo** — ex.: Esmeralda tem 13.864
+cabeças no total hoje (crescido bastante desde a carga inicial, via Compras já lançadas em meses
+recentes), a auditoria só cobre 8.786 delas distribuídas em pastos reais, e as ~5.078 restantes
+continuam em `1C2` até uma auditoria futura (ou um lançamento manual) redistribuí-las também. Uma
+linha cujo destino já era o próprio pasto guarda-tudo (`1C2`/`01-A1` aparecem como pasto na própria
+auditoria, com 35/67 cabeças respectivamente) foi tratada como "já está lá" — sem gerar nenhum
+`MUDANCA_PASTO` (mover algo do guarda-tudo pro próprio guarda-tudo não faz sentido).
+
+**Mesmo bug de `conta_id` ausente já visto 3× nesta sessão** (migrações 063/064/069,
+`fn_criar_modulo_pasto_geral`/`fn_compilar_pesagem_movimentacao`/`fn_salvar_linha_saldo_inicial`) —
+desta vez não era um bug de schema/trigger, era só o próprio script de carga esquecendo de incluir
+`conta_id` explícito no payload de `movimentacoes_rebanho` (a coluna depende de `default
+fn_conta_atual()`, que exige `auth.uid()` — ausente numa conexão `service_role`). Corrigido no
+script (não precisou de migração), incluindo `conta_id` explícito em cada linha antes de inserir.
+
+**Resultado final** (depois de reverter Estrela/Retiro Mil/Caranday): 133 lançamentos de
+`MUDANCA_PASTO` (todos com `proprietario_id` = Paulo Afonso Silveira, único proprietário
+cadastrado; `safra_nascimento_ano_inicio` preenchido nas linhas de Bezerro/Bezerra 00-08 Meses via a
+mesma regra `safraSugeridaParaData` de sempre — safra 2025 pras 3 datas de junho/2026, mês < 7),
+movendo 11.864 cabeças no total (8.769 Esmeralda + 3.095 Betânia). **Verificado via
+`fn_relatorio_rebanho_por_pasto`**: total por fazenda em 30/06/2026 continua exatamente o mesmo de
+antes da redistribuição (3.222 Betânia, conservado; Esmeralda no total real de hoje) — só a
+localização por pasto mudou, confirmando que a operação foi uma realocação pura, sem perda nem
+duplicação de cabeças. Peso médio informado em cada linha já compilou pesagem automaticamente no
+pasto de destino (mesma trigger `fn_compilar_pesagem_movimentacao` de sempre, sem código novo).

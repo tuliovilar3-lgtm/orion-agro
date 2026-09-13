@@ -989,7 +989,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                         }`}
                         onClick={() => p.geometria && setPastoSelecionadoMapaId(p.id)}
                       >
-                        <td className="border-b border-border p-2 pl-6" onClick={(e) => e.stopPropagation()}>
+                        <td className="border-b border-border p-2 pl-6">
                           <div className="flex items-center gap-2">
                             <input
                               type="color"
@@ -1005,7 +1005,7 @@ export default function GestaoAreasPanel({ fazendaId }: { fazendaId: string }) {
                             />
                           </div>
                         </td>
-                        <td className="border-b border-border p-2 text-right" onClick={(e) => e.stopPropagation()}>
+                        <td className="border-b border-border p-2 text-right">
                           <input
                             type="number"
                             min="0"
