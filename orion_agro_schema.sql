@@ -377,7 +377,7 @@ begin
   union all
   select new.id, 'Vaca +36 Meses', p.id, 'FEMEA'::sexo_categoria, '36+', 10, true from grupos_categoria_papel p where p.nome = 'Matrizes em Reprodução'
   union all
-  select new.id, 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Touros';
+  select new.id, 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Reprodutores';
 
   insert into subtipos_uso_area (conta_id, tipo_uso_id, nome, sistema, ordem)
   select new.id, id, 'Geral', true, 0 from tipos_uso_area;
@@ -679,6 +679,10 @@ begin
 
   if new.era is null then
     raise exception 'Selecione a era da categoria.';
+  end if;
+
+  if new.era = '00-08' and v_papel_nome not in ('Bezerros Mamando', 'Bezerras Mamando') then
+    raise exception 'A era 00-08 é exclusiva dos Grupos Categoria "Bezerros Mamando"/"Bezerras Mamando".';
   end if;
 
   v_grupo_faixa_nome := case new.era
@@ -4866,7 +4870,7 @@ insert into grupos_categoria_papel (nome, sexo, ordem) values
   ('Garrotes e Bois', 'MACHO', 4),
   ('Matrizes em Reprodução', 'FEMEA', 5),
   ('Matrizes Descarte', 'FEMEA', 6),
-  ('Touros', 'MACHO', 7),
+  ('Reprodutores', 'MACHO', 7),
   ('Outros', null, 8);
 
 -- categorias do sistema (sistema = true): pré-cadastradas, não podem ser
@@ -4900,7 +4904,7 @@ select (select id from contas limit 1), 'Boi +36 Meses', p.id, 'MACHO'::sexo_cat
 union all
 select (select id from contas limit 1), 'Vaca +36 Meses', p.id, 'FEMEA'::sexo_categoria, '36+', 10, true from grupos_categoria_papel p where p.nome = 'Matrizes em Reprodução'
 union all
-select (select id from contas limit 1), 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Touros';
+select (select id from contas limit 1), 'Touro', p.id, 'MACHO'::sexo_categoria, '36+', 11, true from grupos_categoria_papel p where p.nome = 'Reprodutores';
 
 insert into tipos_uso_area (nome, ordem) values
   ('Reserva Legal/APP', 1),

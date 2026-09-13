@@ -1361,7 +1361,9 @@ export default function SaldoInicialPanel({ fazendaId }: { fazendaId: string }) 
                     required
                   >
                     <option value="">Selecione...</option>
-                    {ERAS.map((e) => (
+                    {/* 00-08 é exclusiva de Bezerros/Bezerras Mamando — mesmo princípio já
+                        aplicado em app/categorias/page.tsx */}
+                    {ERAS.filter((e) => e !== '00-08').map((e) => (
                       <option key={e} value={e}>
                         {e}
                       </option>

@@ -208,7 +208,10 @@ export default function CategoriasPage() {
                 required
               >
                 <option value="">Selecione...</option>
-                {ERAS.map((e) => (
+                {/* 00-08 é exclusiva de Bezerros/Bezerras Mamando (ver isBezerroPapel acima,
+                    que já trava a era pra 00-08 nesses papéis e nem mostra este <select>) —
+                    pra qualquer outro Grupo Categoria, essa opção nem aparece pra escolher */}
+                {ERAS.filter((e) => e !== '00-08').map((e) => (
                   <option key={e} value={e}>
                     {e}
                   </option>

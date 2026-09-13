@@ -744,28 +744,33 @@ export default function MovimentacoesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [precisaChecarSaldo, fazendaParaSaldo, categoriaId, data, pastoId])
 
-  // efetivo atual da fazenda em contexto (ver estado acima) — puramente
-  // informativo, roda em paralelo às checagens reais de saldo acima
+  // efetivo da fazenda em contexto (ver estado acima) — puramente informativo, roda em paralelo
+  // às checagens reais de saldo acima. Sempre na data escolhida no formulário (fn_estoque_
+  // rebanho_na_data, mesma função já usada no Relatório de Lotação pra estoque num dia
+  // qualquer), nunca "hoje" fixo — senão o hint mostraria um número que não bate com a data do
+  // próprio lançamento sendo feito.
   useEffect(() => {
-    if (!fazendaOrigemParaPasto) {
+    if (!fazendaOrigemParaPasto || !data) {
       setEfetivoFazenda(null)
       return
     }
     let cancelado = false
-    supabase.rpc('fn_resumo_rebanho_atual', { p_fazenda_ids: [fazendaOrigemParaPasto] }).then(({ data: linhas, error }) => {
-      if (cancelado) return
-      if (error) {
-        setEfetivoFazenda(null)
-        return
-      }
-      const rows = (linhas as { quantidade: number }[]) || []
-      setEfetivoFazenda(rows.reduce((s, r) => s + r.quantidade, 0))
-    })
+    supabase
+      .rpc('fn_estoque_rebanho_na_data', { p_fazenda_ids: [fazendaOrigemParaPasto], p_data: data })
+      .then(({ data: linhas, error }) => {
+        if (cancelado) return
+        if (error) {
+          setEfetivoFazenda(null)
+          return
+        }
+        const rows = (linhas as { quantidade: number }[]) || []
+        setEfetivoFazenda(rows.reduce((s, r) => s + r.quantidade, 0))
+      })
     return () => {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fazendaOrigemParaPasto])
+  }, [fazendaOrigemParaPasto, data])
 
   // trocar de tipo invalida as linhas antigas (categorias visíveis podem
   // mudar, ex.: NASCIMENTO só mostra bezerro) — edição nunca usa lote,
@@ -856,12 +861,22 @@ export default function MovimentacoesPage() {
       return
     }
     let cancelado = false
+    // mesmo princípio já usado no formulário avulso (fn_saldo_categoria_pasto quando há pasto em
+    // contexto, senão fn_saldo_categoria pela fazenda inteira) — sem isso, "N disp." mostrava o
+    // saldo da fazenda toda mesmo com um pasto específico já escolhido no passo 2, divergindo do
+    // que de fato pode ser tirado daquele pasto
     Promise.all(
       linhas.map((linha, i) =>
         linha.categoriaId
-          ? supabase
-              .rpc('fn_saldo_categoria', { p_fazenda_id: fazendaParaSaldo, p_categoria_id: linha.categoriaId, p_data: data })
-              .then(({ data: saldo, error }) => [i, error ? null : saldo] as const)
+          ? (pastoId
+              ? supabase.rpc('fn_saldo_categoria_pasto', {
+                  p_fazenda_id: fazendaParaSaldo,
+                  p_categoria_id: linha.categoriaId,
+                  p_pasto_id: pastoId,
+                  p_data: data,
+                })
+              : supabase.rpc('fn_saldo_categoria', { p_fazenda_id: fazendaParaSaldo, p_categoria_id: linha.categoriaId, p_data: data })
+            ).then(({ data: saldo, error }) => [i, error ? null : saldo] as const)
           : Promise.resolve([i, null] as const)
       )
     ).then((pares) => {
@@ -871,7 +886,7 @@ export default function MovimentacoesPage() {
       cancelado = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoteCategoria, precisaChecarSaldo, fazendaParaSaldo, data, JSON.stringify(linhas.map((l) => l.categoriaId))])
+  }, [isLoteCategoria, precisaChecarSaldo, fazendaParaSaldo, pastoId, data, JSON.stringify(linhas.map((l) => l.categoriaId))])
 
   async function carregarAuxiliares() {
     const [

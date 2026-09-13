@@ -24,14 +24,14 @@ const ICONE_POR_PAPEL: Record<string, CodigoIconeCategoria> = {
   'Bezerras Mamando': 'BEZERRA',
   'Bezerros Mamando': 'BEZERRO',
   Novilhas: 'NOVILHA',
-  Touros: 'TOURO',
+  Reprodutores: 'TOURO',
   'Matrizes em Reprodução': 'VACA',
   'Matrizes Descarte': 'VACA',
 }
 
 // fallback pro papel "Outros" (sexo livre, sem ícone próprio) — usa sexo +
 // era em vez do papel, que nesse caso não diz nada sozinho. Touro fica de
-// fora de propósito: só quem está de fato no papel "Touros" vira touro.
+// fora de propósito: só quem está de fato no papel "Reprodutores" vira touro.
 function iconePorSexoEEra(sexo: 'MACHO' | 'FEMEA', era: Era): CodigoIconeCategoria {
   if (era === '00-08') return sexo === 'FEMEA' ? 'BEZERRA' : 'BEZERRO'
   if (era === '08-12' || era === '12-24') return sexo === 'FEMEA' ? 'NOVILHA' : 'GARROTE'
