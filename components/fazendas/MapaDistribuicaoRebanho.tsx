@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useReducer } from 'react'
+import { forwardRef, useEffect, useMemo, useReducer } from 'react'
 import { MapContainer, TileLayer, GeoJSON, Marker, Tooltip, useMap } from 'react-leaflet'
 import type { LeafletEvent } from 'leaflet'
 import L from 'leaflet'
@@ -124,32 +124,51 @@ function AjustarZoom({ geometrias }: { geometrias: Geometry[] }) {
   return null
 }
 
-export default function MapaDistribuicaoRebanho({
-  fazendasGeometria,
-  pastos,
-  pastoSelecionadoId,
-  onSelecionarPasto,
-  onAbrirDetalhe,
-  permitirArrastar = false,
-  onArrastarPasto,
-  altura = 480,
-}: {
-  fazendasGeometria: Geometry[]
-  pastos: PastoDistribuicao[]
-  pastoSelecionadoId?: string | null
-  onSelecionarPasto?: (pastoId: string) => void
-  // disparado só ao clicar no ÍCONE do animal (não no polígono do pasto) — abre o modal de
-  // detalhe/ações rápidas, sem alterar o comportamento de clique já existente no polígono
-  onAbrirDetalhe?: (pastoId: string) => void
-  // habilita arrastar o selo de um pasto pra outro (gated por módulo "Mudança de Pasto" —
-  // decisão do usuário, ver CLAUDE.md "Selos do Rebanho — Fase 3") — só pastos com contorno
-  // entram (são os únicos que ganham marcador), e só dentro da mesma fazenda do selo arrastado
-  permitirArrastar?: boolean
-  onArrastarPasto?: (pastoOrigemId: string, pastoDestinoId: string) => void
-  altura?: number
-}) {
+const MapaDistribuicaoRebanho = forwardRef<
+  HTMLDivElement,
+  {
+    fazendasGeometria: Geometry[]
+    pastos: PastoDistribuicao[]
+    pastoSelecionadoId?: string | null
+    onSelecionarPasto?: (pastoId: string) => void
+    // disparado só ao clicar no ÍCONE do animal (não no polígono do pasto) — abre o modal de
+    // detalhe/ações rápidas, sem alterar o comportamento de clique já existente no polígono
+    onAbrirDetalhe?: (pastoId: string) => void
+    // habilita arrastar o selo de um pasto pra outro (gated por módulo "Mudança de Pasto" —
+    // decisão do usuário, ver CLAUDE.md "Selos do Rebanho — Fase 3") — só pastos com contorno
+    // entram (são os únicos que ganham marcador), e só dentro da mesma fazenda do selo arrastado
+    permitirArrastar?: boolean
+    onArrastarPasto?: (pastoOrigemId: string, pastoDestinoId: string) => void
+    altura?: number
+    // avisa a página quando o mapa entra/sai de tela cheia — os modais de detalhe/movimentação
+    // vivem fora da árvore deste componente (na página), então sem isso eles ficam escondidos
+    // atrás do elemento em tela cheia (a Fullscreen API só exibe acima dele o que é seu
+    // descendente); a página usa isso + o `ref` (o próprio elemento em tela cheia) pra portar o
+    // modal pra dentro dele enquanto durar a tela cheia — ver "Modais escondidos atrás do mapa
+    // em tela cheia" no CLAUDE.md
+    onTelaCheiaChange?: (ativo: boolean) => void
+  }
+>(function MapaDistribuicaoRebanho(
+  {
+    fazendasGeometria,
+    pastos,
+    pastoSelecionadoId,
+    onSelecionarPasto,
+    onAbrirDetalhe,
+    permitirArrastar = false,
+    onArrastarPasto,
+    altura = 480,
+    onTelaCheiaChange,
+  },
+  refExterno
+) {
   const pastosComGeometria = useMemo(() => pastos.filter((p) => p.geometria), [pastos])
   const { wrapperRef, telaCheia, alternarTelaCheia } = useTelaCheia()
+
+  useEffect(() => {
+    onTelaCheiaChange?.(telaCheia)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [telaCheia])
   // força um re-render depois de um drag (bem-sucedido ou não) — o marcador arrastado precisa
   // voltar pra posição calculada (centróide/anel do pasto de origem) assim que o usuário solta,
   // já que a posição real do rebanho não muda só por causa do arraste em si (só a confirmação no
@@ -199,7 +218,11 @@ export default function MapaDistribuicaoRebanho({
 
   return (
     <div
-      ref={wrapperRef}
+      ref={(el) => {
+        wrapperRef.current = el
+        if (typeof refExterno === 'function') refExterno(el)
+        else if (refExterno) refExterno.current = el
+      }}
       // isolate: as camadas internas do Leaflet (marcadores, tooltips, controles) usam z-index
       // bem altos (até 1000, ver leaflet.css) que, sem isso, vazam pra fora do mapa e aparecem
       // por cima de qualquer modal com z-index mais baixo (ex.: MovimentacaoLotesModal/
@@ -293,4 +316,6 @@ export default function MapaDistribuicaoRebanho({
       </MapContainer>
     </div>
   )
-}
+})
+
+export default MapaDistribuicaoRebanho

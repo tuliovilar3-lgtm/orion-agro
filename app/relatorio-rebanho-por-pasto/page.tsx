@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import type { Geometry } from 'geojson'
 import { createClient } from '@/lib/supabase/client'
@@ -87,6 +88,10 @@ export default function RelatorioRebanhoPorPastoPage() {
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
   const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
   const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
+  // ver "Modais escondidos atrás do mapa em tela cheia" no CLAUDE.md — mesmo mecanismo de
+  // portal já usado em app/page.tsx
+  const mapaWrapperRef = useRef<HTMLDivElement>(null)
+  const [mapaTelaCheia, setMapaTelaCheia] = useState(false)
 
   const supabase = createClient()
 
@@ -352,6 +357,8 @@ export default function RelatorioRebanhoPorPastoPage() {
             {temPastoComContorno && (
               <div className="mb-6">
                 <MapaDistribuicaoRebanho
+                  ref={mapaWrapperRef}
+                  onTelaCheiaChange={setMapaTelaCheia}
                   fazendasGeometria={fazendaGeometria ? [fazendaGeometria] : []}
                   pastos={distribuicaoMapa}
                   pastoSelecionadoId={pastoSelecionadoMapaId}
@@ -497,14 +504,16 @@ export default function RelatorioRebanhoPorPastoPage() {
       {pastoDetalheId &&
         (() => {
           const pasto = distribuicaoMapa.find((p) => p.id === pastoDetalheId)
-          return pasto ? <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} /> : null
+          if (!pasto) return null
+          const modal = <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} />
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
         })()}
 
       {arrastarInfo &&
         (() => {
           const pastoOrigem = distribuicaoMapa.find((p) => p.id === arrastarInfo.origemId)
           if (!pastoOrigem) return null
-          return (
+          const modal = (
             <MovimentacaoLotesModal
               fazendaId={pastoOrigem.fazendaId}
               pastoOrigemId={pastoOrigem.id}
@@ -517,6 +526,7 @@ export default function RelatorioRebanhoPorPastoPage() {
               }}
             />
           )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
         })()}
     </div>
     </ModuloGate>

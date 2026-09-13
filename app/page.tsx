@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import type { Geometry } from 'geojson'
@@ -125,6 +126,12 @@ function PainelDashboard() {
   const [pastoSelecionadoMapaId, setPastoSelecionadoMapaId] = useState<string | null>(null)
   const [pastoDetalheId, setPastoDetalheId] = useState<string | null>(null)
   const [arrastarInfo, setArrastarInfo] = useState<{ origemId: string; destinoId: string } | null>(null)
+  // ver "Modais escondidos atrás do mapa em tela cheia" no CLAUDE.md — a Fullscreen API só
+  // exibe acima do elemento em tela cheia o que é seu próprio descendente, então os modais de
+  // detalhe/movimentação (fora da árvore do mapa) precisam ser portados pra dentro dele
+  // enquanto durar a tela cheia, senão ficam escondidos atrás
+  const mapaWrapperRef = useRef<HTMLDivElement>(null)
+  const [mapaTelaCheia, setMapaTelaCheia] = useState(false)
 
   const supabase = createClient()
   const hoje = new Date().toISOString().slice(0, 10)
@@ -577,6 +584,8 @@ function PainelDashboard() {
           ) : (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
               <MapaDistribuicaoRebanho
+                ref={mapaWrapperRef}
+                onTelaCheiaChange={setMapaTelaCheia}
                 fazendasGeometria={fazendasGeometriaMapa}
                 pastos={pastosDistribuicao}
                 pastoSelecionadoId={pastoSelecionadoMapaId}
@@ -600,14 +609,18 @@ function PainelDashboard() {
       {pastoDetalheId &&
         (() => {
           const pasto = pastosDistribuicao.find((p) => p.id === pastoDetalheId)
-          return pasto ? <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} /> : null
+          if (!pasto) return null
+          const modal = <DetalhePastoModal pasto={pasto} onClose={() => setPastoDetalheId(null)} />
+          // com o mapa em tela cheia, o modal precisa ser portado pra dentro do próprio elemento
+          // em tela cheia — senão fica escondido atrás dele (ver comentário no useRef acima)
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
         })()}
 
       {arrastarInfo &&
         (() => {
           const pastoOrigem = pastosDistribuicao.find((p) => p.id === arrastarInfo.origemId)
           if (!pastoOrigem) return null
-          return (
+          const modal = (
             <MovimentacaoLotesModal
               fazendaId={pastoOrigem.fazendaId}
               pastoOrigemId={pastoOrigem.id}
@@ -620,6 +633,7 @@ function PainelDashboard() {
               }}
             />
           )
+          return mapaTelaCheia && mapaWrapperRef.current ? createPortal(modal, mapaWrapperRef.current) : modal
         })()}
 
       <div className="mt-8 rounded-card border border-border bg-surface p-6">
