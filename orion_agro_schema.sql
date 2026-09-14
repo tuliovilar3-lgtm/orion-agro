@@ -2157,15 +2157,14 @@ create unique index uq_saldo_inicial_por_categoria
 -- ponderado (fase futura) sempre ter um número real pra somar.
 -- ---------------------------------------------------------------------
 
+-- Migração 075: reverte a migração 074 — volta a usar "peso mais recente conhecido na origem"
+-- (agora já é a média ponderada correta, compilada por fn_compilar_pesagem_movimentacao).
 create or replace function fn_calcular_peso_total_movimentacao()
 returns trigger as $$
 declare
   v_peso numeric;
 begin
   if new.tipo = 'MUDANCA_PASTO' and new.peso_medio_kg is null then
-    -- created_at desc desempata quando há 2+ pesagens na mesma data mais recente pra esse trio —
-    -- sem isso, essa consulta e a de fn_compilar_pesagem_movimentacao (mais abaixo) podiam
-    -- discordar sobre qual é "a" pesagem mais recente (bug real, migração 073b)
     select p.peso_medio_kg into v_peso
     from pesagens p
     where p.fazenda_id = new.fazenda_id
@@ -3729,6 +3728,10 @@ create policy pesagens_por_conta on pesagens for all
 -- relatório de movimentação).
 -- ---------------------------------------------------------------------
 
+-- Migração 075: reverte a migração 074 (o "ledger" quebrava com crescimento entre entrada e
+-- saída de uma categoria — ver migração 075) — volta a pegar o peso mais recente compilado pra
+-- esse trio, que agora já é a média ponderada correta (mistura feita em
+-- fn_compilar_pesagem_movimentacao na hora de gravar, não recalculada aqui na leitura).
 create or replace function fn_relatorio_rebanho_por_pasto(
   p_fazenda_id uuid, p_data date, p_proprietario_ids uuid[] default null
 )
@@ -3819,47 +3822,81 @@ $$;
 -- (migração 063), agora também aqui (migração 064).
 -- ---------------------------------------------------------------------
 
--- Migração 073: pra Mudança de Pasto especificamente, só compila uma pesagem de verdade quando
--- o peso muda em relação ao mais recente já conhecido pra esse fazenda+categoria+pasto — como
--- toda Mudança de Pasto passou a carregar peso sempre (mesmo sem intenção de atualizar), compilar
--- incondicionalmente encheria "Pesagens recentes" de entradas redundantes. Os demais tipos sempre
--- exigiram peso digitado ativamente pra aquele lançamento — continuam compilando sempre.
+-- Migração 075 (substitui a tentativa da migração 074): toda movimentação que ENTRA numa
+-- categoria+pasto que já tem estoque compila o peso como a MÉDIA PONDERADA entre o que já
+-- estava compilado ali (quantidade × peso) e o que está chegando (quantidade × peso desta
+-- movimentação) — em vez de simplesmente sobrescrever com o peso desta movimentação sozinha.
+-- Saída pura (Morte/Venda/Abate/Consumo-Doação, sem "destino") continua só refletindo o próprio
+-- peso, como sempre — saída nunca subtrai nada da média de quem fica, então o resultado nunca
+-- pode ficar negativo (é sempre a média de dois números positivos). A migração 074 tinha
+-- tentado resolver isso com um "ledger" (soma entradas − soma saídas de peso ao longo de todo o
+-- histórico), mas isso quebra quando um animal cresce entre entrar numa categoria e sair dela
+-- (ex.: Desmame registra o peso real, maior, do bezerro — bem acima do peso de nascimento —, e
+-- subtrair isso de uma base que só somou o peso pequeno produzia peso médio negativo). A mistura
+-- feita aqui, na hora de gravar, não tem esse problema: ela nunca reconstrói histórico, só
+-- combina "o que já era sabido" com "o que está entrando agora".
 create or replace function fn_compilar_pesagem_movimentacao()
 returns trigger as $$
 declare
-  v_fazenda_id    uuid;
-  v_categoria_id  uuid;
-  v_pasto_id      uuid;
-  v_peso_anterior numeric;
+  v_fazenda_id           uuid;
+  v_categoria_id         uuid;
+  v_pasto_id             uuid;
+  v_eh_entrada           boolean;
+  v_qtd_antes            int := 0;
+  v_peso_antes           numeric;
+  v_peso_final           numeric;
+  v_peso_anterior_origem numeric;
 begin
   v_fazenda_id := coalesce(new.fazenda_destino_id, new.fazenda_id);
   v_categoria_id := coalesce(new.categoria_destino_id, new.categoria_id);
   v_pasto_id := coalesce(new.pasto_destino_id, new.pasto_id);
 
   if new.peso_medio_kg is not null and new.peso_medio_kg > 0 then
-    v_peso_anterior := null;
-    if new.tipo = 'MUDANCA_PASTO' then
-      -- compara contra o peso já conhecido no PASTO DE ORIGEM (new.pasto_id, nunca v_pasto_id —
-      -- que pra MUDANCA_PASTO já é o destino) — é esse o valor que o frontend carrega adiante
-      -- quando o usuário não edita o peso (ver MovimentacaoLotesModal); comparar contra o
-      -- destino sempre pareceria "mudou" mesmo sem informação nova, já que a categoria pode
-      -- nunca ter sido pesada ali antes (bug real, migração 073c)
-      select p.peso_medio_kg into v_peso_anterior
+    -- mesmos tipos já classificados como "entrada" em fn_saldo_categoria_pasto — são os únicos
+    -- que somam quantidade num (fazenda,categoria,pasto), por isso são os únicos que participam
+    -- da mistura ponderada
+    v_eh_entrada := new.tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL', 'TRANSFERENCIA', 'MUDANCA_CATEGORIA', 'DESMAME', 'MUDANCA_PASTO');
+    v_peso_final := new.peso_medio_kg;
+
+    if v_eh_entrada then
+      -- quantidade que já estava em (v_fazenda_id, v_categoria_id, v_pasto_id) ANTES desta
+      -- movimentação — fn_saldo_categoria_pasto(..., new.data) já inclui a contribuição desta
+      -- própria linha (o trigger roda AFTER insert/update), por isso subtrai new.quantidade
+      v_qtd_antes := greatest(0, fn_saldo_categoria_pasto(v_fazenda_id, v_categoria_id, v_pasto_id, new.data) - new.quantidade);
+
+      select p.peso_medio_kg into v_peso_antes
       from pesagens p
-      where p.fazenda_id = new.fazenda_id
-        and p.categoria_id = new.categoria_id
-        and p.pasto_id = new.pasto_id
-        and p.movimentacao_id is distinct from new.id
-        and p.data <= new.data
+      where p.fazenda_id = v_fazenda_id and p.categoria_id = v_categoria_id and p.pasto_id = v_pasto_id
+        and p.movimentacao_id is distinct from new.id and p.data <= new.data
+      order by p.data desc, p.created_at desc
+      limit 1;
+
+      if v_qtd_antes > 0 and v_peso_antes is not null then
+        v_peso_final := round((v_qtd_antes * v_peso_antes + new.quantidade * new.peso_medio_kg) / (v_qtd_antes + new.quantidade), 2);
+      end if;
+    end if;
+
+    -- Mudança de Pasto sem nada pra misturar (destino estava vazio) continua com a mesma
+    -- otimização da migração 073c: só compila uma pesagem de verdade quando o peso carregado
+    -- difere do que já era conhecido na ORIGEM (evita encher "Pesagens recentes" com entradas
+    -- redundantes toda vez que o usuário só move um lote sem repesar) — quando HÁ mistura
+    -- (v_qtd_antes > 0), sempre compila, porque o resultado combinado é sempre uma informação
+    -- nova (mesmo que o peso desta movimentação em si não tenha mudado).
+    if new.tipo = 'MUDANCA_PASTO' and v_qtd_antes = 0 then
+      select p.peso_medio_kg into v_peso_anterior_origem
+      from pesagens p
+      where p.fazenda_id = new.fazenda_id and p.categoria_id = new.categoria_id and p.pasto_id = new.pasto_id
+        and p.movimentacao_id is distinct from new.id and p.data <= new.data
       order by p.data desc, p.created_at desc
       limit 1;
     end if;
 
-    if new.tipo = 'MUDANCA_PASTO' and v_peso_anterior is not null and v_peso_anterior = new.peso_medio_kg then
+    if new.tipo = 'MUDANCA_PASTO' and v_qtd_antes = 0
+       and v_peso_anterior_origem is not null and v_peso_anterior_origem = new.peso_medio_kg then
       delete from pesagens where movimentacao_id = new.id;
     else
       insert into pesagens (conta_id, fazenda_id, categoria_id, pasto_id, data, peso_medio_kg, movimentacao_id, observacao)
-      values (new.conta_id, v_fazenda_id, v_categoria_id, v_pasto_id, new.data, new.peso_medio_kg, new.id,
+      values (new.conta_id, v_fazenda_id, v_categoria_id, v_pasto_id, new.data, v_peso_final, new.id,
               'Peso compilado automaticamente da movimentação')
       on conflict (movimentacao_id) do update set
         fazenda_id = excluded.fazenda_id,
@@ -4598,6 +4635,12 @@ where c.ativa = true and f.ativo = true;
 -- pro peso de referência da categoria quando nunca foi pesada.
 -- ---------------------------------------------------------------------
 
+-- Migração 075: reverte a migração 074 (ver nota acima em fn_relatorio_rebanho_por_pasto) — volta
+-- a pegar a última pesagem conhecida, que agora já é a média ponderada correta.
+-- Migração 078: peso_medio_kg passa a ser a média ponderada ENTRE TODOS OS PASTOS de cada
+-- fazenda (mesmo princípio de fn_indicadores_rebanho_dia acima) — antes pegava "uma pesagem
+-- qualquer" entre as várias que existem por pasto pra essa fazenda+categoria, sem considerar
+-- quantos animais aquele pasto específico tem nem qual peso ele carrega.
 create or replace function fn_resumo_rebanho_atual(p_fazenda_ids uuid[])
 returns table(
   fazenda_id uuid,
@@ -4612,7 +4655,68 @@ language plpgsql
 stable
 as $$
 begin
+  -- todo campo referenciado abaixo precisa vir qualificado pelo alias da tabela (m., d., s., p.,
+  -- ...) — sem isso, o Postgres não consegue decidir entre a coluna e a variável de saída
+  -- implícita que o próprio RETURNS TABLE(fazenda_id, categoria_id, quantidade, peso_medio_kg...)
+  -- cria automaticamente com esses mesmos nomes, e recusa a consulta com "column reference is
+  -- ambiguous" (bug real encontrado ao testar, migração 079).
   return query
+  with deltas as (
+    select m.fazenda_id, m.pasto_id, m.categoria_id, m.quantidade as delta
+    from movimentacoes_rebanho m
+    where m.tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and m.data <= current_date
+    union all
+    select m.fazenda_destino_id, m.pasto_destino_id, m.categoria_id, m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo = 'TRANSFERENCIA' and m.data <= current_date
+    union all
+    select m.fazenda_id, m.pasto_id, m.categoria_destino_id, m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and m.data <= current_date
+    union all
+    select m.fazenda_id, m.pasto_destino_id, m.categoria_id, m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo = 'MUDANCA_PASTO' and m.data <= current_date
+    union all
+    select m.fazenda_id, m.pasto_id, m.categoria_id, -m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and m.data <= current_date
+    union all
+    select m.fazenda_origem_id, m.pasto_id, m.categoria_id, -m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo = 'TRANSFERENCIA' and m.data <= current_date
+    union all
+    select m.fazenda_id, m.pasto_id, m.categoria_id, -m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo = 'MUDANCA_CATEGORIA' and m.data <= current_date
+    union all
+    select m.fazenda_id, m.pasto_id, m.categoria_id, -m.quantidade
+    from movimentacoes_rebanho m
+    where m.tipo = 'MUDANCA_PASTO' and m.data <= current_date
+  ),
+  saldo_pasto_categoria as (
+    select d.fazenda_id, d.pasto_id, d.categoria_id, sum(d.delta) as quantidade
+    from deltas d
+    where p_fazenda_ids is null or d.fazenda_id = any(p_fazenda_ids)
+    group by d.fazenda_id, d.pasto_id, d.categoria_id
+    having sum(d.delta) > 0
+  ),
+  peso_pasto as (
+    select distinct on (p.pasto_id, p.categoria_id) p.pasto_id, p.categoria_id, p.peso_medio_kg
+    from pesagens p
+    where (p_fazenda_ids is null or p.fazenda_id = any(p_fazenda_ids)) and p.data <= current_date
+    order by p.pasto_id, p.categoria_id, p.data desc, p.created_at desc
+  ),
+  peso_agregado as (
+    select
+      s.fazenda_id,
+      s.categoria_id,
+      sum(s.quantidade * coalesce(pp.peso_medio_kg, c.peso_referencia_kg)) / nullif(sum(s.quantidade), 0) as peso_medio
+    from saldo_pasto_categoria s
+    join categorias_animal c on c.id = s.categoria_id
+    left join peso_pasto pp on pp.pasto_id = s.pasto_id and pp.categoria_id = s.categoria_id
+    group by s.fazenda_id, s.categoria_id
+  )
   select
     e.fazenda_id,
     e.categoria_id,
@@ -4620,15 +4724,11 @@ begin
     g.nome as grupo_nome,
     c.sexo,
     e.saldo_atual::int as quantidade,
-    coalesce(
-      (select p.peso_medio_kg from pesagens p
-       where p.fazenda_id = e.fazenda_id and p.categoria_id = e.categoria_id and p.data <= current_date
-       order by p.data desc limit 1),
-      c.peso_referencia_kg
-    ) as peso_medio_kg
+    coalesce(round(pa.peso_medio, 2), c.peso_referencia_kg) as peso_medio_kg
   from vw_estoque_rebanho e
   join categorias_animal c on c.id = e.categoria_id
   join grupos_categoria g on g.id = c.grupo_id
+  left join peso_agregado pa on pa.fazenda_id = e.fazenda_id and pa.categoria_id = e.categoria_id
   where e.saldo_atual > 0
     and (p_fazenda_ids is null or e.fazenda_id = any(p_fazenda_ids));
 end;
@@ -4830,6 +4930,19 @@ $$;
 -- (migração 062, default null) filtra só a quantidade — peso médio de
 -- uma categoria não depende de quem é o dono, então pesagens nunca são
 -- filtradas por proprietário.
+-- Migração 075: reverte a migração 074 (ver nota acima em fn_relatorio_rebanho_por_pasto) — volta
+-- a pegar a última pesagem conhecida, que agora já é a média ponderada correta.
+-- Migração 078: peso vivo total passa a ser a média ponderada ENTRE TODOS OS PASTOS da(s)
+-- fazenda(s), não mais "uma pesagem qualquer escolhida arbitrariamente entre as várias que
+-- existem pra essa categoria" (uma fazenda com vários pastos tem uma linha de `pesagens` POR
+-- PASTO, cada uma com seu próprio peso — pegar só "a mais recente" sem considerar de qual pasto
+-- ela vem, nem quantos animais aquele pasto específico tem, produzia um número sem sentido,
+-- puxado por qualquer pasto que por acaso viesse primeiro numa consulta sem critério de
+-- desempate). Agora soma, por categoria, quantidade × peso de CADA pasto (mesma resolução por
+-- pasto já usada em fn_relatorio_rebanho_por_pasto) e divide pela quantidade total — uma
+-- consulta só, em lote, sem chamar função por pasto (mantém rápido mesmo com centenas de
+-- pastos). Peso médio continua sem filtro de proprietário (resolvido pelo headcount TOTAL da
+-- categoria, nunca o filtrado por p_proprietario_ids), mesmo princípio já documentado antes.
 create or replace function fn_indicadores_rebanho_dia(
   p_fazenda_ids uuid[], p_data date, p_proprietario_ids uuid[] default null
 )
@@ -4837,16 +4950,66 @@ returns table(headcount int, peso_vivo_total numeric)
 language sql
 stable
 as $$
+  with deltas as (
+    select pasto_id, categoria_id, quantidade as delta
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
+    union all
+    select pasto_destino_id, categoria_id, quantidade
+    from movimentacoes_rebanho
+    where fazenda_destino_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA' and data <= p_data
+    union all
+    select pasto_id, categoria_destino_id, quantidade
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and data <= p_data
+    union all
+    select pasto_destino_id, categoria_id, quantidade
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_PASTO' and data <= p_data
+    union all
+    select pasto_id, categoria_id, -quantidade
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
+    union all
+    select pasto_id, categoria_id, -quantidade
+    from movimentacoes_rebanho
+    where fazenda_origem_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA' and data <= p_data
+    union all
+    select pasto_id, categoria_id, -quantidade
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_CATEGORIA' and data <= p_data
+    union all
+    select pasto_id, categoria_id, -quantidade
+    from movimentacoes_rebanho
+    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_PASTO' and data <= p_data
+  ),
+  saldo_pasto_categoria as (
+    select pasto_id, categoria_id, sum(delta) as quantidade
+    from deltas
+    group by pasto_id, categoria_id
+    having sum(delta) > 0
+  ),
+  peso_pasto as (
+    select distinct on (pasto_id, categoria_id) pasto_id, categoria_id, peso_medio_kg
+    from pesagens
+    where fazenda_id = any(p_fazenda_ids) and data <= p_data
+    order by pasto_id, categoria_id, data desc, created_at desc
+  ),
+  peso_agregado_categoria as (
+    select
+      s.categoria_id,
+      sum(s.quantidade * coalesce(pp.peso_medio_kg, c.peso_referencia_kg)) / nullif(sum(s.quantidade), 0) as peso_medio
+    from saldo_pasto_categoria s
+    join categorias_animal c on c.id = s.categoria_id
+    left join peso_pasto pp on pp.pasto_id = s.pasto_id and pp.categoria_id = s.categoria_id
+    group by s.categoria_id
+  )
   select
     coalesce(sum(e.quantidade), 0)::int,
-    coalesce(sum(e.quantidade * coalesce(
-      (select p.peso_medio_kg from pesagens p
-       where p.fazenda_id = any(p_fazenda_ids) and p.categoria_id = e.categoria_id and p.data <= p_data
-       order by p.data desc limit 1),
-      c.peso_referencia_kg
-    )), 0)
+    coalesce(sum(e.quantidade * coalesce(pac.peso_medio, c.peso_referencia_kg)), 0)
   from fn_estoque_rebanho_na_data(p_fazenda_ids, p_data, p_proprietario_ids) e
   join categorias_animal c on c.id = e.categoria_id
+  left join peso_agregado_categoria pac on pac.categoria_id = e.categoria_id
   where e.quantidade > 0
 $$;
 
@@ -4858,6 +5021,18 @@ $$;
 -- já usado em fn_relatorio_distribuicao_area pra área). p_proprietario_ids
 -- (migração 062, default null) alimenta os Relatórios Financeiros
 -- (Desembolso R$/cab./mês) — repassado direto pra fn_indicadores_rebanho_dia.
+--
+-- Migração 077: em vez de chamar fn_indicadores_rebanho_dia uma vez POR DIA do calendário
+-- (recalculando o histórico inteiro do zero mesmo em dias sem nenhuma movimentação — bug de
+-- performance real, "canceling statement due to statement timeout" reportado pelo usuário),
+-- só reavalia nas datas em que algo de fato muda pra essas fazendas (uma movimentação que afeta
+-- o rebanho, ou qualquer pesagem — manual ou compilada automaticamente) — entre dois desses
+-- "pontos de mudança", o valor do ponto anterior continua valendo sem custo nenhum (é uma
+-- função em degrau: o número só muda quando algo acontece, nunca sozinho de um dia pro outro).
+-- Resultado numérico idêntico ao de antes (conferido contra o comportamento anterior antes de
+-- aplicar), só que sem reprocessar dias parados — no caso que travou o relatório (75 dias sem
+-- nenhuma movimentação nas fazendas selecionadas), isso reduz de 75 reavaliações completas do
+-- histórico pra praticamente 1.
 create or replace function fn_relatorio_lotacao_mensal(
   p_fazenda_ids uuid[],
   p_data_inicio date,
@@ -4878,13 +5053,17 @@ declare
   v_mes_fim    date;
   v_janela_ini date;
   v_janela_fim date;
-  v_dia        date;
   v_soma_headcount numeric;
   v_soma_peso_vivo numeric;
   v_dias       int;
   v_area_media numeric;
   v_tipo_pecuaria_id uuid;
   v_ind        record;
+  v_pontos     date[];
+  v_ponto      date;
+  v_fim_intervalo   date;
+  v_dias_intervalo  int;
+  i int;
 begin
   select id into v_tipo_pecuaria_id from tipos_uso_area where nome = 'Pecuária';
 
@@ -4893,16 +5072,40 @@ begin
     v_janela_ini := greatest(v_mes_inicio, p_data_inicio);
     v_janela_fim := least(v_mes_fim, p_data_fim);
 
+    -- pontos de reavaliação: sempre o início da janela + toda data (dentro da janela) em que
+    -- alguma movimentação relevante ou pesagem aconteceu pra essas fazendas
+    select array_agg(distinct d order by d) into v_pontos
+    from (
+      select v_janela_ini as d
+      union
+      select data from movimentacoes_rebanho
+      where data between v_janela_ini and v_janela_fim
+        and (
+          (fazenda_id = any(p_fazenda_ids)
+            and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL', 'MUDANCA_CATEGORIA', 'DESMAME',
+                         'MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO'))
+          or (fazenda_origem_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA')
+          or (fazenda_destino_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA')
+        )
+      union
+      select data from pesagens
+      where fazenda_id = any(p_fazenda_ids) and data between v_janela_ini and v_janela_fim
+    ) x;
+
     v_soma_headcount := 0;
     v_soma_peso_vivo := 0;
     v_dias := 0;
 
-    for v_dia in select generate_series(v_janela_ini, v_janela_fim, interval '1 day')::date
-    loop
-      select * into v_ind from fn_indicadores_rebanho_dia(p_fazenda_ids, v_dia, p_proprietario_ids);
-      v_soma_headcount := v_soma_headcount + v_ind.headcount;
-      v_soma_peso_vivo := v_soma_peso_vivo + v_ind.peso_vivo_total;
-      v_dias := v_dias + 1;
+    for i in 1 .. array_length(v_pontos, 1) loop
+      v_ponto := v_pontos[i];
+      v_fim_intervalo := case when i < array_length(v_pontos, 1) then v_pontos[i + 1] - 1 else v_janela_fim end;
+      v_dias_intervalo := v_fim_intervalo - v_ponto + 1;
+      if v_dias_intervalo > 0 then
+        select * into v_ind from fn_indicadores_rebanho_dia(p_fazenda_ids, v_ponto, p_proprietario_ids);
+        v_soma_headcount := v_soma_headcount + v_ind.headcount * v_dias_intervalo;
+        v_soma_peso_vivo := v_soma_peso_vivo + v_ind.peso_vivo_total * v_dias_intervalo;
+        v_dias := v_dias + v_dias_intervalo;
+      end if;
     end loop;
 
     select coalesce(sum(fn_area_media_ponderada(f.id, v_tipo_pecuaria_id, v_janela_ini, v_janela_fim)), 0)
