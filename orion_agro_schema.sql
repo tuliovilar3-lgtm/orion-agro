@@ -4866,14 +4866,28 @@ $$;
 -- (entradas/saidas agregadas antes do join, sem fan-out), parametrizada
 -- por data e por uma lista de fazendas (soma direto, sem quebrar por
 -- fazenda). Sem filtro de ativa/ativo de propósito — relatório histórico.
+-- Migração 080: security definer + validação própria de conta_id (mesmo mecanismo de
+-- fn_conta_atual()) — sem isso, a RLS de `movimentacoes_rebanho`/`pesagens`/`categorias_animal`
+-- é reavaliada linha a linha em CADA chamada, e essa função é chamada centenas de vezes dentro
+-- de fn_relatorio_lotacao_mensal (uma por "ponto de mudança" no período) — o custo se
+-- multiplicava até estourar o tempo limite de consulta pra períodos com bastante histórico
+-- (ex.: uma safra fechada com dados reais carregados em massa). Validar explicitamente que toda
+-- fazenda em p_fazenda_ids pertence à conta do usuário logado (em vez de confiar na RLS) permite
+-- ignorar a checagem de RLS linha a linha com segurança — sem essa validação, alguém poderia
+-- chamar a função via RPC direto com o id de fazenda de outra conta e enxergar dado alheio.
 create or replace function fn_estoque_rebanho_na_data(
   p_fazenda_ids uuid[], p_data date, p_proprietario_ids uuid[] default null
 )
 returns table(categoria_id uuid, quantidade int)
 language sql
+security definer
+set search_path = public
 stable
 as $$
-  with entradas as (
+  with fazendas_validas as (
+    select f.id from fazendas f where f.id = any(p_fazenda_ids) and f.conta_id = fn_conta_atual()
+  ),
+  entradas as (
     select fazenda_id, categoria_id, quantidade, proprietario_id
     from movimentacoes_rebanho
     where tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
@@ -4902,14 +4916,14 @@ as $$
   entradas_agg as (
     select categoria_id, sum(quantidade) as total
     from entradas
-    where fazenda_id = any(p_fazenda_ids)
+    where fazenda_id in (select id from fazendas_validas)
       and (p_proprietario_ids is null or proprietario_id = any(p_proprietario_ids))
     group by categoria_id
   ),
   saidas_agg as (
     select categoria_id, sum(quantidade) as total
     from saidas
-    where fazenda_id = any(p_fazenda_ids)
+    where fazenda_id in (select id from fazendas_validas)
       and (p_proprietario_ids is null or proprietario_id = any(p_proprietario_ids))
     group by categoria_id
   )
@@ -4919,6 +4933,7 @@ as $$
   from categorias_animal c
   left join entradas_agg e on e.categoria_id = c.id
   left join saidas_agg s on s.categoria_id = c.id
+  where c.conta_id = fn_conta_atual()
 $$;
 
 -- fn_indicadores_rebanho_dia: cabeças totais e peso vivo total das
@@ -4943,45 +4958,53 @@ $$;
 -- consulta só, em lote, sem chamar função por pasto (mantém rápido mesmo com centenas de
 -- pastos). Peso médio continua sem filtro de proprietário (resolvido pelo headcount TOTAL da
 -- categoria, nunca o filtrado por p_proprietario_ids), mesmo princípio já documentado antes.
+-- Migração 080: security definer + validação própria de conta_id (ver nota em
+-- fn_estoque_rebanho_na_data acima) — é esta função que fn_relatorio_lotacao_mensal chama
+-- centenas de vezes por relatório, então é aqui que o custo de RLS repetido mais se multiplicava.
 create or replace function fn_indicadores_rebanho_dia(
   p_fazenda_ids uuid[], p_data date, p_proprietario_ids uuid[] default null
 )
 returns table(headcount int, peso_vivo_total numeric)
 language sql
+security definer
+set search_path = public
 stable
 as $$
-  with deltas as (
+  with fazendas_validas as (
+    select f.id from fazendas f where f.id = any(p_fazenda_ids) and f.conta_id = fn_conta_atual()
+  ),
+  deltas as (
     select pasto_id, categoria_id, quantidade as delta
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL') and data <= p_data
     union all
     select pasto_destino_id, categoria_id, quantidade
     from movimentacoes_rebanho
-    where fazenda_destino_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA' and data <= p_data
+    where fazenda_destino_id in (select id from fazendas_validas) and tipo = 'TRANSFERENCIA' and data <= p_data
     union all
     select pasto_id, categoria_destino_id, quantidade
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo in ('MUDANCA_CATEGORIA', 'DESMAME') and data <= p_data
     union all
     select pasto_destino_id, categoria_id, quantidade
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_PASTO' and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo = 'MUDANCA_PASTO' and data <= p_data
     union all
     select pasto_id, categoria_id, -quantidade
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo in ('MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO', 'DESMAME') and data <= p_data
     union all
     select pasto_id, categoria_id, -quantidade
     from movimentacoes_rebanho
-    where fazenda_origem_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA' and data <= p_data
+    where fazenda_origem_id in (select id from fazendas_validas) and tipo = 'TRANSFERENCIA' and data <= p_data
     union all
     select pasto_id, categoria_id, -quantidade
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_CATEGORIA' and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo = 'MUDANCA_CATEGORIA' and data <= p_data
     union all
     select pasto_id, categoria_id, -quantidade
     from movimentacoes_rebanho
-    where fazenda_id = any(p_fazenda_ids) and tipo = 'MUDANCA_PASTO' and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and tipo = 'MUDANCA_PASTO' and data <= p_data
   ),
   saldo_pasto_categoria as (
     select pasto_id, categoria_id, sum(delta) as quantidade
@@ -4992,7 +5015,7 @@ as $$
   peso_pasto as (
     select distinct on (pasto_id, categoria_id) pasto_id, categoria_id, peso_medio_kg
     from pesagens
-    where fazenda_id = any(p_fazenda_ids) and data <= p_data
+    where fazenda_id in (select id from fazendas_validas) and data <= p_data
     order by pasto_id, categoria_id, data desc, created_at desc
   ),
   peso_agregado_categoria as (
@@ -5033,6 +5056,9 @@ $$;
 -- aplicar), só que sem reprocessar dias parados — no caso que travou o relatório (75 dias sem
 -- nenhuma movimentação nas fazendas selecionadas), isso reduz de 75 reavaliações completas do
 -- histórico pra praticamente 1.
+-- Migração 080: security definer + validação própria de conta_id (ver nota em
+-- fn_estoque_rebanho_na_data acima) — as duas consultas de "pontos de mudança" abaixo passam a
+-- ler só das fazendas validadas (v_fazenda_ids_seguro), nunca do parâmetro cru.
 create or replace function fn_relatorio_lotacao_mensal(
   p_fazenda_ids uuid[],
   p_data_inicio date,
@@ -5047,9 +5073,12 @@ create or replace function fn_relatorio_lotacao_mensal(
   dias_no_mes int
 )
 language plpgsql
+security definer
+set search_path = public
 as $$
 declare
-  v_mes_inicio date := date_trunc('month', p_data_inicio)::date;
+  v_fazenda_ids_seguro uuid[];
+  v_mes_inicio date;
   v_mes_fim    date;
   v_janela_ini date;
   v_janela_fim date;
@@ -5065,7 +5094,12 @@ declare
   v_dias_intervalo  int;
   i int;
 begin
+  select array_agg(f.id) into v_fazenda_ids_seguro
+  from fazendas f
+  where f.id = any(p_fazenda_ids) and f.conta_id = fn_conta_atual();
+
   select id into v_tipo_pecuaria_id from tipos_uso_area where nome = 'Pecuária';
+  v_mes_inicio := date_trunc('month', p_data_inicio)::date;
 
   while v_mes_inicio <= p_data_fim loop
     v_mes_fim := (v_mes_inicio + interval '1 month' - interval '1 day')::date;
@@ -5081,15 +5115,15 @@ begin
       select data from movimentacoes_rebanho
       where data between v_janela_ini and v_janela_fim
         and (
-          (fazenda_id = any(p_fazenda_ids)
+          (fazenda_id = any(v_fazenda_ids_seguro)
             and tipo in ('NASCIMENTO', 'COMPRA', 'SALDO_INICIAL', 'MUDANCA_CATEGORIA', 'DESMAME',
                          'MORTE', 'VENDA_PE', 'VENDA_ABATE', 'CONSUMO_DOACAO'))
-          or (fazenda_origem_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA')
-          or (fazenda_destino_id = any(p_fazenda_ids) and tipo = 'TRANSFERENCIA')
+          or (fazenda_origem_id = any(v_fazenda_ids_seguro) and tipo = 'TRANSFERENCIA')
+          or (fazenda_destino_id = any(v_fazenda_ids_seguro) and tipo = 'TRANSFERENCIA')
         )
       union
       select data from pesagens
-      where fazenda_id = any(p_fazenda_ids) and data between v_janela_ini and v_janela_fim
+      where fazenda_id = any(v_fazenda_ids_seguro) and data between v_janela_ini and v_janela_fim
     ) x;
 
     v_soma_headcount := 0;
@@ -5101,7 +5135,7 @@ begin
       v_fim_intervalo := case when i < array_length(v_pontos, 1) then v_pontos[i + 1] - 1 else v_janela_fim end;
       v_dias_intervalo := v_fim_intervalo - v_ponto + 1;
       if v_dias_intervalo > 0 then
-        select * into v_ind from fn_indicadores_rebanho_dia(p_fazenda_ids, v_ponto, p_proprietario_ids);
+        select * into v_ind from fn_indicadores_rebanho_dia(v_fazenda_ids_seguro, v_ponto, p_proprietario_ids);
         v_soma_headcount := v_soma_headcount + v_ind.headcount * v_dias_intervalo;
         v_soma_peso_vivo := v_soma_peso_vivo + v_ind.peso_vivo_total * v_dias_intervalo;
         v_dias := v_dias + v_dias_intervalo;
@@ -5110,7 +5144,7 @@ begin
 
     select coalesce(sum(fn_area_media_ponderada(f.id, v_tipo_pecuaria_id, v_janela_ini, v_janela_fim)), 0)
       into v_area_media
-    from unnest(p_fazenda_ids) as f(id);
+    from unnest(v_fazenda_ids_seguro) as f(id);
 
     return query select
       extract(month from v_mes_inicio)::int,
